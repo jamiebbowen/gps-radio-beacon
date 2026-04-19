@@ -1,0 +1,20 @@
+(version 1)
+
+(rule "Board_0-class 0:0"
+  (condition "A.NetClass == 'Board_0-default' && B.NetClass == 'Board_0-Default'")
+  (constraint clearance (min 0.4mm)))
+(rule "Board_1-class 0:0"
+  (condition "A.NetClass == 'Board_1-default' && B.NetClass == 'Board_1-Default'")
+  (constraint clearance (min 0.4mm)))
+(rule "Board_2-class 0:0"
+  (condition "A.NetClass == 'Board_2-default' && B.NetClass == 'Board_2-Default'")
+  (constraint clearance (min 0.4mm)))
+(rule "Board_3-class 0:0"
+  (condition "A.NetClass == 'Board_3-default' && B.NetClass == 'Board_3-Default'")
+  (constraint clearance (min 0.4mm)))
+(rule "Board_4-class 0:0"
+  (condition "A.NetClass == 'Board_4-default' && B.NetClass == 'Board_4-Default'")
+  (constraint clearance (min 0.4mm)))
+(rule "Board_5-class 0:0"
+  (condition "A.NetClass == 'Board_5-default' && B.NetClass == 'Board_5-Default'")
+  (constraint clearance (min 0.4mm)))
