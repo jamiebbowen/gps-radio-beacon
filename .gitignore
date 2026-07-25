@@ -236,3 +236,5 @@ flight.*
 # see .github/workflows/ci.yml and receiver/firmware/README.md).
 !receiver/firmware/lib/
 receiver/firmware/lib/STM32CubeF4/
+
+flight_data/*
