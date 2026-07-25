@@ -323,7 +323,7 @@ DRESULT SD_write(BYTE pdrv, const BYTE* buff, DWORD sector, UINT count)
 DRESULT SD_ioctl(BYTE pdrv, BYTE cmd, void* buff)
 {
   DRESULT res = RES_ERROR;
-  uint8_t n, csd[16], *ptr = buff;
+  uint8_t n, csd[16];
   DWORD csize;
 
   if (pdrv) return RES_PARERR;
@@ -520,13 +520,15 @@ static uint8_t SD_WaitResponse(uint8_t Response)
 static uint8_t SD_ReadData(uint8_t *buff, uint16_t btr)
 {
   uint8_t token;
-  uint16_t tmr;
 
-  /* Wait for data packet in timeout of 100ms */
-  tmr = 1000;
+  /* Wait for the data token with a TIME-based deadline. The SD spec allows
+   * up to 100 ms read access time; the old count-based wait (1000 polls) was
+   * only ~6-12 ms at the 1.3 MHz runtime SPI clock - the same clock-dependent
+   * timeout bug documented and fixed in SD_WaitResponse above. */
+  uint32_t deadline = HAL_GetTick() + 100;
   do {
     token = SD_SPI_TxRx(SD_DUMMY_BYTE);
-  } while ((token == SD_DUMMY_BYTE) && --tmr);
+  } while ((token == SD_DUMMY_BYTE) && ((int32_t)(HAL_GetTick() - deadline) < 0));
 
   if (token != SD_TOKEN_START_DATA_SINGLE_BLOCK_READ) {
     return 0; /* If not valid data token, return with error */

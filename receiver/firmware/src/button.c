@@ -7,11 +7,13 @@
 
 #include "button.h"
 
-/* Private variables */
-static uint32_t last_button_time = 0;
-static Button_State_t last_stable_state = BUTTON_RELEASED;
+/* Private variables. All three ISR-shared variables are volatile: they are
+ * written from EXTI15_10_IRQHandler and read/written from the main loop, so
+ * the compiler must not cache them in registers across accesses. */
+static volatile uint32_t last_button_time = 0;
+static volatile Button_State_t last_stable_state = BUTTON_RELEASED;
 static Button_State_t current_raw_state = BUTTON_RELEASED;
-static uint8_t button_press_detected = 0;
+static volatile uint8_t button_press_detected = 0;
 
 /* Debounce time in milliseconds */
 #define BUTTON_DEBOUNCE_MS 50  /* Typical button bounce is 5-20ms, 50ms is safe */

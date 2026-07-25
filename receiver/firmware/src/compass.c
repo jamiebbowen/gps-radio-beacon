@@ -165,9 +165,8 @@
  * smooths out short-term jitter between magnetometer reads. */
 #define COMPASS_COMP_FILTER_ALPHA  0.98f
 
-/* Error reporting */
-static uint8_t compass_error_code = COMPASS_ERROR_NONE;
-static char compass_error_msg[64] = "No error";
+/* Error reporting lives in compass_debug.error_code / .error_message
+ * (written by Compass_SetError, read by the public accessors below). */
 
 /* Debug messages */
 static uint32_t debug_timestamp = 0;
@@ -1141,7 +1140,7 @@ uint8_t Compass_SelfTest(void)
  */
 float Compass_GetHeading(void)
 {
-  Compass_Data compass_data;
+  Compass_Data compass_data = {0};  /* zeroed: Compass_Update reads last_update */
   
   if (Compass_Update(&compass_data) == 0) {
     return compass_data.heading;
@@ -1202,7 +1201,7 @@ uint8_t Compass_SetHeadingOffset(float offset_deg)
  */
 uint8_t Compass_GetLastErrorCode(void)
 {
-  return compass_error_code;
+  return compass_debug.error_code;
 }
 
 /**
@@ -1211,7 +1210,7 @@ uint8_t Compass_GetLastErrorCode(void)
  */
 const char* Compass_GetErrorMessage(void)
 {
-  return compass_error_msg;
+  return compass_debug.error_message;
 }
 
 /**
@@ -1220,7 +1219,7 @@ const char* Compass_GetErrorMessage(void)
  */
 uint8_t Compass_GetErrorCode(void)
 {
-  return compass_error_code;
+  return compass_debug.error_code;
 }
 
 /**

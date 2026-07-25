@@ -18,10 +18,12 @@
  */
 void Display_ShowTestPattern(void)
 {
-  /* Draw test pattern to diagnose rotation issues - adjusted for 64x128 display with 270° rotation */
-  Display_DrawTextRowCol(0, 0, "TL");      /* Top-left */
-  Display_DrawTextRowCol(15, 0, "BL");    /* Bottom-left */
-  Display_DrawTextRowCol(0, 8, "TR");     /* Top-right, adjusted position */
-  Display_DrawTextRowCol(15, 8, "BR");   /* Bottom-right, adjusted position */
-  Display_DrawTextRowCol(7, 4, "CENTER"); /* Center, adjusted position */
+  /* Draw corner + centre markers to diagnose orientation issues.
+   * Display is 128x64 with a 6x8 font => 21 cols x 8 rows, so the corners
+   * are rows 0/7 and cols 0/19 (2-char labels occupy cols 19-20). */
+  Display_DrawTextRowCol(0, 0,  "TL");     /* Top-left */
+  Display_DrawTextRowCol(7, 0,  "BL");     /* Bottom-left */
+  Display_DrawTextRowCol(0, 19, "TR");     /* Top-right */
+  Display_DrawTextRowCol(7, 19, "BR");     /* Bottom-right */
+  Display_DrawTextRowCol(3, 7,  "CENTER"); /* Centre (6 chars, cols 7-12) */
 }

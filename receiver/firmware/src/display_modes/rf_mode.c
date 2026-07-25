@@ -148,23 +148,8 @@ void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps,
     Display_DrawTextRowCol(6, 0, "No RF data received");
   }
   
-  /* Display raw packet data for debugging */
-  char raw_buffer[64];
-  if (RF_Parser_GetLastRawPacket(raw_buffer, sizeof(raw_buffer)) > 0) {    
-    /* Split the raw buffer into two lines for display */
-    if (strlen(raw_buffer) > 0) {
-      memset(line1, 0, sizeof(line1));
-      memset(line2, 0, sizeof(line2));
-      
-      memcpy(line1, raw_buffer, 15);
-      line1[15] = '\0';
-      Display_DrawTextRowCol(8, 0, line1);
-      
-      if (strlen(raw_buffer) > 15) {
-        memcpy(line2, &raw_buffer[15], 15);
-        line2[15] = '\0';
-        Display_DrawTextRowCol(9, 0, line2);
-      }
-    }
-  }
+  /* Note: a raw-packet dump used to be drawn at rows 8/9 here, but the
+   * display is 8 rows (128x64, 6x8 font) so those rows were silently
+   * clipped and never visible. The block was removed; the parsed-packet
+   * ASCII on rows 6/7 covers the same data. */
 }

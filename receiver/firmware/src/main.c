@@ -217,12 +217,9 @@ int main(void)
   /* Display is now fixed in 90° orientation */
   
   Display_Clear();
-  /* Draw test pattern to diagnose rotation issues - adjusted for 64x128 display with 270° rotation */
-  Display_DrawTextRowCol(0, 0, "TL");      /* Top-left */
-  Display_DrawTextRowCol(15, 0, "BL");    /* Bottom-left */
-  Display_DrawTextRowCol(0, 8, "TR");     /* Top-right, adjusted position */
-  Display_DrawTextRowCol(15, 8, "BR");   /* Bottom-right, adjusted position */
-  Display_DrawTextRowCol(7, 2, "CENTER"); /* Center, adjusted position */
+  /* Corner/centre test pattern to diagnose orientation issues (shared with
+   * the test-pattern display mode; see test_pattern.c for geometry notes). */
+  Display_ShowTestPattern();
   Display_Update();
   HAL_Delay(2000);
   

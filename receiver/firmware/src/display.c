@@ -427,7 +427,8 @@ static void Display_I2C_Init(void)
   
   /* Configure I2C */
   hi2c_display.Instance = I2C1;
-  /* Using fast mode (400kHz) for BNO055 compatibility */
+  /* Standard mode (100 kHz): shared bus with the BNO055, which is more
+   * reliable at 100 kHz on this wiring than fast mode. */
   hi2c_display.Init.ClockSpeed = 100000;
   hi2c_display.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c_display.Init.OwnAddress1 = 0;

@@ -15,7 +15,7 @@
  *                    overhead of the log-structured layout isn't absurd, big
  *                    enough that allocation bitmap stays compact on multi-GB
  *                    cards.
- *   - LFS_CACHE    = 512 B (one sector). Must divide block_size evenly.
+ *   - LFS_CACHE    = 4096 B (one full block). Must divide block_size evenly.
  *   - LOOKAHEAD    = 128 B bitmap → tracks 1024 blocks = 4 MiB per pass.
  *
  * The SD card's internal FTL remaps and erases flash transparently, so the
