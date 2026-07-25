@@ -13,12 +13,16 @@ extern "C" {
 #include "stm32f4xx_hal.h"
 #include <stdint.h>
 
-/* Compass status codes */
+/* Compass status codes (function return values) */
 #define COMPASS_OK     0
 #define COMPASS_ERROR  1
 #define COMPASS_TIMEOUT 2
 
-/* Detailed error codes */
+/* Detailed error codes - a SEPARATE namespace from the return statuses
+ * above. These are stored via Compass_SetError and read back through
+ * Compass_GetErrorCode / shown as "Err: 0xNN" on the IMU test screen.
+ * (So COMPASS_ERROR_I2C_INIT == 1 == COMPASS_ERROR is coincidence, not
+ * equivalence.) Values 0x06-0x08 continue the sequence in compass.c. */
 #define COMPASS_ERROR_NONE        0
 #define COMPASS_ERROR_I2C_INIT    1
 #define COMPASS_ERROR_ID_CHECK    2

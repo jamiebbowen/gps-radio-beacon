@@ -107,8 +107,10 @@
 #define BNO055_SYS_STATUS_RUNNING  0x05  /* System running with fusion */
 #define BNO055_SYS_STATUS_RUNNING_NO_FUSION 0x06  /* System running without fusion */
 
-/* Additional error codes (COMPASS_ERROR_NONE is already defined in compass.h) */
-#define COMPASS_ERROR_COMM        0x05  /* Communication error */
+/* Additional detailed error codes, continuing the COMPASS_ERROR_* numbering
+ * from compass.h (which ends at COMPASS_ERROR_READ_DATA = 5). These are
+ * error-code values for Compass_SetError / compass_debug.error_code, NOT
+ * function return statuses (COMPASS_OK/COMPASS_ERROR/COMPASS_TIMEOUT). */
 #define COMPASS_ERROR_CALIB       0x06  /* Calibration error */
 #define COMPASS_ERROR_MODE        0x07  /* Mode setting error */
 #define COMPASS_ERROR_SYS_STATUS  0x08  /* System status error */

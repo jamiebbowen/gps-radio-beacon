@@ -437,8 +437,15 @@ int main(void)
     /* Clear display */
     Display_Clear();
     
-    /* Turn LED ON (PC13 is active LOW on most STM32 boards) */
-    HAL_GPIO_WritePin(LED_GPIO_PORT, LED_PIN, GPIO_PIN_RESET);
+    /* LED = RF activity indicator: pulse for 100 ms after each packet
+     * (PC13 is active LOW). Previously the LED was held solid on, which
+     * conveyed nothing and contradicted the "pulse" comments. */
+    {
+      uint8_t led_on = (last_rf_packet_time > 0) &&
+                       (HAL_GetTick() - last_rf_packet_time < 100);
+      HAL_GPIO_WritePin(LED_GPIO_PORT, LED_PIN,
+                        led_on ? GPIO_PIN_RESET : GPIO_PIN_SET);
+    }
     
     /* Update button state */
     Button_Update();
@@ -448,8 +455,6 @@ int main(void)
       /* Cycle to next display mode */
       current_display_mode = (current_display_mode + 1) % DISPLAY_MODE_COUNT;
       mode_change_time = HAL_GetTick();
-      
-      /* LED is already on from main loop, no additional flash needed */
     }
 
     /* Auto-return to navigation screen after 120s of no button presses */
@@ -570,9 +575,7 @@ int main(void)
           }
           last_rf_packet_time = HAL_GetTick();
           rf_packet_count++;
-          
-          /* Brief LED pulse to indicate packet received - non-blocking */
-          HAL_GPIO_WritePin(LED_GPIO_PORT, LED_PIN, GPIO_PIN_RESET); // LED ON (active low)
+          /* LED pulse handled at top of loop from last_rf_packet_time */
         }
       } else {
         /* No more packets waiting - break early */
@@ -580,23 +583,8 @@ int main(void)
       }
     }
     
-    /* Periodically check RF status even if no new packets are available */
-    /* This ensures the navigation screen updates the time since last packet */
-    {
-      static uint32_t last_rf_check_time = 0;
-      uint32_t current_check_time = HAL_GetTick();
-      
-      /* Check every second */
-      if (current_check_time - last_rf_check_time > 1000) {
-        last_rf_check_time = current_check_time;
-        
-        /* If it's been more than 180 seconds since last packet, reset valid flag */
-        if (last_rf_packet_time > 0 && current_check_time - last_rf_packet_time > 180000) {
-          has_valid_remote_gps = 0;
-        }
-      }
-    }
-    
+    /* (Stale-RF invalidation happens in the every-loop check below.) */
+
     /* Calculate distance and direction if we have valid GPS data (current or last known good) and remote GPS */
     if ((has_valid_local_gps || has_last_good_local_gps) && has_valid_remote_gps) {
       /* Use math_utils.c functions for accurate distance and bearing calculations */
