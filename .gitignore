@@ -228,3 +228,11 @@ fp-info-cache
 *.kml
 *.gif
 flight.*
+
+# ---- Vendored firmware libraries ----
+# The generic Python 'lib/' rule above must NOT hide receiver/firmware/lib:
+# littlefs (small, vendored) has to be tracked or fresh clones cannot build.
+# STM32CubeF4 stays untracked (1+ GB external clone; CI fetches it by tag -
+# see .github/workflows/ci.yml and receiver/firmware/README.md).
+!receiver/firmware/lib/
+receiver/firmware/lib/STM32CubeF4/

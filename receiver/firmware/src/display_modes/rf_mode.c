@@ -134,11 +134,13 @@ void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps,
   if (RF_Receiver_GetLastPacketASCII(ascii_buffer, sizeof(ascii_buffer)) > 0) {   
     /* Split the ASCII buffer into two lines for display */
     if (strlen(ascii_buffer) > 0) {
-      strncpy(line1, ascii_buffer, 15);
+      memcpy(line1, ascii_buffer, 15);
+      line1[15] = '\0';
       Display_DrawTextRowCol(6, 0, line1);
       
       if (strlen(ascii_buffer) > 15) {
-        strncpy(line2, &ascii_buffer[15], 15);
+        memcpy(line2, &ascii_buffer[15], 15);
+        line2[15] = '\0';
         Display_DrawTextRowCol(7, 0, line2);
       }
     }
@@ -154,11 +156,13 @@ void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps,
       memset(line1, 0, sizeof(line1));
       memset(line2, 0, sizeof(line2));
       
-      strncpy(line1, raw_buffer, 15);
+      memcpy(line1, raw_buffer, 15);
+      line1[15] = '\0';
       Display_DrawTextRowCol(8, 0, line1);
       
       if (strlen(raw_buffer) > 15) {
-        strncpy(line2, &raw_buffer[15], 15);
+        memcpy(line2, &raw_buffer[15], 15);
+        line2[15] = '\0';
         Display_DrawTextRowCol(9, 0, line2);
       }
     }

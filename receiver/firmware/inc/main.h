@@ -36,8 +36,8 @@ void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps,
     GPS_Data *last_good_remote_gps, uint8_t has_last_good_remote);
 void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remote_gps,
                            GPS_Data *local_gps_data, GPS_Data *remote_gps_data,
-                           float compass_heading, uint32_t last_rf_packet_time, uint32_t rf_packet_count,
-                           uint32_t rf_missed_packet_count);
+                           float compass_heading, uint32_t last_rf_packet_time,
+                           uint32_t rf_packet_count);
 /* USER CODE END EFP */
 void Error_Handler(void);
 

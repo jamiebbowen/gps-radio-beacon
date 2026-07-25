@@ -25,13 +25,12 @@ extern "C" {
  * @param compass_heading Current compass heading
  * @param last_rf_packet_time Time of last RF packet received
  * @param rf_packet_count Count of RF packets received
- * @param first_rf_packet_time Time of first RF packet received
  * @retval None
  */
 void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remote_gps,
                            GPS_Data *local_gps_data, GPS_Data *remote_gps_data,
-                           float compass_heading, uint32_t last_rf_packet_time, uint32_t rf_packet_count,
-                           uint32_t first_rf_packet_time);
+                           float compass_heading, uint32_t last_rf_packet_time,
+                           uint32_t rf_packet_count);
 
 #ifdef __cplusplus
 }

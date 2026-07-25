@@ -47,6 +47,17 @@ typedef struct {
   char debug_lat[GPS_DEBUG_BUFFER_SIZE];  /* Raw latitude string from NMEA */
   char debug_lon[GPS_DEBUG_BUFFER_SIZE];  /* Raw longitude string from NMEA */
   char debug_sats[GPS_DEBUG_BUFFER_SIZE]; /* Raw satellites string from NMEA */
+  /* Fused-packet fields (populated from PACKET_TYPE_FUSED; zero otherwise).
+   * is_fused=1 means the latitude/longitude/altitude above came from the
+   * transmitter's EKF rather than a direct GPS reading. */
+  uint8_t is_fused;          /* 1 if last packet was PACKET_TYPE_FUSED        */
+  uint8_t fused_dr;          /* 1 if FUSED_FLAG_DEAD_RECKONING was set        */
+  uint8_t fused_gps_fresh;   /* 1 if TX-side GPS was fresh at TX time         */
+  uint8_t fused_imu_healthy; /* 1 if TX-side IMU was healthy at TX time       */
+  uint8_t fused_age_ds;      /* Deciseconds since TX-side last fix (0..255)   */
+  float   v_north;           /* Velocity north, m/s (fused packets only)      */
+  float   v_east;            /* Velocity east,  m/s                           */
+  float   v_down;            /* Velocity down,  m/s                           */
 } GPS_Data;
 
 /* Function prototypes */

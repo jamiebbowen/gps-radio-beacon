@@ -4,10 +4,12 @@
 #include "include/radio.h"
 #include "include/launch_detect.h"
 #include "include/packet_format.h"
+#include "include/nav.h"
 #include <Arduino.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 
 // Checksum function removed - LoRa provides built-in CRC validation
 
@@ -192,12 +194,27 @@ uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t
     packet.packet_type = PACKET_TYPE_GPS;
     packet.latitude = ENCODE_COORD(lat_decimal);
     packet.longitude = ENCODE_COORD(lon_decimal);
-    packet.altitude = (int16_t)altitude;
+    // Clamp altitude to int16 range: the validation above allows up to
+    // 50000 m but the wire format only carries -32768..32767 m. Without the
+    // clamp, 32768..50000 m would silently wrap negative on the receiver.
+    if (altitude > 32767.0f) {
+        packet.altitude = 32767;
+    } else if (altitude < -32768.0f) {
+        packet.altitude = -32768;
+    } else {
+        packet.altitude = (int16_t)altitude;
+    }
     packet.satellites = (uint8_t)sat_count;
     
-    // Pack flags
+    // Pack flags.
+    // NOTE: launch_detect_is_launched() is a one-shot (read-and-clear) edge
+    // trigger owned by the main-loop state machine in firmware.ino. Calling
+    // it here would consume the edge and either steal the LAUNCH transition
+    // from the state machine or (more commonly) always read false because
+    // the main loop already consumed it. Use the level-based state query
+    // instead so every packet after launch carries the launch bit.
     packet.flags = 0;
-    if (launch_detect_is_launched()) {
+    if (launch_detect_get_state() == LAUNCH_STATE_CONFIRMED) {
         packet.flags |= FLAG_LAUNCH_DETECTED;
     }
     if (coords->fix_quality >= 1) {
@@ -256,4 +273,96 @@ void beacon_transmit_callsign(uint8_t transmit_fast) {
         delay(1);
         radio_disable();
     }
+}
+
+/**
+ * Transmit a fused (EKF) position + velocity packet.
+ *
+ * Pulls the latest fused snapshot from the nav layer, packs it into a
+ * FusedPosPacket_t and transmits via the radio.  If the nav layer hasn't
+ * anchored yet (no first GPS fix), returns 0 without transmitting.
+ */
+uint8_t beacon_transmit_fused_data(uint32_t system_time_seconds, uint8_t transmit_fast) {
+    (void)system_time_seconds;
+
+    NavFused_t f;
+    nav_get_fused(&f);
+    if (!f.valid) {
+        return 0;
+    }
+
+    /* Saturate velocity to int16 cm/s (±327 m/s).  Real rockets in this
+     * project's envelope stay well within that. */
+    auto clamp_i16 = [](float v) -> int16_t {
+        if (v >  327.0f) return  32700;
+        if (v < -327.0f) return -32700;
+        return (int16_t)lroundf(v * 100.0f);
+    };
+
+    FusedPosPacket_t p;
+    memset(&p, 0, sizeof(p));
+    p.packet_type = PACKET_TYPE_FUSED;
+    p.latitude    = ENCODE_COORD(f.lat_deg);
+    p.longitude   = ENCODE_COORD(f.lon_deg);
+    p.altitude_cm = (int32_t)lroundf(f.alt_m * 100.0f);
+    p.v_n_cms     = clamp_i16(f.v_n);
+    p.v_e_cms     = clamp_i16(f.v_e);
+    p.v_d_cms     = clamp_i16(f.v_d);
+    p.age_ds      = f.age_ds;
+
+    uint8_t flags = 0;
+    if (f.gps_fresh)      flags |= FUSED_FLAG_GPS_FRESH;
+    if (f.imu_healthy)    flags |= FUSED_FLAG_IMU_HEALTHY;
+    if (f.dead_reckoning) flags |= FUSED_FLAG_DEAD_RECKONING;
+    /* Level-based query - see note in beacon_transmit_gps_data_binary about
+     * why launch_detect_is_launched() (one-shot) must NOT be used here. */
+    if (launch_detect_get_state() == LAUNCH_STATE_CONFIRMED) {
+        flags |= FUSED_FLAG_LAUNCH_DETECTED;
+    }
+    p.flags = flags;
+
+    if (!transmit_fast) {
+        radio_enable();
+        delay(10);
+    }
+
+    /* One-shot diagnostic: sizeof should be 21. If the compiler added any
+     * padding despite __attribute__((packed)) the RX parser (which assumes
+     * 21 bytes) will reject the packet - loud log helps us notice. */
+    static bool size_logged = false;
+    if (!size_logged) {
+        Serial.print(F("[Beacon] sizeof(FusedPosPacket_t)="));
+        Serial.println((int)sizeof(p));
+        size_logged = true;
+    }
+
+    /* Hex-dump every N-th fused packet so we can correlate the decoded
+     * v_n/v_e/v_d values below against the on-wire bytes the RX receives. */
+    static uint16_t hexdump_counter = 0;
+    if ((hexdump_counter++ % 10) == 0) {
+        Serial.print(F("[Beacon] FUS bytes:"));
+        const uint8_t *b = (const uint8_t*)&p;
+        for (size_t i = 0; i < sizeof(p); i++) {
+            Serial.print(' ');
+            if (b[i] < 0x10) Serial.print('0');
+            Serial.print(b[i], HEX);
+        }
+        Serial.print(F("  vn_cms=")); Serial.print((int)p.v_n_cms);
+        Serial.print(F(" ve_cms=")); Serial.print((int)p.v_e_cms);
+        Serial.print(F(" alt_cm=")); Serial.print((long)p.altitude_cm);
+        Serial.print(F(" flags=0x")); Serial.println(p.flags, HEX);
+    }
+
+    int result = transmit_packet((uint8_t*)&p, sizeof(p));
+
+    if (result != 0) {
+        Serial.print(F("[Beacon] ✗ Fused TX failed, code: "));
+        Serial.println(result);
+    }
+
+    if (!transmit_fast) {
+        delay(1);
+        radio_disable();
+    }
+    return (result == 0) ? 1 : 0;
 }

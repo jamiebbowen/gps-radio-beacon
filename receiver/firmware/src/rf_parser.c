@@ -4,6 +4,7 @@
  */
 
 #include "rf_parser.h"
+#include "packet_format.h"
 #include <string.h>  /* For memcpy and strstr functions */
 #include <stdlib.h>  /* For atof and atoi functions */
 #include <ctype.h>   /* For isdigit function */
@@ -32,8 +33,6 @@ static uint32_t parse_failures_insufficient_fields = 0;
  * @retval Decimal degrees value (positive or negative)
  */
 static float nmea_to_decimal_degrees(const char* nmea_coord) {
-  float value = 0.0f;
-  
   if (!nmea_coord || !*nmea_coord) {
     return 0.0f;
   }
@@ -53,36 +52,40 @@ static float nmea_to_decimal_degrees(const char* nmea_coord) {
     return 0.0f; /* Invalid coordinate format */
   }
   
-  /* Convert the coordinate part to a float */
-  float nmea_value = atof(coord_ptr);
+  /* Convert in DOUBLE precision. NMEA ddmm.mmmmm carries ~9 significant
+   * digits; single-precision float only holds ~7, which both loses ~1 m of
+   * coordinate precision and can round invalid minutes (e.g. 3999.99999 ->
+   * 4000.0f) past the minutes-range validation below. */
+  double nmea_value = atof(coord_ptr);
   
   /* Validate that we have a reasonable NMEA value */
   /* Should be at least 100.0 for valid DDMM.MMMMM format */
-  if (nmea_value < 100.0f) {
+  if (nmea_value < 100.0) {
     return 0.0f; /* Invalid NMEA format */
   }
   
   /* For NMEA format, we need to extract degrees and minutes */
   /* Degrees are the integer part of dividing by 100 */
-  int degrees = (int)(nmea_value / 100.0f);
+  int degrees = (int)(nmea_value / 100.0);
   
   /* Minutes are the remainder after removing degrees*100 */
-  float minutes = nmea_value - (degrees * 100.0f);
+  double minutes = nmea_value - (degrees * 100.0);
   
   /* Validate minutes are in valid range (0-59.999...) */
-  if (minutes < 0.0f || minutes >= 60.0f) {
+  if (minutes < 0.0 || minutes >= 60.0) {
     return 0.0f; /* Invalid minutes value */
   }
   
-  /* Convert to decimal degrees using the formula: degrees + minutes/60 */
-  value = (float)degrees + (minutes / 60.0f);
+  /* Convert to decimal degrees using the formula: degrees + minutes/60,
+   * rounding to float only once at the very end. */
+  double value = (double)degrees + (minutes / 60.0);
   
   /* Apply sign if negative */
   if (is_negative) {
     value = -value;
   }
   
-  return value;
+  return (float)value;
 }
 
 /**
@@ -116,15 +119,17 @@ uint8_t RF_Parser_Init(void)
 uint8_t RF_Parser_ParseAsciiPacket(const char *packet) {
   parse_attempts++;
   
-  /* Store the raw packet for debugging */
-  strncpy(last_raw_packet, packet, RF_PARSER_BUFFER_SIZE - 1);
-  last_raw_packet[RF_PARSER_BUFFER_SIZE - 1] = '\0';
-  
+  /* Reject NULL/empty packets BEFORE touching the debug copy - copying from
+   * a NULL pointer is undefined behavior (was a HardFault waiting to happen). */
   if (!packet || packet[0] == '\0') {
     parse_failures++;
     parse_failures_null_packet++;
     return RF_PARSER_ERROR;
   }
+  
+  /* Store the raw packet for debugging */
+  strncpy(last_raw_packet, packet, RF_PARSER_BUFFER_SIZE - 1);
+  last_raw_packet[RF_PARSER_BUFFER_SIZE - 1] = '\0';
   
   /* Expected formats (LoRa handles framing and CRC):
    * Fast packet: "±ddmm.mmmmm,±dddmm.mmmmm,alt" (3 fields)
@@ -154,9 +159,21 @@ uint8_t RF_Parser_ParseAsciiPacket(const char *packet) {
   
   /* Reset parsed_data_ready flag when starting new packet parsing */
   parsed_data_ready = 0;
-  
-  /* Reset GPS data structure */
-  memset(&parsed_gps_data, 0, sizeof(GPS_Data));
+
+  /* Reset only the fields this NMEA-style parser is responsible for writing.
+   * Crucially we do NOT touch v_north / v_east / v_down / is_fused / fused_*
+   * here - those fields are owned by the FUSED-packet parser and must
+   * persist across GPS packets so the navigation display can show the last
+   * known ground speed even while GPS packets are arriving. A blanket memset
+   * zeroed them every GPS packet, which made "S:13 12.3m/s" flicker back
+   * to "S:13  0.0m/s" on every GPS update. */
+  parsed_gps_data.latitude  = 0.0f;
+  parsed_gps_data.longitude = 0.0f;
+  parsed_gps_data.altitude  = 0.0f;
+  parsed_gps_data.satellites = 0;
+  parsed_gps_data.fix = 0;
+  parsed_gps_data.launch_detected = 0;
+  parsed_gps_data.time_since_launch = 0;
   
   /* Start tokenizing the GPS data by commas */
   char *saveptr;
@@ -389,14 +406,14 @@ void RF_Parser_GetDetailedFailures(uint32_t *null_packet, uint32_t *insufficient
 uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
   parse_attempts++;
   
-  /* Verify packet length */
-  if (length != 13) {
+  /* Verify pointer and packet length (13 bytes = sizeof(BinaryGPSPacket_t)) */
+  if (data == NULL || length != 13) {
     parse_failures++;
     return RF_PARSER_ERROR;
   }
   
   /* Verify packet type */
-  if (data[0] != 0x01) {  /* 0x01 = GPS packet type */
+  if (data[0] != PACKET_TYPE_GPS) {
     parse_failures++;
     return RF_PARSER_ERROR;
   }
@@ -447,15 +464,115 @@ uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
   parsed_gps_data.longitude = longitude_decimal;
   parsed_gps_data.altitude = (float)altitude_encoded;
   parsed_gps_data.satellites = satellites;
-  
+
   /* Parse flags */
-  parsed_gps_data.launch_detected = (flags & 0x80) ? 1 : 0;  /* Bit 7 */
-  parsed_gps_data.fix = flags & 0x0F;  /* Bits 3-0: GPS fix type */
-  
+  parsed_gps_data.launch_detected = (flags & FLAG_LAUNCH_DETECTED) ? 1 : 0;
+  parsed_gps_data.fix = flags & FLAG_FIX_TYPE_MASK;  /* Bits 3-0: GPS fix type */
+
+  /* Clear fused metadata - this packet is a raw GPS fix, not EKF output.
+   *
+   * NOTE: we deliberately do NOT clear v_north / v_east / v_down here.
+   * Those are set only by FUSED packets and represent the last known
+   * velocity from the TX-side EKF. Keeping them across GPS packets lets the
+   * navigation display keep showing the last good ground speed instead of
+   * flickering to 0.0 m/s each time a raw GPS packet lands. */
+  parsed_gps_data.is_fused          = 0;
+  parsed_gps_data.fused_dr          = 0;
+  parsed_gps_data.fused_gps_fresh   = 0;
+  parsed_gps_data.fused_imu_healthy = 0;
+  parsed_gps_data.fused_age_ds      = 0;
+
   /* Mark data as ready */
   parsed_data_ready = 1;
   parse_successes++;
-  
+
+  return RF_PARSER_OK;
+}
+
+/**
+ * @brief Parse a PACKET_TYPE_FUSED payload (21 bytes)
+ *
+ * Layout (little-endian):
+ *   [0]      packet_type (0x04)
+ *   [1..4]   latitude  (int32, deg*1e7)
+ *   [5..8]   longitude (int32, deg*1e7)
+ *   [9..12]  altitude  (int32, centimeters MSL)
+ *   [13..14] v_n       (int16, cm/s)
+ *   [15..16] v_e       (int16, cm/s)
+ *   [17..18] v_d       (int16, cm/s)
+ *   [19]     age_ds    (uint8, deciseconds since TX-side last GPS fix)
+ *   [20]     flags     (FUSED_FLAG_*)
+ *
+ * Populates parsed_gps_data with decoded values, including the v_north /
+ * v_east / v_down m/s fields and the is_fused / fused_* metadata so the UI
+ * layer can distinguish fused-position packets from raw GPS packets.
+ */
+uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length)
+{
+  parse_attempts++;
+
+  if (data == NULL || length != FUSED_PACKET_SIZE) {
+    parse_failures++;
+    return RF_PARSER_ERROR;
+  }
+  if (data[0] != PACKET_TYPE_FUSED) {
+    parse_failures++;
+    return RF_PARSER_ERROR;
+  }
+
+  /* Manual little-endian decode (same pattern as binary GPS parser for
+   * portability across alignment-picky targets). */
+  int32_t lat_enc  = (int32_t)((uint32_t)data[1]  | ((uint32_t)data[2]  << 8)
+                             | ((uint32_t)data[3]  << 16) | ((uint32_t)data[4]  << 24));
+  int32_t lon_enc  = (int32_t)((uint32_t)data[5]  | ((uint32_t)data[6]  << 8)
+                             | ((uint32_t)data[7]  << 16) | ((uint32_t)data[8]  << 24));
+  int32_t alt_cm   = (int32_t)((uint32_t)data[9]  | ((uint32_t)data[10] << 8)
+                             | ((uint32_t)data[11] << 16) | ((uint32_t)data[12] << 24));
+  int16_t v_n_cms  = (int16_t)((uint16_t)data[13] | ((uint16_t)data[14] << 8));
+  int16_t v_e_cms  = (int16_t)((uint16_t)data[15] | ((uint16_t)data[16] << 8));
+  int16_t v_d_cms  = (int16_t)((uint16_t)data[17] | ((uint16_t)data[18] << 8));
+  uint8_t age_ds   = data[19];
+  uint8_t flags    = data[20];
+
+  double lat = (double)lat_enc / 10000000.0;
+  double lon = (double)lon_enc / 10000000.0;
+
+  if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) {
+    parse_failures++;
+    return RF_PARSER_ERROR;
+  }
+
+  parsed_gps_data.latitude  = (float)lat;
+  parsed_gps_data.longitude = (float)lon;
+  parsed_gps_data.altitude  = (float)alt_cm * 0.01f;  /* cm -> m */
+  parsed_gps_data.v_north   = (float)v_n_cms * 0.01f; /* cm/s -> m/s */
+  parsed_gps_data.v_east    = (float)v_e_cms * 0.01f;
+  parsed_gps_data.v_down    = (float)v_d_cms * 0.01f;
+
+  /* Satellites aren't carried in fused packets; leave whatever was last
+   * seen.
+   *
+   * Do NOT overwrite `fix` here. `fix` is the GPS-fix quality (0=NoFix,
+   * 1=2D, 2/3=3D) and is only meaningful for raw GPS packets - it is the
+   * field that drives the "B:3D" / "B:NoFix" label on the navigation
+   * display. If we clobber it with GPS_FRESH every FUSED packet, the
+   * display flaps between "3D" (from the last GPS) and "2D"/"NoFix" (from
+   * alternating FUSED packets), even though the beacon hasn't actually
+   * lost fix.
+   *
+   * The fused-packet state the UI needs is already published separately
+   * below (is_fused / fused_dr / fused_gps_fresh / fused_age_ds), so
+   * navigation_mode.c can render "FUS" vs "DR" without touching `fix`. */
+  parsed_gps_data.launch_detected = (flags & FUSED_FLAG_LAUNCH_DETECTED) ? 1 : 0;
+
+  parsed_gps_data.is_fused          = 1;
+  parsed_gps_data.fused_dr          = (flags & FUSED_FLAG_DEAD_RECKONING) ? 1 : 0;
+  parsed_gps_data.fused_gps_fresh   = (flags & FUSED_FLAG_GPS_FRESH)      ? 1 : 0;
+  parsed_gps_data.fused_imu_healthy = (flags & FUSED_FLAG_IMU_HEALTHY)    ? 1 : 0;
+  parsed_gps_data.fused_age_ds      = age_ds;
+
+  parsed_data_ready = 1;
+  parse_successes++;
   return RF_PARSER_OK;
 }
 

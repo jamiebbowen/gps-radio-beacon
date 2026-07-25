@@ -21,10 +21,10 @@ void DisplayMode_SDCard(void)
 {
     char buffer[32];
     SD_Card_Info sd_info;
-    SD_Card_Status status;
-    
-    /* Get SD card information */
-    status = SD_Card_GetInfo(&sd_info);
+
+    /* Get SD card information. Return status is ignored because the fields
+     * inside sd_info already carry presence/mount flags that drive the UI. */
+    (void)SD_Card_GetInfo(&sd_info);
     
     /* Display SD card presence */
     if (sd_info.is_present) {

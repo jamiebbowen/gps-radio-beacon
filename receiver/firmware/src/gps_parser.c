@@ -54,10 +54,13 @@ uint8_t GPS_ParseNMEA(const char* nmea_sentence, GPS_Data *gps_data)
       strcpy(gps_data->debug_lat, "EMPTY");
     }
     
-    /* Second debug field: Length of NMEA sentence */
+    /* Second debug field: Length of NMEA sentence. Use the full debug
+     * buffer size so snprintf can always fit "LEN:" + any uint16 length
+     * (9 chars max) without tripping -Wformat-truncation. */
     memset(gps_data->debug_lon, 0, GPS_DEBUG_BUFFER_SIZE);
     if (nmea_sentence != NULL) {
-      snprintf(gps_data->debug_lon, 10, "LEN:%d", (int)strlen(nmea_sentence));
+      snprintf(gps_data->debug_lon, GPS_DEBUG_BUFFER_SIZE, "LEN:%u",
+               (unsigned)strlen(nmea_sentence));
     }
     
     /* Third debug field: First few chars after type */
@@ -114,12 +117,18 @@ uint8_t GPS_ParseNMEA(const char* nmea_sentence, GPS_Data *gps_data)
     return GPS_PARSER_ERROR;
   }
   
-  /* Check for GPRMC sentence (Recommended Minimum data) */
-  if (nmea_sentence != NULL && strncmp((char*)nmea_sentence, "$GPRMC", 6) == 0) {
+  /* Dispatch by sentence type. NMEA sentences are "$<talker><type>,..."
+   * where talker is 2 chars (GP=GPS, GL=GLONASS, GA=Galileo, GB=BeiDou,
+   * GN=combined GNSS) and type is 3 chars. u-blox multi-GNSS modules with
+   * GLONASS/Galileo enabled default to GN as the talker, so matching only
+   * $GP* silently drops the date-bearing RMC sentence. Match on the type
+   * suffix instead so every talker variant is accepted. */
+  if (nmea_sentence[0] == '$' &&
+      strncmp(&nmea_sentence[3], "RMC,", 4) == 0) {
     status = GPS_ParseGPRMC(nmea_sentence, gps_data);
   }
-  /* Check for GPGGA sentence (Fix information) */
-  else if (nmea_sentence != NULL && strncmp((char*)nmea_sentence, "$GPGGA", 6) == 0) {
+  else if (nmea_sentence[0] == '$' &&
+           strncmp(&nmea_sentence[3], "GGA,", 4) == 0) {
     status = GPS_ParseGPGGA(nmea_sentence, gps_data);
   }
   
@@ -160,8 +169,10 @@ static uint8_t GPS_ParseGPRMC(const char* nmea_sentence, GPS_Data *gps_data)
   char buffer[GPS_BUFFER_SIZE];
   uint8_t token_count = 0;
   
-  /* Copy sentence to buffer for tokenization */
-  strncpy(buffer, nmea_sentence, GPS_BUFFER_SIZE);
+  /* Copy sentence to buffer for tokenization. Force NUL termination since
+   * strncpy with bound == sizeof(dst) does not guarantee one. */
+  strncpy(buffer, nmea_sentence, GPS_BUFFER_SIZE - 1);
+  buffer[GPS_BUFFER_SIZE - 1] = '\0';
   
   /* Get first token */
   token = strtok_r(buffer, ",", &saveptr);
@@ -245,8 +256,10 @@ static uint8_t GPS_ParseGPGGA(const char* nmea_sentence, GPS_Data *gps_data)
   char buffer[GPS_BUFFER_SIZE];
   uint8_t token_count = 0;
   
-  /* Copy sentence to buffer for tokenization */
-  strncpy(buffer, nmea_sentence, GPS_BUFFER_SIZE);
+  /* Copy sentence to buffer for tokenization. Force NUL termination since
+   * strncpy with bound == sizeof(dst) does not guarantee one. */
+  strncpy(buffer, nmea_sentence, GPS_BUFFER_SIZE - 1);
+  buffer[GPS_BUFFER_SIZE - 1] = '\0';
   
   /* Get first token */
   token = strtok_r(buffer, ",", &saveptr);
@@ -267,7 +280,8 @@ static uint8_t GPS_ParseGPGGA(const char* nmea_sentence, GPS_Data *gps_data)
           /* Use the more robust string-based conversion */
           gps_data->latitude = GPS_NMEAStringToDecimalDegrees(token);
           /* Store raw latitude string for debugging */
-          strncpy(gps_data->debug_lat, token, GPS_DEBUG_BUFFER_SIZE);
+          strncpy(gps_data->debug_lat, token, GPS_DEBUG_BUFFER_SIZE - 1);
+          gps_data->debug_lat[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
         }
         break;
         
@@ -282,7 +296,8 @@ static uint8_t GPS_ParseGPGGA(const char* nmea_sentence, GPS_Data *gps_data)
           /* Use the more robust string-based conversion */
           gps_data->longitude = GPS_NMEAStringToDecimalDegrees(token);
           /* Store raw longitude string for debugging */
-          strncpy(gps_data->debug_lon, token, GPS_DEBUG_BUFFER_SIZE);
+          strncpy(gps_data->debug_lon, token, GPS_DEBUG_BUFFER_SIZE - 1);
+          gps_data->debug_lon[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
         }
         break;
         
@@ -299,7 +314,8 @@ static uint8_t GPS_ParseGPGGA(const char* nmea_sentence, GPS_Data *gps_data)
       case 7: /* Number of satellites */
         gps_data->satellites = atoi(token);
         /* Store raw satellites string for debugging */
-        strncpy(gps_data->debug_sats, token, GPS_DEBUG_BUFFER_SIZE);
+        strncpy(gps_data->debug_sats, token, GPS_DEBUG_BUFFER_SIZE - 1);
+        gps_data->debug_sats[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
         break;
         
       case 9: /* Altitude */

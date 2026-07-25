@@ -385,18 +385,38 @@ static void SD_SPI_Init(void)
 }
 
 /**
- * @brief  Switch SPI1 to high-speed mode after SD card init
- * @note   Call once after f_mount succeeds. Init must use <=400kHz;
- *         after init the card supports up to 25MHz. We use ~2.6MHz
- *         (APB2 21MHz / prescaler 8) as a conservative data-phase speed.
- *         This reduces per-sector write time from ~50ms to ~1.6ms,
- *         dramatically shrinking the corruption window on power loss.
+ * @brief  Switch SPI1 to high-speed mode after SD card init.
+ * @note   Called once from lfs_sd_bd_init() after the CMD0/ACMD41/CMD9
+ *         sequence completes at the 82 kHz init clock. The SD spec allows
+ *         up to 25 MHz after init, but on this board's SPI1 wiring 2.6 MHz
+ *         (prescaler 8) was unreliable - mounts and reformats both failed.
+ *         Prescaler 16 gives APB2 21MHz / 16 = ~1.3 MHz, which is still
+ *         ~16x faster than init speed (per-sector write drops from ~50 ms
+ *         to ~3 ms) but far more tolerant of trace length / connector
+ *         impedance than 2.6 MHz. If future board revisions improve SI we
+ *         can re-try a lower prescaler here.
  */
 void SD_SetFastSpeed(void)
 {
-  HAL_SPI_DeInit(&hspi1);
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8; /* 21MHz/8 = ~2.6MHz */
-  HAL_SPI_Init(&hspi1);
+  /* Change the baud-rate prescaler with the least possible collateral damage:
+   * just disable SPE, poke CR1.BR[2:0], re-enable SPE. This avoids the full
+   * HAL_SPI_DeInit/Init sequence, which re-runs HAL_SPI_MspInit and briefly
+   * reconfigures PA5/6/7 + CS - that glitch was causing subsequent card
+   * reads/writes to return garbage (seen as both lfs_mount and lfs_format
+   * failing with Err: 13 at 2.6 MHz and 1.3 MHz via HAL_SPI_Init).
+   *
+   * On STM32F4, BR bits can only be changed while SPE=0.
+   * BR[2:0] = 0b011 -> fPCLK/16 -> 21 MHz / 16 = ~1.3 MHz.
+   *
+   * Also mirror the new value into hspi1.Init so HAL's internal bookkeeping
+   * matches hardware, in case any later HAL_SPI_* call reads it back. */
+  __HAL_SPI_DISABLE(&hspi1);
+  uint32_t cr1 = hspi1.Instance->CR1;
+  cr1 &= ~SPI_CR1_BR_Msk;
+  cr1 |=  (0x3U << SPI_CR1_BR_Pos); /* prescaler = 16 */
+  hspi1.Instance->CR1 = cr1;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  __HAL_SPI_ENABLE(&hspi1);
 }
 
 /**

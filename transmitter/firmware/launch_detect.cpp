@@ -15,11 +15,22 @@ static volatile uint32_t detection_start_time_ms = 0;
 static volatile bool launch_detected = false;
 static volatile bool imu_initialized = false;
 
-// Current acceleration values
+// Current acceleration values (linear = gravity-removed, body frame)
 static float accel_x = 0.0f;
 static float accel_y = 0.0f;
 static float accel_z = 0.0f;
 static float total_accel = 0.0f;
+
+// Latest BNO085 rotation vector (body -> earth). w is the real part.
+// If IMU_FUSION_USE_GAME_ROTVEC is set this is the game rotation vector
+// (gyro+accel only, no magnetometer).
+static volatile float rot_w = 1.0f;
+static volatile float rot_x = 0.0f;
+static volatile float rot_y = 0.0f;
+static volatile float rot_z = 0.0f;
+static volatile bool  rot_valid = false;
+static volatile uint32_t last_accel_ms = 0;
+static volatile uint32_t last_rotvec_ms = 0;
 
 /**
  * Initialize BNO085 IMU for launch detection
@@ -48,7 +59,25 @@ void launch_detect_init(void) {
     }
     
     Serial.println("[Launch] ✓ Linear acceleration enabled");
-    
+
+    // Also enable a rotation vector report so the nav/EKF layer can rotate
+    // body-frame accel into earth-frame.  GAME_ROTATION_VECTOR omits the
+    // magnetometer (good for metal airframes); ROTATION_VECTOR uses full
+    // 9-DoF fusion (more accurate heading, but mag-dependent).
+#if IMU_FUSION_USE_GAME_ROTVEC
+    if (!bno08x.enableReport(SH2_GAME_ROTATION_VECTOR)) {
+        Serial.println("[Launch] ⚠ Could not enable GAME rotation vector (fusion will miss orientation)");
+    } else {
+        Serial.println("[Launch] ✓ Game rotation vector enabled");
+    }
+#else
+    if (!bno08x.enableReport(SH2_ROTATION_VECTOR)) {
+        Serial.println("[Launch] ⚠ Could not enable rotation vector (fusion will miss orientation)");
+    } else {
+        Serial.println("[Launch] ✓ Rotation vector enabled");
+    }
+#endif
+
     // Wait for sensor to settle
     Serial.print("[Launch] Settling for ");
     Serial.print(LAUNCH_SETTLE_TIME);
@@ -77,15 +106,34 @@ void launch_detect_update(uint32_t system_time_seconds, uint32_t ms_counter) {
     if (bno08x.wasReset()) {
         Serial.println("[Launch] Sensor was reset, re-enabling reports");
         bno08x.enableReport(SH2_LINEAR_ACCELERATION);
+#if IMU_FUSION_USE_GAME_ROTVEC
+        bno08x.enableReport(SH2_GAME_ROTATION_VECTOR);
+#else
+        bno08x.enableReport(SH2_ROTATION_VECTOR);
+#endif
+        rot_valid = false;
     }
     
-    // Get new sensor event
-    if (!bno08x.getSensorEvent(&sensorValue)) {
-        return;  // No new data
+    // Drain all queued sensor events this tick, not just one.  At 100 Hz+ the
+    // BNO085 can produce several reports between main-loop iterations, and
+    // only consuming one starves the nav/EKF layer of rotation updates.
+    while (bno08x.getSensorEvent(&sensorValue)) {
+
+    // Capture rotation vector whenever the sensor emits one.  Both the full
+    // and game variants land in the same union field (rotationVector).
+    if (sensorValue.sensorId == SH2_ROTATION_VECTOR
+        || sensorValue.sensorId == SH2_GAME_ROTATION_VECTOR) {
+        rot_w = sensorValue.un.rotationVector.real;
+        rot_x = sensorValue.un.rotationVector.i;
+        rot_y = sensorValue.un.rotationVector.j;
+        rot_z = sensorValue.un.rotationVector.k;
+        rot_valid = true;
+        last_rotvec_ms = millis();
     }
-    
+
     // Process linear acceleration data (gravity already removed by sensor)
     if (sensorValue.sensorId == SH2_LINEAR_ACCELERATION) {
+        last_accel_ms = millis();
         accel_x = sensorValue.un.linearAcceleration.x;
         accel_y = sensorValue.un.linearAcceleration.y;
         accel_z = sensorValue.un.linearAcceleration.z;
@@ -135,7 +183,30 @@ void launch_detect_update(uint32_t system_time_seconds, uint32_t ms_counter) {
                 break;
         }
     }
+    }  // end while(getSensorEvent)
 }
+
+/* ---------- IMU accessors for the nav / EKF layer ------------------------ */
+
+void imu_get_linear_accel_body(float *x, float *y, float *z) {
+    if (x) *x = accel_x;
+    if (y) *y = accel_y;
+    if (z) *z = accel_z;
+}
+
+void imu_get_quaternion(float *w, float *xq, float *yq, float *zq) {
+    if (w)  *w  = rot_w;
+    if (xq) *xq = rot_x;
+    if (yq) *yq = rot_y;
+    if (zq) *zq = rot_z;
+}
+
+bool imu_has_quaternion(void) {
+    return rot_valid;
+}
+
+uint32_t imu_last_accel_ms(void)  { return last_accel_ms; }
+uint32_t imu_last_rotvec_ms(void) { return last_rotvec_ms; }
 
 /**
  * Check if launch has been detected and confirmed (and clear flag)

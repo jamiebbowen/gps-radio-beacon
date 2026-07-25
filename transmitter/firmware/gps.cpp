@@ -1,4 +1,5 @@
 #include "include/gps.h"
+#include "include/nmea_fields.h"
 #include <Arduino.h>
 #include <string.h>
 #include <stdio.h>
@@ -7,6 +8,7 @@
 #include "include/radio.h"
 #include "include/launch_detect.h"
 #include "include/beacon.h"
+#include "include/nav.h"
 
 // Global variables
 volatile uint8_t gpsInitialized = 0;
@@ -236,130 +238,125 @@ uint8_t gps_poll_rx(void) {
             last_sentence_debug = millis();
         }
         
-        char *token;
-        char *saveptr;
-        uint8_t field_index = 0;
-
         // Check if this is a GGA or RMC sentence (support both GP and GN prefixes)
         if (strncmp(nmea_buffer, "$GNGGA", 6) == 0 || 
                  strncmp(nmea_buffer, "$GNRMC", 6) == 0 ||
                  strncmp(nmea_buffer, "$GPGGA", 6) == 0 || 
                  strncmp(nmea_buffer, "$GPRMC", 6) == 0) {
             uint8_t is_rmc = (nmea_buffer[3] == 'R'); // Check if RMC
-            
-            // Parse GPS sentence
-            token = strtok_r(nmea_buffer, ",", &saveptr);
-            
+
+            /* Extract fields by ABSOLUTE position (see nmea_fields.h).
+             * The old strtok_r loop collapsed empty fields, so a partial
+             * fix (e.g. "$GPGGA,123519,,,,,0,00,...") shifted every later
+             * field into the wrong index. nmea_get_field preserves empty
+             * fields and cannot misalign. */
+            char fbuf[16];
+
             // For RMC sentences, check status field first (field 2)
-            uint8_t rmc_valid = 0;
             if (is_rmc) {
-                // Skip field 1 (time)
-                token = strtok_r(NULL, ",", &saveptr);
-                // Get field 2 (status)
-                token = strtok_r(NULL, ",", &saveptr);
-                if (token != NULL && token[0] == 'A') {
-                    rmc_valid = 1;  // Status = Active/Valid
-                    field_index = 2;  // We've consumed 2 fields
-                } else {
+                if (nmea_get_field(nmea_buffer, RMC_FIELD_STATUS,
+                                   fbuf, sizeof(fbuf)) < 1 || fbuf[0] != 'A') {
                     return bytes_processed;  // Skip invalid RMC (status = V)
                 }
             }
 
-            // Process remaining tokens
-            while ((token = strtok_r(NULL, ",", &saveptr)) != NULL) {
-                field_index++;
-                
-                // Latitude field
-                // GGA: field 2, RMC: field 3
-                if ((is_rmc && field_index == 3) || (!is_rmc && field_index == 2)) {
-                    if (token != NULL && strlen(token) > 0) {
-                        uint8_t token_len = strlen(token);
-                        uint8_t max_copy = sizeof(lat_buffer) - 1;  // Always leave room for null terminator
-                        uint8_t copy_len = (token_len < max_copy) ? token_len : max_copy;
-                        strncpy(lat_buffer, token, copy_len);
-                        lat_buffer[copy_len] = '\0';
+            // Field positions per sentence type
+            // GGA: time=1 lat=2 N/S=3 lon=4 E/W=5 quality=6 sats=7 hdop=8 alt=9
+            // RMC: time=1 status=2 lat=3 N/S=4 lon=5 E/W=6 ...
+            const uint8_t lat_idx     = is_rmc ? RMC_FIELD_LAT     : 2;
+            const uint8_t lat_dir_idx = is_rmc ? RMC_FIELD_LAT_DIR : 3;
+            const uint8_t lon_idx     = is_rmc ? RMC_FIELD_LON     : 4;
+            const uint8_t lon_dir_idx = is_rmc ? RMC_FIELD_LON_DIR : 5;
+
+            // Latitude (keep previous value if the field is empty)
+            if (nmea_get_field(nmea_buffer, lat_idx, fbuf, sizeof(fbuf)) > 0) {
+                strncpy(lat_buffer, fbuf, sizeof(lat_buffer) - 1);
+                lat_buffer[sizeof(lat_buffer) - 1] = '\0';
+            }
+
+            // Latitude direction (N/S)
+            if (nmea_get_field(nmea_buffer, lat_dir_idx, fbuf, sizeof(fbuf)) > 0
+                && (fbuf[0] == 'N' || fbuf[0] == 'S')) {
+                lat_dir = fbuf[0];
+            }
+
+            // Longitude (keep previous value if the field is empty)
+            if (nmea_get_field(nmea_buffer, lon_idx, fbuf, sizeof(fbuf)) > 0) {
+                strncpy(lon_buffer, fbuf, sizeof(lon_buffer) - 1);
+                lon_buffer[sizeof(lon_buffer) - 1] = '\0';
+            }
+
+            // Longitude direction (E/W) - also commits the coordinate pair
+            if (nmea_get_field(nmea_buffer, lon_dir_idx, fbuf, sizeof(fbuf)) > 0
+                && (fbuf[0] == 'E' || fbuf[0] == 'W')) {
+                lon_dir = fbuf[0];
+
+                // We have lat/lon data, update current coordinates
+                if (lat_buffer[0] != '\0' && lon_buffer[0] != '\0') {
+                    strncpy(current_coords.lat, lat_buffer,
+                            sizeof(current_coords.lat) - 1);
+                    current_coords.lat[sizeof(current_coords.lat) - 1] = '\0';
+
+                    strncpy(current_coords.lon, lon_buffer,
+                            sizeof(current_coords.lon) - 1);
+                    current_coords.lon[sizeof(current_coords.lon) - 1] = '\0';
+
+                    current_coords.lat_dir = lat_dir;
+                    current_coords.lon_dir = lon_dir;
+                    current_coords.valid = 1;
+
+                    // Coordinate update (log less frequently)
+                    static uint32_t last_coord_log = 0;
+                    if (millis() - last_coord_log > 10000) {  // Every 10 seconds
+                        Serial.print(F("[GPS] ✓ Fix: "));
+                        Serial.print(current_coords.lat);
+                        Serial.print(current_coords.lat_dir);
+                        Serial.print(F(", "));
+                        Serial.print(current_coords.lon);
+                        Serial.println(current_coords.lon_dir);
+                        last_coord_log = millis();
                     }
                 }
-                // Latitude direction (N/S)
-                else if ((is_rmc && field_index == 4) || (!is_rmc && field_index == 3)) {
-                    if (token[0] == 'N' || token[0] == 'S') {
-                        lat_dir = token[0];
-                    }
+            }
+
+            // GGA-only fields
+            if (!is_rmc) {
+                // Fix quality (field 6): 0=invalid, 1=GPS, 2=DGPS, 3=PPS, ...
+                if (nmea_get_field(nmea_buffer, 6, fbuf, sizeof(fbuf)) > 0) {
+                    current_coords.fix_quality = atoi(fbuf);
                 }
-                // Longitude field
-                // GGA: field 4, RMC: field 5
-                else if ((is_rmc && field_index == 5) || (!is_rmc && field_index == 4)) {
-                    if (token != NULL && strlen(token) > 0) {
-                        uint8_t token_len = strlen(token);
-                        uint8_t max_copy = sizeof(lon_buffer) - 1;  // Always leave room for null terminator
-                        uint8_t copy_len = (token_len < max_copy) ? token_len : max_copy;
-                        strncpy(lon_buffer, token, copy_len);
-                        lon_buffer[copy_len] = '\0';
-                    }
+
+                // Number of satellites (field 7)
+                if (nmea_get_field(nmea_buffer, 7, fbuf, sizeof(fbuf)) > 0) {
+                    strncpy(current_coords.satellites, fbuf,
+                            sizeof(current_coords.satellites) - 1);
+                    current_coords.satellites[sizeof(current_coords.satellites) - 1] = '\0';
                 }
-                // Longitude direction (E/W)
-                else if ((is_rmc && field_index == 6) || (!is_rmc && field_index == 5)) {
-                    if (token[0] == 'E' || token[0] == 'W') {
-                        lon_dir = token[0];
-                        
-                        // We have lat/lon data, update current coordinates
-                        if (lat_buffer[0] != '\0' && lon_buffer[0] != '\0') {
-                            uint8_t lat_len = strlen(lat_buffer);
-                            uint8_t max_copy_lat = sizeof(current_coords.lat) - 1;  // Always leave room for null terminator
-                            uint8_t copy_len_lat = (lat_len < max_copy_lat) ? lat_len : max_copy_lat;
-                            strncpy(current_coords.lat, lat_buffer, copy_len_lat);
-                            current_coords.lat[copy_len_lat] = '\0';
-                            
-                            uint8_t lon_len = strlen(lon_buffer);
-                            uint8_t max_copy_lon = sizeof(current_coords.lon) - 1;  // Always leave room for null terminator
-                            uint8_t copy_len_lon = (lon_len < max_copy_lon) ? lon_len : max_copy_lon;
-                            strncpy(current_coords.lon, lon_buffer, copy_len_lon);
-                            current_coords.lon[copy_len_lon] = '\0';
-                            
-                            current_coords.lat_dir = lat_dir;
-                            current_coords.lon_dir = lon_dir;
-                            current_coords.valid = 1;
-                            
-                            // Coordinate update (log less frequently)
-                            static uint32_t last_coord_log = 0;
-                            if (millis() - last_coord_log > 10000) {  // Every 10 seconds
-                                Serial.print(F("[GPS] ✓ Fix: "));
-                                Serial.print(current_coords.lat);
-                                Serial.print(current_coords.lat_dir);
-                                Serial.print(F(", "));
-                                Serial.print(current_coords.lon);
-                                Serial.println(current_coords.lon_dir);
-                                last_coord_log = millis();
-                            }
-                        }
-                    }
-                }
-                // Fix quality (only in GGA, field 6)
-                // 0=invalid, 1=GPS fix, 2=DGPS fix, 3=PPS fix, etc.
-                else if (!is_rmc && field_index == 6) {
-                    if (token != NULL && strlen(token) > 0) {
-                        current_coords.fix_quality = atoi(token);
-                    }
-                }
-                // Number of satellites (only in GGA, field 7)
-                else if (!is_rmc && field_index == 7) {
-                    if (token != NULL && strlen(token) > 0) {
-                        uint8_t token_len = strlen(token);
-                        uint8_t max_copy = sizeof(current_coords.satellites) - 1;
-                        uint8_t copy_len = (token_len < max_copy) ? token_len : max_copy;
-                        strncpy(current_coords.satellites, token, copy_len);
-                        current_coords.satellites[copy_len] = '\0';
-                    }
-                }
-                // Altitude (only in GGA, field 9)
-                // GGA format: $GNGGA,time,lat,N/S,lon,E/W,quality,satellites,hdop,altitude,M,...
-                else if (!is_rmc && field_index == 9) {
-                    if (token != NULL && strlen(token) > 0) {
-                        uint8_t token_len = strlen(token);
-                        uint8_t max_copy = sizeof(current_coords.altitude) - 1;
-                        uint8_t copy_len = (token_len < max_copy) ? token_len : max_copy;
-                        strncpy(current_coords.altitude, token, copy_len);
-                        current_coords.altitude[copy_len] = '\0';
+
+                // Altitude (field 9)
+                if (nmea_get_field(nmea_buffer, 9, fbuf, sizeof(fbuf)) > 0) {
+                    strncpy(current_coords.altitude, fbuf,
+                            sizeof(current_coords.altitude) - 1);
+                    current_coords.altitude[sizeof(current_coords.altitude) - 1] = '\0';
+
+                    /* Feed the EKF with the freshly parsed GGA fix.  GGA
+                     * provides fix_quality (field 6), sats (field 7), and
+                     * altitude (field 9); lat/lon came from an earlier GGA
+                     * field or the preceding RMC.  We only update when the
+                     * fix looks plausible; nav_update_from_gps also rejects
+                     * low sat counts / no fix internally. */
+                    if (current_coords.valid
+                        && current_coords.fix_quality >= 1
+                        && current_coords.lat[0] != '0'
+                        && current_coords.lat[0] != '\0') {
+                        float lat = gps_nmea_to_decimal(current_coords.lat,
+                                                       current_coords.lat_dir);
+                        float lon = gps_nmea_to_decimal(current_coords.lon,
+                                                       current_coords.lon_dir);
+                        float alt = atof(current_coords.altitude);
+                        uint8_t sats = (uint8_t)atoi(current_coords.satellites);
+                        nav_update_from_gps(lat, lon, alt,
+                                            sats, current_coords.fix_quality);
                     }
                 }
             }
@@ -384,28 +381,9 @@ const GPSCoordinates_t* gps_get_current_coordinates(void) {
  * @return Decimal degrees (negative for S/W)
  */
 float gps_nmea_to_decimal(const char* nmea_coord, char direction) {
-    if (nmea_coord == NULL || strlen(nmea_coord) == 0) {
-        return 0.0f;
-    }
-    
-    // Convert entire coordinate to float
-    float nmea_value = atof(nmea_coord);
-    
-    // Extract degrees (everything before last 2 digits before decimal)
-    int degrees = (int)(nmea_value / 100.0f);
-    
-    // Extract minutes (last 2 digits before decimal + fraction)
-    float minutes = nmea_value - (degrees * 100.0f);
-    
-    // Convert to decimal degrees
-    float decimal = (float)degrees + (minutes / 60.0f);
-    
-    // Apply sign based on direction
-    if (direction == 'S' || direction == 'W') {
-        decimal = -decimal;
-    }
-    
-    return decimal;
+    /* Thin wrapper: the conversion lives in nmea_fields.c so it can be
+     * unit-tested on the host (and shares the double-precision math). */
+    return nmea_coord_to_decimal(nmea_coord, direction);
 }
 
 void gps_tx_string(const char* str) {

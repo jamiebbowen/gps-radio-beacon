@@ -43,6 +43,14 @@ uint8_t RF_Parser_ParseAsciiPacket(const char *packet);
 uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length);
 
 /**
+ * @brief Parse a PACKET_TYPE_FUSED payload (21 bytes) from the transmitter's EKF
+ * @param data   Pointer to raw packet bytes
+ * @param length Length in bytes (must equal FUSED_PACKET_SIZE)
+ * @retval RF_PARSER_OK on success, RF_PARSER_ERROR on length/type/range errors
+ */
+uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length);
+
+/**
  * @brief Get parsed data from the last valid packet
  * @param gps_data Pointer to GPS_Data structure to fill
  * @param callsign Buffer to store callsign

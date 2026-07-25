@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  # Host-side unit tests (receiver parsers/math + transmitter EKF/NMEA).
+  # These are pure gcc/g++ builds - fast and hermetic.
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run receiver unit tests
+        run: make -C receiver/tests test
+
+      - name: Run transmitter unit tests
+        run: make -C transmitter/tests test
+
+      - name: Coverage summary
+        run: |
+          make -C receiver/tests coverage | grep -E "File|Lines" || true
+          make -C transmitter/tests coverage | grep -E "File|Lines" || true
+
+  # Receiver firmware cross-compile (STM32F401, arm-none-eabi-gcc).
+  # STM32CubeF4 is deliberately not tracked in this repo (1+ GB); fetch the
+  # pinned tag and only the two submodules the build actually needs.
+  receiver-firmware:
+    runs-on: ubuntu-latest
+    env:
+      CUBE_TAG: v1.28.2
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi
+
+      - name: Cache STM32CubeF4
+        id: cache-cube
+        uses: actions/cache@v4
+        with:
+          path: receiver/firmware/lib/STM32CubeF4
+          key: stm32cubef4-${{ env.CUBE_TAG }}
+
+      - name: Fetch STM32CubeF4
+        if: steps.cache-cube.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$CUBE_TAG" \
+            https://github.com/STMicroelectronics/STM32CubeF4.git \
+            receiver/firmware/lib/STM32CubeF4
+          cd receiver/firmware/lib/STM32CubeF4
+          git submodule update --init --depth 1 \
+            Drivers/STM32F4xx_HAL_Driver \
+            Drivers/CMSIS/Device/ST/STM32F4xx
+
+      - name: Build receiver firmware
+        run: make -C receiver/firmware
+
+  # Transmitter firmware build (ItsyBitsy M4, arduino-cli).
+  transmitter-firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install board core and libraries
+        run: |
+          arduino-cli config init --additional-urls \
+            https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
+          arduino-cli core update-index
+          arduino-cli core install adafruit:samd
+          arduino-cli lib install RadioLib "Adafruit BNO08x"
+
+      - name: Build transmitter firmware
+        run: make -C transmitter/firmware compile

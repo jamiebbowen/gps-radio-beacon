@@ -90,10 +90,14 @@ void DisplayMode_CompassVisual(Compass_Data *compass_data, float *compass_headin
     int tail_x = cx - (int)( 5.0f * sinf(h_rad));
     int tail_y = cy + (int)( 5.0f * cosf(h_rad));
 
-    if (tip_x  <  0) tip_x  =  0; if (tip_x  > 63) tip_x  = 63;
-    if (tip_y  <  0) tip_y  =  0; if (tip_y  > 63) tip_y  = 63;
-    if (tail_x <  0) tail_x =  0; if (tail_x > 63) tail_x = 63;
-    if (tail_y <  0) tail_y =  0; if (tail_y > 63) tail_y = 63;
+    if (tip_x  <  0) tip_x  =  0;
+    if (tip_x  > 63) tip_x  = 63;
+    if (tip_y  <  0) tip_y  =  0;
+    if (tip_y  > 63) tip_y  = 63;
+    if (tail_x <  0) tail_x =  0;
+    if (tail_x > 63) tail_x = 63;
+    if (tail_y <  0) tail_y =  0;
+    if (tail_y > 63) tail_y = 63;
 
     Display_DrawLine((uint8_t)tail_x, (uint8_t)tail_y,
                      (uint8_t)tip_x,  (uint8_t)tip_y, 1);
@@ -118,7 +122,10 @@ void DisplayMode_CompassVisual(Compass_Data *compass_data, float *compass_headin
 
   uint8_t sys_cal, gyro_cal, accel_cal, mag_cal;
   Compass_GetCalibrationStatus(&sys_cal, &gyro_cal, &accel_cal, &mag_cal);
-  snprintf(buffer, sizeof(buffer), "S%dG%dA%dM%d", sys_cal, gyro_cal, accel_cal, mag_cal);
+  /* BNO055 cal statuses are each in [0,3]; mask so GCC can prove the
+   * "S#G#A#M#" format fits in the 16-byte buffer. */
+  snprintf(buffer, sizeof(buffer), "S%uG%uA%uM%u",
+           sys_cal & 0x3u, gyro_cal & 0x3u, accel_cal & 0x3u, mag_cal & 0x3u);
   Display_DrawText(66, 32, buffer);
 
   int8_t temp;

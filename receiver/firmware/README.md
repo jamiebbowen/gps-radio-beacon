@@ -20,4 +20,28 @@ The system receives GPS coordinates from a remote transmitter via the RF receive
 ## Project Structure
 - `inc/` - Header files
 - `src/` - Source files
+- `lib/` - Vendored libraries (littlefs is tracked; STM32CubeF4 is not - see below)
 - `Makefile` - Build configuration
+
+## Building
+
+Requires `arm-none-eabi-gcc` and a local copy of STM32CubeF4, which is too
+large (1+ GB) to track in this repository. On a fresh clone, fetch it once:
+
+```bash
+git clone --depth 1 --branch v1.28.2 \
+    https://github.com/STMicroelectronics/STM32CubeF4.git lib/STM32CubeF4
+cd lib/STM32CubeF4
+git submodule update --init --depth 1 \
+    Drivers/STM32F4xx_HAL_Driver \
+    Drivers/CMSIS/Device/ST/STM32F4xx
+```
+
+Then build with:
+
+```bash
+make
+```
+
+Output artifacts land in `bin/` (`.elf`, `.bin`, `.hex`). CI performs the
+same steps (see `.github/workflows/ci.yml`).

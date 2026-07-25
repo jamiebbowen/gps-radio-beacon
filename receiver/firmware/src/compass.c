@@ -205,105 +205,21 @@ typedef struct {
 static Compass_Debug_t compass_debug = {0};
 
 /* Global variables */
-static int16_t raw_data[3] = {0};
 static uint8_t found_i2c_addresses[128] = {0}; /* Array to store found I2C addresses */
 
 /* Calibration variables - BNO055 handles calibration internally */
 static float heading_offset = 0.0f; /* Optional heading offset for declination */
+
+/* Set once Compass_SetCalibrationData() successfully restores saved offsets.
+ * The BNO055 status register will still report mag_cal=0 until fresh motion
+ * re-verifies calibration, but the heading is already trustworthy. */
+static uint8_t compass_cal_restored = 0;
 
 /* Function prototypes */
 static uint8_t Compass_ReadRegister(uint8_t reg, uint8_t *data);
 static uint8_t Compass_WriteRegister(uint8_t reg, uint8_t data);
 static void Compass_SetError(uint8_t error_code, const char *error_msg, uint8_t hal_status);
 static void Compass_SetDebug(uint8_t msg_type, const char *msg);
-static uint8_t Compass_ReadData(void);
-static uint8_t Compass_SetMode(uint8_t mode);
-static uint8_t Compass_CheckBNO055(void);
-
-/**
- * @brief Check BNO055 CHIP_ID register with robust retry logic
- * @retval 1 if BNO055 found, 0 otherwise
- */
-static uint8_t Compass_CheckBNO055(void)
-{
-  HAL_StatusTypeDef hal_status;
-  uint8_t chip_id = 0;
-  uint8_t addr;
-  char debug_msg[100];
-  int retry;
-  
-  /* First try the default address with retry logic */
-  addr = BNO055_I2C_ADDR; // 0x28
-  
-  /* BNO055 can take up to 850ms to boot - use retry logic with delays */
-  for (retry = 0; retry < 5; retry++) {
-    /* Read CHIP_ID register */
-    hal_status = HAL_I2C_Mem_Read(
-      &hi2c_display,
-      addr << 1,
-      BNO055_CHIP_ID_ADDR,
-      I2C_MEMADD_SIZE_8BIT,
-      &chip_id,
-      1,
-      BNO055_I2C_TIMEOUT
-    );
-    
-    if (hal_status == HAL_OK) {
-      snprintf(debug_msg, sizeof(debug_msg), "BNO055 CHIP_ID at addr 0x%02X = 0x%02X (expected 0xA0), retry %d", 
-               addr, chip_id, retry);
-      Compass_SetDebug(0, debug_msg);
-      
-      /* BNO055 CHIP_ID should be 0xA0 */
-      if (chip_id == BNO055_ID) {
-        compass_debug.active_addr = addr;
-        return COMPASS_OK;
-      }
-    }
-    
-    /* Wait before retry - BNO055 needs time after power-up */
-    HAL_Delay(100);
-  }
-  
-  /* Try the alternative address with retry logic */
-  addr = BNO055_I2C_ADDR_ALT; // 0x29
-  
-  for (retry = 0; retry < 5; retry++) {
-    /* Read CHIP_ID register */
-    hal_status = HAL_I2C_Mem_Read(
-      &hi2c_display,
-      addr << 1,
-      BNO055_CHIP_ID_ADDR,
-      I2C_MEMADD_SIZE_8BIT,
-      &chip_id,
-      1,
-      BNO055_I2C_TIMEOUT
-    );
-    
-    if (hal_status == HAL_OK) {
-      snprintf(debug_msg, sizeof(debug_msg), "BNO055 CHIP_ID at addr 0x%02X = 0x%02X (expected 0xA0), retry %d", 
-               addr, chip_id, retry);
-      Compass_SetDebug(0, debug_msg);
-      
-      /* BNO055 CHIP_ID should be 0xA0 */
-      if (chip_id == BNO055_ID) {
-        compass_debug.active_addr = addr;
-        return COMPASS_OK;
-      }
-    }
-    
-    /* Wait before retry */
-    HAL_Delay(100);
-  }
-  
-  /* If we get here, we couldn't find the BNO055 */
-  /* Use the default address anyway */
-  compass_debug.active_addr = BNO055_I2C_ADDR;
-  snprintf(debug_msg, sizeof(debug_msg), "Using addr 0x%02X despite CHIP_ID failure after multiple retries", compass_debug.active_addr);
-  Compass_SetError(COMPASS_ERROR_DEVICE_NOT_FOUND, debug_msg, 0);
-  
-  /* Return error */
-  return COMPASS_ERROR;
-}
 
 /**
  * @brief Scan I2C bus for devices
@@ -362,10 +278,13 @@ static uint8_t Compass_ScanI2C(uint8_t *detected_addrs, uint8_t max_addrs)
  */
 static void Compass_SetError(uint8_t error_code, const char *error_msg, uint8_t hal_status)
 {
-  strncpy(compass_debug.error_message, error_msg, sizeof(compass_debug.error_message) - 1);
-  compass_debug.error_message[sizeof(compass_debug.error_message) - 1] = '\0';
+  (void)hal_status;
+  const size_t cap = sizeof(compass_debug.error_message) - 1;
+  size_t n = strlen(error_msg);
+  if (n > cap) n = cap;
+  memcpy(compass_debug.error_message, error_msg, n);
+  compass_debug.error_message[n] = '\0';
   compass_debug.error_code = error_code;
-  /* HAL status is not stored in the current debug structure */
 }
 
 /**
@@ -375,9 +294,12 @@ static void Compass_SetError(uint8_t error_code, const char *error_msg, uint8_t 
  */
 static void Compass_SetDebug(uint8_t msg_type, const char *msg)
 {
-  if (msg_type < 8) { // We have 8 debug messages in the debug_messages array
-    strncpy(compass_debug.debug_messages[msg_type], msg, sizeof(compass_debug.debug_messages[0]) - 1);
-    compass_debug.debug_messages[msg_type][sizeof(compass_debug.debug_messages[0]) - 1] = '\0';
+  if (msg_type < 8) { /* We have 8 debug messages in the debug_messages array */
+    const size_t cap = sizeof(compass_debug.debug_messages[0]) - 1;
+    size_t n = strlen(msg);
+    if (n > cap) n = cap;
+    memcpy(compass_debug.debug_messages[msg_type], msg, n);
+    compass_debug.debug_messages[msg_type][n] = '\0';
   }
 }
 
@@ -466,7 +388,14 @@ uint8_t Compass_SetCalibrationData(const uint8_t *data, uint8_t len)
   Compass_WriteRegister(BNO055_OPR_MODE_ADDR, BNO055_OPR_MODE_NDOF);
   HAL_Delay(20);
 
-  return (status == HAL_OK) ? COMPASS_OK : COMPASS_ERROR;
+  if (status == HAL_OK) {
+    /* BNO055 CALIB_STAT will read mag_cal=0 until the fusion re-verifies
+     * against fresh magnetic samples, which won't happen while the device
+     * sits still. The offsets ARE loaded though, so trust heading anyway. */
+    compass_cal_restored = 1;
+    return COMPASS_OK;
+  }
+  return COMPASS_ERROR;
 }
 
 /**
@@ -970,7 +899,10 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
    *   mag_cal=3 → fully calibrated, most accurate
    * Wave the device in a figure-8 pattern after power-up to calibrate. */
   uint8_t mag_cal = compass_debug.calib_status & 0x03;
-  compass_data_ptr->heading_valid = (mag_cal >= 1) ? 1 : 0;
+  /* Trust heading if either (a) the BNO055's live calibration status has
+   * reached mag_cal >= 1, or (b) we've previously loaded known-good offsets
+   * from SD. See compass_cal_restored notes above. */
+  compass_data_ptr->heading_valid = (mag_cal >= 1 || compass_cal_restored) ? 1 : 0;
   compass_data_ptr->mag_cal = mag_cal;
 
   /* Store heading in compass data structure */
@@ -1460,109 +1392,6 @@ const uint8_t* Compass_GetFoundAddresses(void)
 /* Function removed to avoid duplication */
 
 /* This function was a duplicate of the one defined earlier */
-
-/**
- * @brief Read raw data from the compass
- * @retval Status code
- */
-static uint8_t Compass_ReadData(void)
-{
-  HAL_StatusTypeDef hal_status;
-  uint8_t data[6]; /* Buffer for reading sensor data */
-  char debug_msg[100];
-  
-  /* Use the active address from global variable */
-  uint8_t addr = compass_debug.active_addr;
-  
-  /* Read accelerometer data */
-  hal_status = HAL_I2C_Mem_Read(&hi2c_display, addr << 1, BNO055_ACCEL_DATA_X_LSB, 
-                               I2C_MEMADD_SIZE_8BIT, data, 6, BNO055_I2C_TIMEOUT);
-  if (hal_status != HAL_OK) {
-    Compass_SetError(COMPASS_ERROR_READ_REG, "Failed to read accelerometer data", hal_status);
-    return COMPASS_ERROR;
-  }
-  
-  /* Parse accelerometer data (LSB first in BNO055) */
-  int16_t accel_x = (int16_t)((data[1] << 8) | data[0]);
-  int16_t accel_y = (int16_t)((data[3] << 8) | data[2]);
-  int16_t accel_z = (int16_t)((data[5] << 8) | data[4]);
-  
-  /* Store in debug structure */
-  compass_debug.accel_data[0] = accel_x;
-  compass_debug.accel_data[1] = accel_y;
-  compass_debug.accel_data[2] = accel_z;
-  
-  /* Read gyroscope data */
-  hal_status = HAL_I2C_Mem_Read(&hi2c_display, addr << 1, BNO055_GYRO_DATA_X_LSB, 
-                               I2C_MEMADD_SIZE_8BIT, data, 6, BNO055_I2C_TIMEOUT);
-  if (hal_status != HAL_OK) {
-    Compass_SetError(COMPASS_ERROR_READ_REG, "Failed to read gyroscope data", hal_status);
-    return COMPASS_ERROR;
-  }
-  
-  /* Parse gyroscope data */
-  int16_t gyro_x = (int16_t)((data[1] << 8) | data[0]);
-  int16_t gyro_y = (int16_t)((data[3] << 8) | data[2]);
-  int16_t gyro_z = (int16_t)((data[5] << 8) | data[4]);
-  
-  /* Store in debug structure */
-  compass_debug.gyro_data[0] = gyro_x;
-  compass_debug.gyro_data[1] = gyro_y;
-  compass_debug.gyro_data[2] = gyro_z;
-  
-  /* Read magnetometer data */
-  hal_status = HAL_I2C_Mem_Read(&hi2c_display, addr << 1, BNO055_MAG_DATA_X_LSB, 
-                               I2C_MEMADD_SIZE_8BIT, data, 6, BNO055_I2C_TIMEOUT);
-  if (hal_status != HAL_OK) {
-    Compass_SetError(COMPASS_ERROR_READ_REG, "Failed to read magnetometer data", hal_status);
-    return COMPASS_ERROR;
-  }
-  
-  /* Parse magnetometer data */
-  int16_t mag_x = (int16_t)((data[1] << 8) | data[0]);
-  int16_t mag_y = (int16_t)((data[3] << 8) | data[2]);
-  int16_t mag_z = (int16_t)((data[5] << 8) | data[4]);
-  
-  /* Store in debug structure */
-  compass_debug.mag_data[0] = mag_x;
-  compass_debug.mag_data[1] = mag_y;
-  compass_debug.mag_data[2] = mag_z;
-  
-  /* Read Euler angles */
-  hal_status = HAL_I2C_Mem_Read(&hi2c_display, addr << 1, BNO055_EULER_H_LSB, 
-                               I2C_MEMADD_SIZE_8BIT, data, 6, BNO055_I2C_TIMEOUT);
-  if (hal_status != HAL_OK) {
-    Compass_SetError(COMPASS_ERROR_READ_REG, "Failed to read Euler angles", hal_status);
-    return COMPASS_ERROR;
-  }
-  
-  /* Parse Euler angles (heading, roll, pitch) */
-  int16_t heading = (int16_t)((data[1] << 8) | data[0]);
-  int16_t roll = (int16_t)((data[3] << 8) | data[2]);
-  int16_t pitch = (int16_t)((data[5] << 8) | data[4]);
-  
-  /* Store in debug structure */
-  compass_debug.heading = heading;
-  compass_debug.roll = roll;
-  compass_debug.pitch = pitch;
-  
-  /* Log sensor values in debug messages */
-  snprintf(debug_msg, sizeof(debug_msg), "Acc: X%d Y%d Z%d", accel_x, accel_y, accel_z);
-  Compass_SetDebug(0, debug_msg);
-  
-  snprintf(debug_msg, sizeof(debug_msg), "Mag: X%d Y%d Z%d", mag_x, mag_y, mag_z);
-  Compass_SetDebug(1, debug_msg);
-  
-  snprintf(debug_msg, sizeof(debug_msg), "Gyro: X%d Y%d Z%d", gyro_x, gyro_y, gyro_z);
-  Compass_SetDebug(2, debug_msg);
-  
-  /* Store raw data for heading calculation */
-  raw_data[0] = mag_x;
-  raw_data[1] = mag_y;
-  raw_data[2] = mag_z;
-  
-  return COMPASS_OK;
-}
 
 /**
  * @brief Get system status, self-test result, and system error

@@ -37,7 +37,9 @@ C_SOURCES = \
 	$(SRC_DIR)/rf_parser.c \
 	$(SRC_DIR)/sd_card.c \
 	$(SRC_DIR)/sd_diskio.c \
-	$(SRC_DIR)/ff_gen_drv.c \
+	$(SRC_DIR)/lfs_sd_bd.c \
+	lib/littlefs/lfs.c \
+	lib/littlefs/lfs_util.c \
 	$(SRC_DIR)/display_modes/gps_mode.c \
 	$(SRC_DIR)/display_modes/compass_mode.c \
 	$(SRC_DIR)/display_modes/rf_mode.c \
@@ -46,8 +48,6 @@ C_SOURCES = \
 	$(SRC_DIR)/display_modes/i2c_devices.c \
 	$(SRC_DIR)/display_modes/imu_test_mode.c \
 	$(SRC_DIR)/display_modes/sd_card_mode.c \
-	lib/STM32CubeF4/Middlewares/Third_Party/FatFs/src/ff.c \
-	lib/STM32CubeF4/Middlewares/Third_Party/FatFs/src/diskio.c \
 	lib/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_spi.c \
 	lib/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c \
 	lib/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_cortex.c \
@@ -66,12 +66,19 @@ INCLUDES = \
   -Ilib/STM32CubeF4/Drivers/CMSIS/Include \
   -Ilib/STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Include \
   -Ilib/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Inc \
+  -Ilib/littlefs \
   -Ilib/STM32CubeF4/Middlewares/Third_Party/FatFs/src
 
 # Compiler flags
 CFLAGS = $(CPU) -Wall -O2 -g3
 CFLAGS += -ffunction-sections -fdata-sections
 CFLAGS += -DUSE_HAL_DRIVER -DSTM32F401xC
+# LittleFS: trim disabled features to keep flash + RAM footprint down.
+#   LFS_NO_MALLOC  - we provide static buffers, don't link malloc/free
+#   LFS_NO_ASSERT  - skip runtime assertions (save ~2 KB flash)
+#   LFS_NO_DEBUG   - skip debug printfs
+#   LFS_NO_WARN    - skip warn printfs
+CFLAGS += -DLFS_NO_MALLOC -DLFS_NO_ASSERT -DLFS_NO_DEBUG -DLFS_NO_WARN
 CFLAGS += $(INCLUDES)
 
 # Linker script

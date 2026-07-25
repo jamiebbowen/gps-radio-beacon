@@ -12,14 +12,21 @@ static uint8_t lora_initialized = 0;
 static int16_t last_rssi = 0;
 static int8_t last_snr = 0;
 
-/* Interrupt flag - set by DIO1 interrupt, cleared when packet is read */
-volatile uint8_t lora_packet_ready = 0;
+/* Interrupt flag - set by DIO1 ISR, cleared by ReadPacket only if no new IRQ fired during read.
+ * File-local; external callers use LoRa_PacketAvailable(). */
+static volatile uint8_t lora_packet_ready = 0;
 
-/* IRQ diagnostic counter - increments every time DIO1 fires */
+/* IRQ diagnostic counter - increments every time DIO1 fires.
+ * Also used as a "pending IRQ" sequence number to detect IRQs that fire while
+ * the main loop is already processing a packet (see LoRa_ReadPacket race fix). */
 static volatile uint32_t lora_irq_count = 0;
 
 /* DMA busy flag for non-blocking SPI reads */
 static volatile uint8_t lora_spi_dma_busy = 0;
+
+/* Minimum payload size that benefits from DMA. Below this, DMA setup + IRQ
+ * overhead dominates the cost of a blocking read. */
+#define LORA_DMA_MIN_LEN 16
 
 /* Private function prototypes */
 static void LoRa_CS_High(void);
@@ -27,8 +34,6 @@ static void LoRa_CS_Low(void);
 static uint8_t LoRa_WaitOnBusy(uint32_t timeout_ms);
 static uint8_t LoRa_SendCommand(uint8_t cmd, const uint8_t *params, uint8_t param_len);
 static uint8_t LoRa_ReadCommand(uint8_t cmd, uint8_t *data, uint8_t data_len);
-static uint8_t LoRa_WriteRegister(uint16_t address, uint8_t *data, uint8_t length);
-static uint8_t LoRa_ReadRegister(uint16_t address, uint8_t *data, uint8_t length);
 static uint8_t LoRa_WriteBuffer(uint8_t offset, const uint8_t *data, uint8_t length);
 static uint8_t LoRa_ReadBuffer(uint8_t offset, uint8_t *data, uint8_t length);
 
@@ -71,15 +76,16 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(LORA_BUSY_PORT, &GPIO_InitStruct);
     
-    /* Configure DIO1 pin (interrupt) */
+    /* Configure DIO1 pin (interrupt) - EXTI line is armed but NVIC stays disabled
+     * until the SX1268 is fully configured and in RX mode. This prevents spurious
+     * IRQs (e.g. from the line toggling during reset/config) from setting the
+     * packet_ready flag before the radio can actually deliver a packet. */
     GPIO_InitStruct.Pin = LORA_DIO1_PIN;
     GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(LORA_DIO1_PORT, &GPIO_InitStruct);
-    
-    /* Enable EXTI1 interrupt for DIO1 (PB1) */
-    HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);  /* Highest priority for packet reception */
-    HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+    HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
+    /* NVIC enabled after successful RX entry at the end of LoRa_Init */
     
     /* Configure TXEN pin (RF switch TX enable) */
     GPIO_InitStruct.Pin = LORA_TXEN_PIN;
@@ -294,6 +300,13 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     /* Verify we entered RX mode */
     HAL_Delay(200);  // Give plenty of time for mode transition
     
+    /* Clear any EXTI pending bit that may have been latched during init before
+     * enabling the NVIC line. Otherwise we'd service a stale edge immediately. */
+    __HAL_GPIO_EXTI_CLEAR_IT(LORA_DIO1_PIN);
+    lora_packet_ready = 0;
+    lora_irq_count = 0;
+    HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+    
     /* BYPASS mode check - just return OK and see if it actually receives */
     /* The mode reporting might be incorrect but the module could still work */
     return LORA_OK;
@@ -343,10 +356,34 @@ uint8_t LoRa_PacketAvailable(void) {
 }
 
 /**
+ * @brief Conditionally clear lora_packet_ready.
+ *
+ * Snapshots the IRQ count taken before the SPI read, and only clears the
+ * packet_ready flag if no new DIO1 interrupt fired during the read. Otherwise
+ * a concurrent IRQ would be lost because the ISR would set the flag to 1 and
+ * we would immediately overwrite it with 0.
+ */
+static void LoRa_ConsumePacketReady(uint32_t pending_at_start)
+{
+    __disable_irq();
+    if (lora_irq_count == pending_at_start) {
+        lora_packet_ready = 0;
+    }
+    /* else: another DIO1 edge fired during the read; leave flag set so the
+     * next main-loop iteration re-enters this function. */
+    __enable_irq();
+}
+
+/**
  * @brief Read received packet
  */
 uint8_t LoRa_ReadPacket(LoRa_Packet_t *packet) {
     if (!lora_initialized || packet == NULL) return LORA_ERROR;
+    
+    /* Snapshot the IRQ sequence BEFORE any SPI work. Any ISR that fires while
+     * we are reading will bump lora_irq_count past this value and block the
+     * flag-clear at the end of this function. */
+    uint32_t pending_at_start = lora_irq_count;
     
     /* Check IRQ status */
     uint16_t irq_status;
@@ -358,13 +395,15 @@ uint8_t LoRa_ReadPacket(LoRa_Packet_t *packet) {
     if (irq_status & SX1268_IRQ_CRC_ERROR) {
         packet->crc_error = true;
         LoRa_ClearIRQ(SX1268_IRQ_ALL);
-        lora_packet_ready = 0;  /* Clear flag on CRC error */
-        /* Don't re-enter RX - infinite RX mode keeps radio in RX */
+        LoRa_ConsumePacketReady(pending_at_start);
+        /* Continuous-RX (timeout=0xFFFFFF) keeps the radio in RX after CRC error */
         return LORA_CRC_ERROR;
     }
     
     /* Check if packet received */
     if (!(irq_status & SX1268_IRQ_RX_DONE)) {
+        /* No packet yet: clear flag if ISR hasn't raced us, to avoid spinning */
+        LoRa_ConsumePacketReady(pending_at_start);
         return LORA_NO_DATA;
     }
     
@@ -394,20 +433,16 @@ uint8_t LoRa_ReadPacket(LoRa_Packet_t *packet) {
             
             /* Clear IRQ for this packet */
             LoRa_ClearIRQ(SX1268_IRQ_ALL);
-            
-            /* Clear interrupt flag - packet has been read */
-            lora_packet_ready = 0;
-            
-            /* Don't re-enter RX - infinite RX mode keeps radio receiving automatically */
-            
+            LoRa_ConsumePacketReady(pending_at_start);
             return LORA_OK;
         }
     }
     
-    /* Clear IRQ on error - infinite RX mode keeps radio receiving */
+    /* Error path: radio may have left RX on some error conditions (e.g. header
+     * error). Force RX re-entry as a belt-and-braces recovery. */
     LoRa_ClearIRQ(SX1268_IRQ_ALL);
-    lora_packet_ready = 0;  /* Clear flag on error */
-    
+    (void)LoRa_SetReceiveMode();
+    LoRa_ConsumePacketReady(pending_at_start);
     return LORA_ERROR;
 }
 
@@ -630,72 +665,6 @@ static uint8_t LoRa_ReadCommand(uint8_t cmd, uint8_t *data, uint8_t data_len) {
 }
 
 /**
- * @brief Write to SX1268 register
- */
-static uint8_t LoRa_WriteRegister(uint16_t address, uint8_t *data, uint8_t length) {
-    if (lora_hspi == NULL || data == NULL) return LORA_ERROR;
-    
-    /* Wait for BUSY to go low */
-    if (LoRa_WaitOnBusy(50) != LORA_OK) {
-        return LORA_BUSY;
-    }
-    
-    /* Select chip */
-    LoRa_CS_Low();
-    
-    /* Send command */
-    uint8_t cmd = SX1268_CMD_WRITE_REGISTER;
-    HAL_SPI_Transmit(lora_hspi, &cmd, 1, 10);
-    
-    /* Send address */
-    uint8_t addr_bytes[2] = {(uint8_t)(address >> 8), (uint8_t)(address & 0xFF)};
-    HAL_SPI_Transmit(lora_hspi, addr_bytes, 2, 10);
-    
-    /* Send data */
-    HAL_SPI_Transmit(lora_hspi, data, length, 10);
-    
-    /* Deselect chip */
-    LoRa_CS_High();
-    
-    return LoRa_WaitOnBusy(50);
-}
-
-/**
- * @brief Read from SX1268 register
- */
-static uint8_t LoRa_ReadRegister(uint16_t address, uint8_t *data, uint8_t length) {
-    if (lora_hspi == NULL || data == NULL) return LORA_ERROR;
-    
-    /* Wait for BUSY to go low */
-    if (LoRa_WaitOnBusy(50) != LORA_OK) {
-        return LORA_BUSY;
-    }
-    
-    /* Select chip */
-    LoRa_CS_Low();
-    
-    /* Send command */
-    uint8_t cmd = SX1268_CMD_READ_REGISTER;
-    HAL_SPI_Transmit(lora_hspi, &cmd, 1, 10);
-    
-    /* Send address */
-    uint8_t addr_bytes[2] = {(uint8_t)(address >> 8), (uint8_t)(address & 0xFF)};
-    HAL_SPI_Transmit(lora_hspi, addr_bytes, 2, 10);
-    
-    /* Send NOP for status */
-    uint8_t nop = SX1268_CMD_NOP;
-    HAL_SPI_Transmit(lora_hspi, &nop, 1, 10);
-    
-    /* Read data */
-    HAL_SPI_Receive(lora_hspi, data, length, 10);
-    
-    /* Deselect chip */
-    LoRa_CS_High();
-    
-    return LORA_OK;
-}
-
-/**
  * @brief Write to SX1268 buffer
  */
 static uint8_t LoRa_WriteBuffer(uint8_t offset, const uint8_t *data, uint8_t length) {
@@ -750,28 +719,32 @@ static uint8_t LoRa_ReadBuffer(uint8_t offset, uint8_t *data, uint8_t length) {
     uint8_t nop = SX1268_CMD_NOP;
     HAL_SPI_Transmit(lora_hspi, &nop, 1, 10);
     
-    /* Use DMA for all reads (>0 bytes) to minimize blocking */
-    if (length > 0 && lora_hspi->hdmarx != NULL) {
-        /* Use DMA for large packet reads */
+    /* Use DMA only for reads large enough to amortize setup cost. Small reads
+     * (status bytes, tiny packets) are faster via blocking SPI. */
+    if (length >= LORA_DMA_MIN_LEN && lora_hspi->hdmarx != NULL) {
         lora_spi_dma_busy = 1;
         
         if (HAL_SPI_Receive_DMA(lora_hspi, data, length) != HAL_OK) {
+            lora_spi_dma_busy = 0;
             LoRa_CS_High();
             return LORA_ERROR;
         }
         
-        /* Wait for DMA to complete - but interrupts can fire during this wait */
-        uint32_t timeout = HAL_GetTick() + 50;
-        while (lora_spi_dma_busy && (HAL_GetTick() < timeout)) {
-            /* Interrupts can fire here - this is the key improvement */
+        /* Wait-for-DMA using tick-delta to avoid HAL_GetTick() wrap bug. */
+        uint32_t start = HAL_GetTick();
+        while (lora_spi_dma_busy && ((HAL_GetTick() - start) < 50)) {
+            /* Intentionally spinning: EXTI/DIO1 IRQs can still fire here and
+             * queue the next packet via lora_irq_count++. */
         }
         
         if (lora_spi_dma_busy) {
+            /* Abort dangling DMA transfer so HAL state doesn't get stuck */
+            HAL_SPI_Abort(lora_hspi);
+            lora_spi_dma_busy = 0;
             LoRa_CS_High();
             return LORA_ERROR;
         }
-    } else {
-        /* Small read - use blocking (faster for <16 bytes) */
+    } else if (length > 0) {
         HAL_SPI_Receive(lora_hspi, data, length, 10);
     }
     

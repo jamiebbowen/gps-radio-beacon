@@ -13,7 +13,10 @@
 /* Private defines */
 #define SSD1309_I2C                  I2C1
 #define SSD1309_I2C_ADDR             0x3C
-#define SSD1309_I2C_TIMEOUT          5  /* Short timeout to prevent blocking LoRa RX */
+/* Per-chunk I2C timeout. Chunks are 17 bytes; at 100 kHz that's ~1.7 ms and at
+ * 400 kHz ~0.4 ms, so 10 ms is plenty of headroom without noticeably blocking
+ * the LoRa RX path (Display_Update is already throttled in main.c). */
+#define SSD1309_I2C_TIMEOUT          10
 #define SSD1309_COMMAND              0x00
 #define SSD1309_DATA                 0x40
 #define SSD1309_BUFFER_SIZE          (DISPLAY_HW_WIDTH * DISPLAY_HW_HEIGHT / 8) /* 128*64/8 = 1024 bytes */
@@ -21,7 +24,6 @@
 /* Private variables */
 I2C_HandleTypeDef hi2c_display; /* Global for sharing with compass module */
 static uint8_t display_buffer[SSD1309_BUFFER_SIZE];
-static uint8_t rotated_buffer[SSD1309_BUFFER_SIZE]; /* Buffer for 90 degree fixed orientation */
 static const uint8_t ssd1309_init_sequence[] = {
   SSD1309_DISPLAYOFF,
   SSD1309_SETDISPLAYCLOCKDIV, 0x80,
@@ -46,7 +48,6 @@ static void Display_I2C_Init(void);
 static void Display_SendCommand(uint8_t command);
 static void Display_SendData(uint8_t* data, uint16_t size);
 static void Display_SetPosition(uint8_t x, uint8_t y);
-static void Display_RotateBuffer(uint8_t *source, uint8_t *dest);
 
 /**
  * @brief Initialize display
@@ -103,49 +104,6 @@ void Display_Update(void)
   
   /* Send the rotated buffer */
   Display_SendData(display_buffer, SSD1309_BUFFER_SIZE);
-}
-
-/**
- * @brief Rotate the display buffer for fixed 90 degree orientation
- * @param source Source buffer
- * @param dest Destination buffer
- * @retval None
- */
-static void Display_RotateBuffer(uint8_t *source, uint8_t *dest)
-{
-  /* Clear destination buffer */
-  memset(dest, 0, SSD1309_BUFFER_SIZE);
-  
-  /* This is a bit-by-bit transformation for 90° rotation with correction for mirroring */
-  for (uint16_t x = 0; x < DISPLAY_HW_WIDTH; x++) {
-    for (uint8_t y = 0; y < DISPLAY_HW_HEIGHT; y++) {
-      /* Calculate source byte position and bit position */
-      uint16_t src_byte_pos = x + (y / 8) * DISPLAY_HW_WIDTH;
-      uint8_t src_bit_pos = y % 8;
-      
-      /* Check if this bit is set in the source buffer */
-      uint8_t pixel = (source[src_byte_pos] >> src_bit_pos) & 0x01;
-      
-      /* If pixel is set, calculate destination position with corrected orientation */
-      if (pixel) {
-        /* For 90° rotation and flip both X and Y to correct orientation: (x,y) -> (y, DISPLAY_HW_HEIGHT-1-x) */
-        uint16_t dest_x = y;
-        uint16_t dest_y = DISPLAY_HW_HEIGHT - 1 - x;
-        
-        /* Ensure destination coordinates are within bounds */
-        if (dest_x < DISPLAY_HW_WIDTH && dest_y < DISPLAY_HW_HEIGHT) {
-          uint16_t dest_byte_pos = dest_x + (dest_y / 8) * DISPLAY_HW_WIDTH;
-          uint8_t dest_bit_pos = dest_y % 8;
-          
-          /* Ensure we don't write outside the buffer */
-          if (dest_byte_pos < SSD1309_BUFFER_SIZE) {
-            /* Set the bit in the destination buffer */
-            dest[dest_byte_pos] |= (1 << dest_bit_pos);
-          }
-        }
-      }
-    }
-  }
 }
 
 /**
@@ -511,7 +469,14 @@ static void Display_SendData(uint8_t* data, uint16_t size)
   for (uint16_t i = 0; i < size; i += 16) {
     uint16_t chunk_size = (i + 16 > size) ? (size - i) : 16;
     memcpy(&buffer[1], &data[i], chunk_size);
-    HAL_I2C_Master_Transmit(&hi2c_display, SSD1309_I2C_ADDR << 1, buffer, chunk_size + 1, SSD1309_I2C_TIMEOUT);
+    if (HAL_I2C_Master_Transmit(&hi2c_display, SSD1309_I2C_ADDR << 1,
+                                buffer, chunk_size + 1,
+                                SSD1309_I2C_TIMEOUT) != HAL_OK) {
+      /* Bail out early: if the bus is stuck/stretching, retrying the remaining
+       * chunks just wastes time that the LoRa RX path needs. The next
+       * Display_Update will retry the whole frame. */
+      return;
+    }
   }
 }
 

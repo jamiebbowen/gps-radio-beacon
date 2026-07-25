@@ -17,9 +17,11 @@
 
 /* Private variables */
 static SPI_HandleTypeDef hspi_lora;
+/* DMA handles are attached to hspi_lora so lora.c can issue HAL_SPI_Receive_DMA
+ * for large buffer reads. TX DMA is reserved but currently unused; kept so that
+ * future TX paths don't need to re-plumb __HAL_LINKDMA. */
 static DMA_HandleTypeDef hdma_spi2_tx;
 static DMA_HandleTypeDef hdma_spi2_rx;
-static volatile uint8_t spi_dma_busy = 0;
 static uint32_t rf_bytes_received = 0;
 static uint32_t rf_lora_packets_received = 0;  // Total LoRa packets received
 static uint32_t rf_irq_checks = 0;  // How many times we've checked IRQ status
@@ -139,17 +141,31 @@ uint8_t RF_Receiver_DataAvailable(void)
       last_rssi = last_packet.rssi;
       last_snr = last_packet.snr;
       
-      /* Update last bytes for diagnostics */
-      for (int i = 0; i < 4 && i < last_packet.length; i++) {
-        rf_last_bytes[i] = last_packet.data[last_packet.length - 4 + i];
+      /* Update last-bytes diagnostics with the trailing bytes of the packet.
+       * Guard against packets shorter than 4 bytes: indexing
+       * data[length - 4 + i] with length < 4 read out of bounds. */
+      {
+        uint16_t tail = (last_packet.length >= 4) ? 4 : last_packet.length;
+        uint16_t start = last_packet.length - tail;
+        for (uint16_t i = 0; i < tail; i++) {
+          rf_last_bytes[i] = last_packet.data[start + i];
+        }
       }
       
       /* Parse packet based on format */
 #if USE_BINARY_PACKETS
-      /* Binary packet format */
+      /* Binary packet format - dispatch by type + length */
       if (last_packet.length == 13 && last_packet.data[0] == PACKET_TYPE_GPS) {
-        /* Parse binary packet */
+        /* Raw GPS fix */
         if (RF_Parser_ParseBinaryPacket(last_packet.data, last_packet.length) == RF_PARSER_OK) {
+          rf_packet_ready = 1;
+          rf_header_matches++;
+          last_packet_time = HAL_GetTick();
+        }
+      } else if (last_packet.length == FUSED_PACKET_SIZE
+              && last_packet.data[0] == PACKET_TYPE_FUSED) {
+        /* EKF-fused position + velocity from TX nav layer */
+        if (RF_Parser_ParseFusedPacket(last_packet.data, last_packet.length) == RF_PARSER_OK) {
           rf_packet_ready = 1;
           rf_header_matches++;
           last_packet_time = HAL_GetTick();
@@ -503,12 +519,7 @@ void DMA1_Stream4_IRQHandler(void)
   HAL_DMA_IRQHandler(&hdma_spi2_tx);
 }
 
-/**
- * @brief SPI TX/RX DMA complete callback
- */
-void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
-{
-  if (hspi->Instance == SPI2) {
-    spi_dma_busy = 0;
-  }
-}
+/* Note: HAL_SPI_RxCpltCallback (for Receive_DMA completion) is defined in
+ * lora.c and clears lora_spi_dma_busy. HAL_SPI_TxRxCpltCallback and
+ * HAL_SPI_TxCpltCallback are not used because TX and full-duplex DMA paths
+ * are not exercised. Add them here dispatching on hspi->Instance if needed. */

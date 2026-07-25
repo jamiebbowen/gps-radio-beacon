@@ -7,59 +7,68 @@
 #include "include/uart.h"
 #include "include/launch_detect.h"
 #include "include/beacon.h"
+#include "include/nav.h"
 
 /**
  * Beacon State Machine Documentation
  * =================================
  * 
- * The beacon operates in four distinct states optimized for rocketry applications:
+ * The beacon operates in four distinct states optimized for rocketry
+ * applications. All durations/intervals below are set in include/config.h
+ * (values differ between TESTING_MODE and production builds).
  * 
  * 1. PRE_LAUNCH (Initial State):
  *    - Purpose: Conserve power while on the launch pad
- *    - Behavior: Transmit GPS data every 30 seconds
+ *    - Behavior: Transmit GPS data every PRE_LAUNCH_INTERVAL_SEC seconds
  *    - Data Format: Full GPS packet (lat, lon, alt, satellites)
- *    - Transition: Moves to LAUNCH when launch detection switch is triggered
+ *    - Transition: Moves to LAUNCH when IMU launch detection confirms launch
  * 
  * 2. LAUNCH (Critical Phase):
  *    - Purpose: Maximum transmission rate during flight for recovery
  *    - Behavior: Continuous transmission (as fast as possible)
  *    - Data Format: Fast GPS packet (lat, lon, alt only) for speed
- *    - Duration: 3 minutes (180s) after launch detection
- *    - Transition: Moves to POST_LAUNCH after 3 minutes
+ *    - Duration: POST_LAUNCH_DURATION_SEC after launch detection
+ *    - Transition: Moves to POST_LAUNCH afterwards
  * 
  * 3. POST_LAUNCH (Recovery Mode):
  *    - Purpose: High-frequency recovery transmissions
  *    - Behavior: Continuous transmission for maximum recovery chances
  *    - Data Format: Full GPS packet (lat, lon, alt, satellites)
- *    - Duration: 10 minutes (600s), then transitions to BATTERY_SAVE
- *    - Entry: From LAUNCH after 3 minutes
+ *    - Duration: POST_LAUNCH_RECOVERY_DURATION_SEC, then BATTERY_SAVE
  * 
  * 4. BATTERY_SAVE (Extended Recovery):
  *    - Purpose: Conserve battery for extended recovery operations
- *    - Behavior: Transmit full GPS packet every 30 seconds
+ *    - Behavior: Transmit full GPS packet every BATTERY_SAVE_INTERVAL_SEC
  *    - Data Format: Full GPS packet (lat, lon, alt, satellites)
  *    - Duration: Indefinite (until power exhaustion)
- *    - Entry: From POST_LAUNCH after 10 minutes
  * 
  * Additional Features:
- * - Launch detection can trigger from ANY state, resetting to LAUNCH
- * - Callsign transmission: Configurable callsign every 5 minutes (FCC compliance)
- * - Launch detection: 200ms debounce on PA1 switch to ground
- * - Watchdog protection: Regular resets prevent system lockup
+ * - Launch detection (one-shot edge from launch_detect_is_launched(), which
+ *   this state machine exclusively owns) can trigger from ANY state
+ * - Callsign transmission every CALLSIGN_TRANSMIT_INTERVAL_SEC (FCC compliance)
+ * - Launch detection: BNO085 IMU sustained-acceleration detection
  * - GPS configuration: Optimized NMEA sentences for minimal data
  */
 typedef enum {
-    BEACON_STATE_PRE_LAUNCH,      // Pre-launch: 30s intervals, full packets
-    BEACON_STATE_LAUNCH,          // Launch: continuous fast packets for 3min
-    BEACON_STATE_POST_LAUNCH,     // Post-launch: continuous full packets for 10min
-    BEACON_STATE_BATTERY_SAVE     // Extended recovery: 30s intervals, full packets
+    BEACON_STATE_PRE_LAUNCH,      // Pre-launch: interval TX, full packets
+    BEACON_STATE_LAUNCH,          // Launch: continuous fast packets
+    BEACON_STATE_POST_LAUNCH,     // Post-launch: continuous full packets
+    BEACON_STATE_BATTERY_SAVE     // Extended recovery: interval TX, full packets
 } beacon_state_t;
 
 // Beacon state machine variables
+#if BENCH_TEST_FORCE_LAUNCH
+// Bench test: boot straight into continuous-TX LAUNCH mode. See config.h.
+volatile beacon_state_t beacon_state = BEACON_STATE_LAUNCH;
+volatile uint8_t transmit_beacon_flag = 1;
+volatile uint8_t transmit_callsign_flag = 1;
+volatile uint8_t transmit_fast_flag = 1;
+#else
 volatile beacon_state_t beacon_state = BEACON_STATE_PRE_LAUNCH;
 volatile uint8_t transmit_beacon_flag = 1;
 volatile uint8_t transmit_callsign_flag = 1;
 volatile uint8_t transmit_fast_flag = 0;
+#endif
 volatile uint32_t system_time_seconds = 0;
 volatile uint32_t last_transmission_time = 0;
 volatile uint32_t time_since_last_callsign_tx = 0;
@@ -149,7 +158,12 @@ void setup() {
     
     // Initialize launch detection system
     launch_detect_init();
-    
+
+    // Initialize GPS+IMU fusion layer.  Runs regardless of
+    // IMU_FUSION_ENABLED so residuals can be logged for tuning; the master
+    // switch only gates whether fused packets are transmitted.
+    nav_init();
+
     delay(1000);  // Let everything stabilize
 
     beacon_transmit_callsign(transmit_beacon_flag);
@@ -171,9 +185,13 @@ void loop() {
     }
     last_millis = current_millis;
     
-    // Update launch detection system
+    // Update launch detection system (also drains IMU samples)
     launch_detect_update(system_time_seconds, ms_counter);
-    
+
+    // Run the EKF predict step against whatever IMU data just arrived.
+    // Safe to call every loop iteration; dt is computed internally.
+    nav_predict();
+
     // Poll GPS for data every loop iteration
     gps_poll_rx();
     
@@ -245,4 +263,19 @@ void loop() {
         beacon_transmit_callsign(transmit_beacon_flag);
         time_since_last_callsign_tx = system_time_seconds;
     }
+
+#if IMU_FUSION_ENABLED
+    /* Fused-packet cadence: FUSED_TX_INTERVAL_MS in LAUNCH/POST_LAUNCH for
+     * smooth interpolated telemetry, once per GPS packet otherwise.  Kept
+     * separate from the GPS-packet TX path so both streams coexist. */
+    static uint32_t last_fused_tx_ms = 0;
+    uint32_t now_ms = millis();
+    bool active_phase = (beacon_state == BEACON_STATE_LAUNCH)
+                     || (beacon_state == BEACON_STATE_POST_LAUNCH);
+    uint32_t fused_interval_ms = active_phase ? FUSED_TX_INTERVAL_MS : 1000u;
+    if (nav_is_valid() && (now_ms - last_fused_tx_ms >= fused_interval_ms)) {
+        beacon_transmit_fused_data(system_time_seconds, transmit_fast_flag);
+        last_fused_tx_ms = now_ms;
+    }
+#endif
 }

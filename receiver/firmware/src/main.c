@@ -113,9 +113,6 @@ uint8_t has_last_good_remote_gps = 0; /* Flag for last known good remote GPS */
 uint8_t rf_initialized = 0;
 uint32_t last_rf_packet_time = 0;
 uint32_t rf_packet_count = 0;
-uint32_t first_rf_packet_time = 0;  /* Time when first packet was received */
-uint32_t rf_missed_packet_count = 0;  /* Real-time count of missed packets */
-uint32_t rf_next_expected_deadline = 0;  /* When we expect the next packet (in ms) */
 uint32_t last_good_gps_time = 0;  /* Time when we last had good GPS data */
 
 /* Navigation data */
@@ -303,12 +300,8 @@ int main(void)
     Display_Update();
     HAL_Delay(3000);
 
-    if (sd_card_ok) {
-      char log_filename[32];
-      if (SD_Card_CreateLogFile(log_filename, sizeof(log_filename)) == SD_CARD_OK) {
-        SD_Card_LogEvent("System startup - GPS Radio Beacon Receiver initialized");
-      }
-    }
+    /* Log file is created lazily on the first RF packet (see
+     * SD_Card_LogNavigation in sd_card.c) so no-RF boots leave no artifact. */
 
     /* Load last known beacon location so navigation works immediately on boot */
     float saved_lat = 0.0f, saved_lon = 0.0f, saved_alt = 0.0f;
@@ -390,9 +383,6 @@ int main(void)
       HAL_Delay(3000);
     }
     
-    /* Set a flag to indicate compass error but continue execution */
-    uint8_t compass_error = 1;
-    
     /* Blink LED 3 times to indicate error but continue */
     for (int i = 0; i < 3; i++) {
       HAL_GPIO_WritePin(LED_GPIO_PORT, LED_PIN, GPIO_PIN_SET);
@@ -449,12 +439,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    /* Variables for data display */
-    char buffer[32];
-    uint8_t raw_bytes[6];
-    uint8_t status_reg;
-    uint8_t active_addr;
-    
     /* Clear display */
     Display_Clear();
     
@@ -517,19 +501,24 @@ int main(void)
       /* This allows navigation to continue while showing the current GPS status */
     }
     
-    /* Save compass calibration once when BNO055 becomes fully calibrated */
+    /* Persist compass calibration as soon as it is "good enough" (mag_cal >= 2),
+     * and re-save whenever calibration quality improves. Only latch on a
+     * successful save so transient SD errors are retried. */
     if (sd_card_ok) {
-      static uint8_t compass_cal_saved = 0;
-      if (!compass_cal_saved) {
-        uint8_t sys_cal, gyro_cal, accel_cal, mag_cal;
-        if (Compass_GetCalibrationStatus(&sys_cal, &gyro_cal, &accel_cal, &mag_cal) == COMPASS_OK
-            && mag_cal == 3) {
-          uint8_t cal_data[BNO055_CAL_DATA_LEN];
-          if (Compass_GetCalibrationData(cal_data, sizeof(cal_data)) == COMPASS_OK) {
-            SD_Card_SaveCompassCal(cal_data, sizeof(cal_data));
-          }
-          compass_cal_saved = 1; /* Don't retry even if save failed */
+      static uint8_t best_mag_cal_saved = 0; /* 0 = nothing persisted yet */
+      static uint32_t last_cal_save_ms = 0;
+
+      uint8_t sys_cal, gyro_cal, accel_cal, mag_cal;
+      if (Compass_GetCalibrationStatus(&sys_cal, &gyro_cal, &accel_cal, &mag_cal) == COMPASS_OK
+          && mag_cal >= 2
+          && mag_cal > best_mag_cal_saved
+          && (HAL_GetTick() - last_cal_save_ms) > 2000) {
+        uint8_t cal_data[BNO055_CAL_DATA_LEN];
+        if (Compass_GetCalibrationData(cal_data, sizeof(cal_data)) == COMPASS_OK
+            && SD_Card_SaveCompassCal(cal_data, sizeof(cal_data)) == SD_CARD_OK) {
+          best_mag_cal_saved = mag_cal;
         }
+        last_cal_save_ms = HAL_GetTick();
       }
     }
 
@@ -578,38 +567,13 @@ int main(void)
                                    (has_last_good_local_gps ? &last_good_local_gps : NULL);
               SD_Card_LogNavigation(&rf_gps_data, base_ptr,
                                     distance_to_tx, direction_to_tx,
-                                    compass_heading, pkt_rssi);
+                                    compass_heading, pkt_rssi, pkt_snr);
             }
           } else {
             /* Invalid coordinates despite receiving a packet */
             has_valid_remote_gps = 0;
           }
-          uint32_t current_packet_time = HAL_GetTick();
-          
-          /* Calculate how many packets we missed in the interval since last packet */
-          if (rf_packet_count > 0 && last_rf_packet_time > 0) {
-            uint32_t time_since_last = current_packet_time - last_rf_packet_time;
-            
-            /* Calculate expected packets in this interval (with 2.5s tolerance) */
-            /* If interval >= 7.5s (5s + 2.5s tolerance), we missed at least 1 packet */
-            if (time_since_last >= 7500) {
-              /* Number of 5-second periods that have passed */
-              uint32_t intervals = (time_since_last + 2500) / 5000;  /* Round to nearest */
-              
-              /* We got 1 packet, so missed = intervals - 1 */
-              uint32_t missed_in_gap = intervals - 1;
-              rf_missed_packet_count += missed_in_gap;
-            }
-          }
-          
-          /* Recalibrate: reset timer from this packet */
-          last_rf_packet_time = current_packet_time;
-          
-          /* Track first packet time for reference */
-          if (rf_packet_count == 0) {
-            first_rf_packet_time = last_rf_packet_time;
-          }
-          
+          last_rf_packet_time = HAL_GetTick();
           rf_packet_count++;
           
           /* Brief LED pulse to indicate packet received - non-blocking */
@@ -767,9 +731,9 @@ int main(void)
       break;
       
     case DISPLAY_MODE_NAVIGATION:
-      DisplayMode_Navigation(has_valid_local_gps, has_valid_remote_gps, 
+      DisplayMode_Navigation(has_valid_local_gps, has_valid_remote_gps,
                                 &local_gps_data, &remote_gps_data, compass_heading,
-                                last_rf_packet_time, rf_packet_count, rf_missed_packet_count);
+                                last_rf_packet_time, rf_packet_count);
       break;
       
     case DISPLAY_MODE_SD_CARD:
