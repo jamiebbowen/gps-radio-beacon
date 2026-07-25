@@ -18,12 +18,8 @@
 #define BNO055_I2C_ADDR_ALT       0x29  /* Alternative 7-bit I2C address (ADR pin high) */
 #define BNO055_I2C_TIMEOUT        10  /* Timeout for I2C communication - short to prevent blocking LoRa RX */
 
-/* Additional error codes */
-#define COMPASS_ERROR_DEVICE_NOT_FOUND 6
-
 /* BNO055 register addresses */
 #define BNO055_CHIP_ID_ADDR       0x00  /* BNO055 CHIP ID register address */
-#define BNO055_ID                 0xA0  /* BNO055 CHIP ID value */
 
 /* BNO055 registers - Updated with correct addresses from datasheet */
 #define BNO055_PAGE_ID_ADDR       0x07  /* Page ID register */
@@ -158,12 +154,6 @@
  *   is handled purely in software via COMPASS_MOUNTING_OFFSET_DEG. */
 #define COMPASS_AXIS_MAP_CONFIG  0x24u
 #define COMPASS_AXIS_MAP_SIGN    0x00u
-
-/* Complementary filter weight for heading fusion.
- * 0.0 = trust gyro only, 1.0 = trust magnetometer only.
- * 0.98 keeps the magnetometer as primary reference while gyro
- * smooths out short-term jitter between magnetometer reads. */
-#define COMPASS_COMP_FILTER_ALPHA  0.98f
 
 /* Error reporting lives in compass_debug.error_code / .error_message
  * (written by Compass_SetError, read by the public accessors below). */

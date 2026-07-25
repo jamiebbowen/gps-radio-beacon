@@ -31,10 +31,11 @@ void Display_ShowI2CDevices(uint8_t *devices, uint8_t count)
     sprintf(buffer, "Found %d devices:", count);
     Display_DrawTextRowCol(2, 0, buffer);
     
-    /* Display up to 8 device addresses */
+    /* Display up to 8 device addresses, two per row (rows 4-7).
+     * One-per-row put devices 5-8 at rows 8-11, past the 8-row display. */
     for (uint8_t i = 0; i < count && i < 8; i++) {
       sprintf(buffer, "0x%02X", devices[i]);
-      Display_DrawTextRowCol(4 + i, 0, buffer);
+      Display_DrawTextRowCol(4 + (i / 2), (i % 2) * 6, buffer);
     }
   }
   

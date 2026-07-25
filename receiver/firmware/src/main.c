@@ -56,11 +56,8 @@
 #include "sd_diskio.h"
 #include "display_modes/sd_card_mode.h"
 
-/* Constants */
-#define DEG_TO_RAD 0.017453292519943295f  /* PI/180 */
-#define RAD_TO_DEG 57.29577951308232f    /* 180/PI */
-#define EARTH_RADIUS_KM 6371.0f         /* Earth radius in km */
-#define BUTTON_DEBOUNCE_MS 200
+/* Note: distance/bearing math lives in math_utils.c and button debouncing
+ * (50 ms) in button.c - no local constants needed here. */
 
 /* USER CODE END Includes */
 
@@ -73,7 +70,8 @@ typedef enum {
   DISPLAY_MODE_RF = 2,
   DISPLAY_MODE_COMPASS_VISUAL = 3,
   DISPLAY_MODE_COMPASS_HEADING = 4,
-  DISPLAY_MODE_SD_CARD = 5
+  DISPLAY_MODE_SD_CARD = 5,
+  DISPLAY_MODE_COUNT            /* Keep last - used for button cycling */
 } DisplayMode_t;
 /* USER CODE END PTD */
 
@@ -250,7 +248,7 @@ int main(void)
     Display_Clear();
     Display_DrawTextRowCol(3, 2, "RF Init");
     Display_DrawTextRowCol(4, 3, "OK");
-    Display_DrawTextRowCol(5, 1, "1200 baud");
+    Display_DrawTextRowCol(5, 1, "LoRa 433MHz");
     Display_Update();
     HAL_Delay(1000);
   }
@@ -448,7 +446,7 @@ int main(void)
     /* Check for button press to change display mode */
     if (Button_WasPressed()) {
       /* Cycle to next display mode */
-      current_display_mode = (current_display_mode + 1) % 6;
+      current_display_mode = (current_display_mode + 1) % DISPLAY_MODE_COUNT;
       mode_change_time = HAL_GetTick();
       
       /* LED is already on from main loop, no additional flash needed */
@@ -686,7 +684,7 @@ int main(void)
     last_compass_update = current_time;
   }
   
-  /* Check if RF data is stale (no updates for more than 30 seconds) */
+  /* Check if RF data is stale (no updates for more than 180 seconds) */
   if (last_rf_packet_time > 0 && current_time - last_rf_packet_time > 180000) {
     has_valid_remote_gps = 0; /* Mark remote GPS as invalid if too old */
     
@@ -789,7 +787,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.PLL.PLLN = 84;
   /* PLLP=2 gives 42MHz system clock (reduced from 84MHz) */
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  /* PLLQ=3.5 gives 24MHz for USB (adjusted for 42MHz system) */
+  /* PLLQ=4 gives 21MHz on the Q output (USB unused on this board) */
   RCC_OscInitStruct.PLL.PLLQ = 4;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {

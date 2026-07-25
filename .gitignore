@@ -238,3 +238,7 @@ flight.*
 receiver/firmware/lib/STM32CubeF4/
 
 flight_data/*
+
+# ---- Compiled host tools (build from source: make -C tools/lfs_extract) ----
+tools/lfs_extract/lfs_extract
+tools/lfs_extract/lfs_format

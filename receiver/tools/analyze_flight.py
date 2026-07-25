@@ -11,9 +11,10 @@ Usage:
     # Then: open flight.kml in Google Earth Pro -> press the time-slider play
     # button -> Tools > Movie Maker to export MP4.
 
-The NAV log is the CSV file written by the receiver firmware with header:
-    Timestamp,Type,BeaconLat,BeaconLon,BeaconAlt_m,BeaconSats,
-    BaseLat,BaseLon,Distance_km,Bearing_deg,Heading_deg,RSSI_dBm
+The NAV log is the CSV file written by the receiver firmware. Columns are
+resolved from the header row, so both the current 20-column format
+(Timestamp,Type,PktSrc,BeaconLat,...,RSSI_dBm,SNR_dB) and the legacy
+12-column format are supported.
 
 Only NAV rows are used. Pre-launch GPS-drift is filtered out by treating
 the first sample as ground level and looking for >10 m AGL to detect launch.
@@ -24,6 +25,7 @@ True instantaneous peaks are higher than what GPS sampling can resolve.
 """
 
 import argparse
+import csv
 import datetime as dt
 import math
 import sys
@@ -34,9 +36,9 @@ EARTH_RADIUS_M = 6_371_000.0
 LAUNCH_DETECT_AGL_M = 10.0   # altitude above ground to register launch
 SOUND_SPEED_MPS = 343.0      # for Mach number (nominal, sea-level 20 C)
 
-# LoRa SX1276 sensitivity floor (dBm) for common spreading factors @ 125 kHz BW.
+# LoRa SX1268 sensitivity floor (dBm) for common spreading factors @ 125 kHz BW.
 # Override with --sensitivity if your radio config differs.
-DEFAULT_SENSITIVITY_DBM = -123.0  # SF7, 125 kHz (matches current receiver config)
+DEFAULT_SENSITIVITY_DBM = -124.0  # SF9, 125 kHz (matches current receiver config)
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -49,26 +51,32 @@ def haversine_m(lat1, lon1, lat2, lon2):
 
 
 def load_nav_rows(path):
-    """Parse the log file, returning a list of NAV row dicts sorted by time."""
+    """Parse the log file, returning a list of NAV row dicts sorted by time.
+
+    Columns are resolved by header name so the parser works with both the
+    current 20-column format (with PktSrc/velocity/SNR columns) and the
+    legacy 12-column format. The old positional parser broke silently when
+    the PktSrc column was inserted at index 2: float("GPS") raised and every
+    row was skipped.
+    """
     rows = []
-    with open(path) as f:
-        for line in f:
-            parts = line.strip().split(",")
-            if len(parts) < 12 or parts[1] != "NAV":
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f):
+            if r.get("Type") != "NAV":
                 continue
             try:
                 rows.append({
-                    "t":        float(parts[0]),
-                    "lat":      float(parts[2]),
-                    "lon":      float(parts[3]),
-                    "alt":      float(parts[4]),
-                    "sats":     int(parts[5]),
-                    "base_lat": float(parts[6]),
-                    "base_lon": float(parts[7]),
-                    "dist_km":  float(parts[8]),
-                    "rssi":     int(parts[11]),
+                    "t":        float(r["Timestamp"]),
+                    "lat":      float(r["BeaconLat"]),
+                    "lon":      float(r["BeaconLon"]),
+                    "alt":      float(r["BeaconAlt_m"]),
+                    "sats":     int(r["BeaconSats"]),
+                    "base_lat": float(r["BaseLat"]),
+                    "base_lon": float(r["BaseLon"]),
+                    "dist_km":  float(r["Distance_km"]),
+                    "rssi":     int(r["RSSI_dBm"]),
                 })
-            except ValueError:
+            except (KeyError, TypeError, ValueError):
                 continue
     rows.sort(key=lambda r: r["t"])
     return rows
@@ -599,7 +607,7 @@ def analyze(log_path, sensitivity_dbm=DEFAULT_SENSITIVITY_DBM,
     print()
     print("--- PREDICTED RANGE  (FSPL extrapolation, line-of-sight) ---")
     print(f"  Assumed sensitivity:  {sensitivity_dbm:.0f} dBm  "
-          f"(LoRa SF7 / 125 kHz default; override with --sensitivity)")
+          f"(LoRa SF9 / 125 kHz default; override with --sensitivity)")
     if anchor and max_range_m is not None:
         print(f"  Anchor sample:        RSSI {anchor['rssi']} dBm at "
               f"slant range {anchor['slant_m']:.0f} m  "
@@ -651,7 +659,7 @@ def main():
     ap.add_argument("log", help="Path to NAV log file (Lxxxxxxx.TXT)")
     ap.add_argument("--sensitivity", type=float, default=DEFAULT_SENSITIVITY_DBM,
                     help=f"Receiver sensitivity floor in dBm for range prediction "
-                         f"(default {DEFAULT_SENSITIVITY_DBM} = LoRa SF7 @ 125 kHz)")
+                         f"(default {DEFAULT_SENSITIVITY_DBM} = LoRa SF9 @ 125 kHz)")
     ap.add_argument("--kml", metavar="PATH",
                     help="Write a Google-Earth KML of the flight to PATH "
                          "(includes time-animated rocket track for Movie Maker)")
