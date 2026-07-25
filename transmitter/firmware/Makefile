@@ -11,11 +11,11 @@ ARDUINO_CLI = arduino-cli
 # Build directory
 BUILD_DIR = build
 
-# Sketch name (Arduino expects .ino file)
-SKETCH = gps_radio_beacon.ino
-
-# Source files to include
-SRC_FILES = main.c gps.c radio.c uart.c launch_detect.c beacon.c
+# The sketch is firmware.ino (arduino-cli compiles every .cpp/.c in this
+# directory alongside it). Historical note: a generated gps_radio_beacon.ino
+# wrapper containing '#include "main.cpp"' used to live here - it resolved
+# to the Arduino CORE's main.cpp via the include path and only linked by
+# accident. Do not reintroduce it.
 
 # Default target
 all: compile
@@ -32,13 +32,9 @@ install-deps: check-tools
 	$(ARDUINO_CLI) core install adafruit:samd
 	@echo "✓ Dependencies installed"
 
-# Create Arduino sketch structure if needed
+# Create build directory
 prepare:
 	@mkdir -p $(BUILD_DIR)
-	@if [ ! -f $(SKETCH) ]; then \
-		echo "// Auto-generated Arduino sketch wrapper" > $(SKETCH); \
-		echo "#include \"main.cpp\"" >> $(SKETCH); \
-	fi
 
 # Compile the sketch
 compile: check-tools prepare

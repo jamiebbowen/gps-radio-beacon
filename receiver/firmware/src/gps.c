@@ -132,9 +132,11 @@ uint8_t GPS_Update(GPS_Data *gps_data)
       /* Display raw captured bytes as hex in a pattern */
       static uint8_t raw_display_offset = 0;
       
-      /* Cycle through different parts of the buffer */
+      /* Cycle through different parts of the buffer. The hex dump below
+       * reads raw_capture_buffer[offset .. offset+7], so the offset must
+       * stay <= RAW_CAPTURE_SIZE - 8 (modulus of SIZE-7 gives max SIZE-8). */
       if (debug_counter == 0) {
-        raw_display_offset = (raw_display_offset + 6) % (RAW_CAPTURE_SIZE - 6);
+        raw_display_offset = (raw_display_offset + 6) % (RAW_CAPTURE_SIZE - 7);
       }
       
       snprintf(gps_data->debug_lat, GPS_DEBUG_BUFFER_SIZE, "%02X%02X%02X%02X", 

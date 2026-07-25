@@ -595,7 +595,7 @@ int main(void)
       if (current_check_time - last_rf_check_time > 1000) {
         last_rf_check_time = current_check_time;
         
-        /* If it's been more than 30 seconds since last packet, reset valid flag */
+        /* If it's been more than 180 seconds since last packet, reset valid flag */
         if (last_rf_packet_time > 0 && current_check_time - last_rf_packet_time > 180000) {
           has_valid_remote_gps = 0;
         }
