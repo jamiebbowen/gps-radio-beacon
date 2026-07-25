@@ -19,6 +19,11 @@ jobs:
       - name: Run transmitter unit tests
         run: make -C transmitter/tests test
 
+      # Fails if the firmware NAV log format and the host analysis tools
+      # drift apart (parses the checked-in flight_data logs).
+      - name: Log-format regression smoke test
+        run: make tools-test
+
       - name: Coverage summary
         run: |
           make -C receiver/tests coverage | grep -E "File|Lines" || true

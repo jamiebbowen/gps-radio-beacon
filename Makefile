@@ -25,7 +25,7 @@ TOOLS_DIR        := tools/lfs_extract
 
 OUT ?= ./flight_data
 
-.PHONY: all receiver transmitter tools test extract format-card clean help
+.PHONY: all receiver transmitter tools test tools-test extract format-card clean help
 
 all: receiver tools
 
@@ -41,9 +41,28 @@ transmitter:
 tools:
 	$(MAKE) -C $(TOOLS_DIR)
 
-test:
+test: tools-test
 	$(MAKE) -C receiver/tests test
 	$(MAKE) -C transmitter/tests test
+
+# Log-format regression smoke test: the checked-in flight logs use the
+# firmware's CURRENT NAV CSV format, so this fails fast if sd_card.c's
+# log columns and the host tools ever drift apart again (an earlier format
+# change silently broke analyze_flight.py - every row was skipped).
+tools-test:
+	@echo "--- tools-test: log-format compatibility ---"
+	@out=$$(python3 receiver/tools/analyze_flight.py flight_data/L0001.TXT) || \
+		{ echo "FAIL: analyze_flight.py exited non-zero"; exit 1; }; \
+	echo "$$out" | grep -q "Launch detected" || \
+		{ echo "FAIL: analyze_flight.py parsed no NAV rows from L0001.TXT"; exit 1; }
+	@out=$$(python3 receiver/tools/analyze_flight.py flight_data/L0009.TXT) || \
+		{ echo "FAIL: analyze_flight.py exited non-zero on L0009"; exit 1; }; \
+	echo "$$out" | grep -q "18 packets" || \
+		{ echo "FAIL: analyze_flight.py did not parse all 18 rows of L0009.TXT"; exit 1; }
+	@python3 receiver/tools/calibrate_rf.py flight_data/L0001.TXT 2>&1 | \
+		grep -q "loaded 33 NAV rows" || \
+		{ echo "FAIL: calibrate_rf.py parsed wrong row count from L0001.TXT"; exit 1; }
+	@echo "tools-test: OK (analyze_flight + calibrate_rf parse current log format)"
 
 # ---------------------------------------------------------------------------
 # SD card I/O helpers
