@@ -25,7 +25,7 @@ TOOLS_DIR        := tools/lfs_extract
 
 OUT ?= ./flight_data
 
-.PHONY: all receiver transmitter tools test tools-test extract format-card clean help
+.PHONY: all receiver transmitter tools test tools-test tools-test-logs extract format-card clean help
 
 all: receiver tools
 
@@ -45,11 +45,24 @@ test: tools-test
 	$(MAKE) -C receiver/tests test
 	$(MAKE) -C transmitter/tests test
 
-# Log-format regression smoke test: the checked-in flight logs use the
-# firmware's CURRENT NAV CSV format, so this fails fast if sd_card.c's
-# log columns and the host tools ever drift apart again (an earlier format
-# change silently broke analyze_flight.py - every row was skipped).
+# Unit tests for the host-side analysis tools run on synthetic logs and
+# work on any clone. The log-format regression smoke test below them
+# needs real flight logs (flight_data/ is gitignored — populate it with
+# `make extract DEV=/dev/sdX` after a flight); it fails fast if
+# sd_card.c's log columns and the host tools ever drift apart again (an
+# earlier format change silently broke analyze_flight.py - every row was
+# skipped), so it runs whenever flight_data has logs, and skips
+# otherwise.
 tools-test:
+	@echo "--- tools-test: unit tests ---"
+	python3 -m unittest discover -s receiver/tools/tests
+	@if ls flight_data/L*.TXT >/dev/null 2>&1; then \
+		$(MAKE) -s tools-test-logs; \
+	else \
+		echo "--- tools-test: flight_data/ has no logs, skipping log-format smoke test ---"; \
+	fi
+
+tools-test-logs:
 	@echo "--- tools-test: log-format compatibility ---"
 	@out=$$(python3 receiver/tools/analyze_flight.py flight_data/L0001.TXT) || \
 		{ echo "FAIL: analyze_flight.py exited non-zero"; exit 1; }; \

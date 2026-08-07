@@ -354,8 +354,53 @@ TEST(test_reset_clears_state) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Init / checksum-error accessors                                     */
+/* ------------------------------------------------------------------ */
+
+TEST(test_init_resets_diagnostics_and_marks_packet) {
+    /* Dirty the state first so Init has something to clear. */
+    RF_Parser_ParseAsciiPacket(NULL);
+    RF_Parser_ParseAsciiPacket(NULL);
+
+    CHECK(RF_Parser_Init() == RF_PARSER_OK);
+
+    uint32_t attempts = 99, successes = 99, failures = 99;
+    RF_Parser_GetDiagnostics(&attempts, &successes, &failures);
+    CHECK(attempts == 0);
+    CHECK(successes == 0);
+    CHECK(failures == 0);
+
+    /* Init seeds the diagnostic placeholder string. */
+    char buf[64];
+    uint16_t len = RF_Parser_GetLastValidPacket(buf, sizeof(buf));
+    CHECK(len == strlen("PARSER_INITIALIZED"));
+    CHECK(strcmp(buf, "PARSER_INITIALIZED") == 0);
+
+    /* Detailed failure counters must also be cleared. */
+    uint32_t nulls = 99, insufficient = 99;
+    RF_Parser_GetDetailedFailures(&nulls, &insufficient, NULL, NULL, NULL);
+    CHECK(nulls == 0);
+    CHECK(insufficient == 0);
+
+    /* A fresh parse after Init must work (state really was cleared). */
+    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,1234.5")
+          == RF_PARSER_OK);
+}
+
+TEST(test_checksum_errors_always_zero_with_lora) {
+    /* LoRa has link-layer CRC, so this deprecated counter never moves.
+     * NULL must be tolerated (API-compat shim). */
+    uint16_t errors = 1234;
+    RF_Parser_GetChecksumErrors(&errors);
+    CHECK(errors == 0);
+    RF_Parser_GetChecksumErrors(NULL); /* must not crash */
+}
+
+/* ------------------------------------------------------------------ */
 
 int main(void) {
+    run_test_init_resets_diagnostics_and_marks_packet();
+    run_test_checksum_errors_always_zero_with_lora();
     run_test_ascii_null_and_empty_rejected();
     run_test_ascii_fast_packet();
     run_test_ascii_full_packet();
