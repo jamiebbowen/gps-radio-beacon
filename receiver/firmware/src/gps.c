@@ -19,65 +19,33 @@
 #define NMEA_END_CHAR2              '\n'
 
 
-/* Private variables */
+/* Private variables.  Everything written by the UART RX interrupt
+ * callback and read from the main loop must be volatile, otherwise an
+ * optimizing compiler may cache the value in a register and the main
+ * loop would never see the ISR's updates. */
 static UART_HandleTypeDef huart_gps;
 static uint8_t gps_rx_data;
-
-/* Sentence plumbing: the ISR assembles into gps_isr_buffer and, on
- * completion, publishes into a small FIFO that GPS_Update pops and parses.
- *
- * Why not a single ready-flag slot? The main loop periodically stalls
- * ~20-80 ms writing the SSD1306 frame over I2C at 4 Hz - comparable to the
- * inter-sentence gap in a 9600-baud burst - and a single slot then kept
- * only the LAST sentence of a colliding pair, silently dropping the other
- * (GGA or RMC, the only two the parser accepts). Freshly-locked fixes
- * becoming intermittently invisible presented as "slow GPS acquisition".
- * A depth-2 FIFO loses nothing through a lone stall and keeps the last two
- * sentences through longer ones.
- *
- * Why still not parse in the ISR? GPS_ParseNMEA does strtok_r, float math
- * and debug snprintf - far too heavy for interrupt context. */
-/* Ring slots = usable depth + 1: full is (head+1)%Q == tail, so one slot is
- * sacrificed to keep "full" unambiguous against "empty". Depth 2 matches
- * the display-stall analysis above (two sentences can complete inside one
- * I2C frame write; longer stalls keep the two newest). */
-#define GPS_PENDING_Q 3
-static uint8_t gps_isr_buffer[GPS_BUFFER_SIZE];
-static volatile uint16_t gps_isr_index = 0;
-static uint8_t gps_pending[GPS_PENDING_Q][GPS_BUFFER_SIZE];
-static volatile uint8_t gps_pend_head = 0;   /* next slot the ISR publishes to */
-static volatile uint8_t gps_pend_tail = 0;   /* next slot GPS_Update parses  */
-static uint32_t gps_sentences_dropped = 0;   /* completions with all slots busy */
-
-static uint8_t gps_last_fix = 0;   /* Fix state from the last parsed sentence */
-
-/* Fix-staleness gate: if the module dies (antenna unplugged, UART wedge,
- * brown-out) sentences stop entirely, and nothing ever expired the latch
- * above - GPS_IsFixed() kept returning 1 forever while main.c re-copied
- * frozen coordinates into local_gps_data every loop iteration, presenting
- * a ghost "L:Fix" until the next power cycle. */
-static uint32_t gps_last_sentence_ms = 0;
-#define GPS_FIX_STALE_MS 5000u   /* 5x the 1 Hz sentence period */
-
-static uint16_t uart_error_count = 0;   /* HAL error-path hits (ORE/FE/NE) */
+static uint8_t gps_nmea_buffer[GPS_BUFFER_SIZE];
+static uint16_t gps_nmea_index = 0;
+static uint8_t gps_nmea_ready = 0;
 static uint8_t last_bytes[4] = {0}; /* Debug: Store last 4 raw bytes */
 static uint32_t uart_byte_counter = 0; /* Counter for UART activity */
 static uint32_t nmea_sentence_counter = 0; /* Counter for complete NMEA sentences */
 
 /* Debug variables for NMEA sentence detection */
-static uint8_t first_10_bytes[10] = {0}; /* Store first 10 bytes received */
-static uint8_t first_10_bytes_filled = 0; /* Flag to indicate if first_10_bytes is filled */
-static uint8_t last_10_bytes[10] = {0};   /* Circular buffer for last 10 bytes */
-static uint8_t last_10_index = 0;         /* Current index in circular buffer */
-static uint8_t dollar_sign_count = 0;     /* Count of '$' characters received */
-static uint8_t cr_count = 0;              /* Count of '\r' characters received */
-static uint8_t lf_count = 0;              /* Count of '\n' characters received */
+static volatile uint8_t first_10_bytes[10] = {0}; /* Store first 10 bytes received */
+static volatile uint8_t first_10_bytes_filled = 0; /* Flag to indicate if first_10_bytes is filled */
+static volatile uint8_t last_10_bytes[10] = {0};   /* Circular buffer for last 10 bytes */
+static volatile uint8_t last_10_index = 0;         /* Current index in circular buffer */
+static volatile uint8_t dollar_sign_count = 0;     /* Count of '$' characters received */
+static volatile uint8_t cr_count = 0;              /* Count of '\r' characters received */
+static volatile uint8_t lf_count = 0;              /* Count of '\n' characters received */
 
 /* Raw byte capture for direct analysis */
 #define RAW_CAPTURE_SIZE 64
-static uint8_t raw_capture_buffer[RAW_CAPTURE_SIZE] = {0};
-static uint8_t raw_capture_index = 0;
-static uint8_t raw_capture_filled = 0;
+static volatile uint8_t raw_capture_buffer[RAW_CAPTURE_SIZE] = {0};
+static volatile uint8_t raw_capture_index = 0;
+static volatile uint8_t raw_capture_filled = 0;
 
 /* Private function prototypes */
 static uint8_t GPS_UART_Init(void);
@@ -240,16 +208,9 @@ uint8_t GPS_Update(GPS_Data *gps_data)
     /* Copy debug bytes to show we're in GPS_Update */
     last_bytes[0] = 0xB1;
     last_bytes[1] = 0xB2;
-
-    /* Use the parser module to parse NMEA sentences. The parser writes
-     * gps_data->fix from the actual sentence (GGA quality / RMC A|V) even
-     * when it returns PARSER_ERROR for a no-fix sentence, so this latch
-     * always reflects the latest on-air fix state. */
-    uint8_t parse_result = GPS_ParseNMEA((char*)gps_pending[gps_pend_tail], gps_data);
-    gps_pend_tail = (uint8_t)((gps_pend_tail + 1) % GPS_PENDING_Q);
-    gps_last_sentence_ms = HAL_GetTick();   /* stream is alive */
-    gps_last_fix = gps_data->fix ? 1 : 0;
-    if (parse_result == GPS_PARSER_OK) {
+    
+    /* Use the parser module to parse NMEA sentences */
+    if (GPS_ParseNMEA((char*)gps_nmea_buffer, gps_data) == GPS_PARSER_OK) {
       /* Don't override fix status - it's set by the parser based on actual GPS data */
       status = GPS_OK;
 
