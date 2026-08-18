@@ -81,6 +81,7 @@ extract: tools
 	fi
 	mkdir -p $(OUT)
 	sudo $(TOOLS_DIR)/lfs_extract $(DEV) $(OUT)
+	sudo chown -R $$(id -u):$$(id -g) $(OUT)
 	@echo "Extraction saved to: $(OUT)"
 
 format-card: tools
