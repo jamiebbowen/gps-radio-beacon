@@ -293,9 +293,14 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     
     HAL_Delay(50);  // Extra delay for mode transition
     
-    /* Retry with infinite timeout if first attempt doesn't work */
+    /* Now switch to continuous RX (infinite timeout). This MUST succeed:
+     * the first SetRx above was RX-single, which leaves RX after one packet
+     * and nothing on the success path re-enters RX, so an unchecked failure
+     * here would make the receiver go deaf after the first packet. */
     uint8_t rx_params2[3] = {0xFF, 0xFF, 0xFF};  // Infinite RX mode
-    LoRa_SendCommand(SX1268_CMD_SET_RX, rx_params2, 3);  // Don't check return, just try
+    if (LoRa_SendCommand(SX1268_CMD_SET_RX, rx_params2, 3) != LORA_OK) {
+        return 0xBA;  // Continuous-RX entry failed
+    }
     
     /* Verify we entered RX mode */
     HAL_Delay(200);  // Give plenty of time for mode transition
@@ -426,7 +431,10 @@ uint8_t LoRa_ReadPacket(LoRa_Packet_t *packet) {
             uint8_t pkt_status[3];
             if (LoRa_ReadCommand(SX1268_CMD_GET_PACKETSTATUS, pkt_status, 3) == LORA_OK) {
                 packet->rssi = -(pkt_status[0] / 2);
-                packet->snr = (int8_t)(pkt_status[1] / 4);
+                /* SnrPkt is a SIGNED two's-complement byte in 0.25 dB steps.
+                 * Casting after the unsigned divide turned e.g. -2 dB (0xF8)
+                 * into +62 dB, corrupting weak-signal readings. */
+                packet->snr = (int8_t)((int8_t)pkt_status[1] / 4);
                 last_rssi = packet->rssi;
                 last_snr = packet->snr;
             }
@@ -544,34 +552,70 @@ uint8_t LoRa_GetDeviceStatus(uint8_t *status) {
 
 /**
  * @brief Transmit packet (for testing)
+ * @note Currently unused by the receiver firmware. Kept safe for future use:
+ *       switches the RF switch to TX, waits for TX_DONE, then restores the
+ *       RX packet params and re-enters continuous RX regardless of outcome.
  */
 uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
     if (!lora_initialized || data == NULL || length == 0) return LORA_ERROR;
     
+    uint8_t result = LORA_ERROR;
+    
     /* Set standby mode */
     LoRa_SetStandbyMode();
     
+    /* Point the RF switch at the PA before transmitting. Transmitting +22 dBm
+     * with RXEN still asserted would route the PA into the LNA path. */
+    HAL_GPIO_WritePin(LORA_RXEN_PORT, LORA_RXEN_PIN, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LORA_TXEN_PORT, LORA_TXEN_PIN, GPIO_PIN_SET);
+    
     /* Write data to buffer */
-    if (LoRa_WriteBuffer(0, data, length) != LORA_OK) {
-        return LORA_ERROR;
+    if (LoRa_WriteBuffer(0, data, length) == LORA_OK) {
+        /* Set packet length */
+        uint8_t pkt_params[6] = {
+            (uint8_t)(LORA_PREAMBLE_LENGTH >> 8),
+            (uint8_t)(LORA_PREAMBLE_LENGTH & 0xFF),
+            0x00,    // Variable length
+            length,  // Payload length
+            0x01,    // CRC on
+            0x00     // IQ standard
+        };
+        if (LoRa_SendCommand(SX1268_CMD_SET_PACKETPARAMS, pkt_params, 6) == LORA_OK) {
+            /* Start TX (timeout field 0x000000 = no timeout) */
+            uint8_t tx_params[3] = {0x00, 0x00, 0x00};
+            if (LoRa_SendCommand(SX1268_CMD_SET_TX, tx_params, 3) == LORA_OK) {
+                /* Wait for TX_DONE; a full SF9/125kHz packet is well under 1s */
+                uint32_t start = HAL_GetTick();
+                result = LORA_TIMEOUT;
+                while ((HAL_GetTick() - start) < 1000) {
+                    uint16_t irq = 0;
+                    if (LoRa_GetIRQStatus(&irq) == LORA_OK &&
+                        (irq & SX1268_IRQ_TX_DONE)) {
+                        result = LORA_OK;
+                        break;
+                    }
+                }
+                LoRa_ClearIRQ(SX1268_IRQ_ALL);
+            }
+        }
     }
     
-    /* Set packet length */
-    uint8_t pkt_params[6] = {
+    /* Restore RX packet params (max variable-length payload), RF switch
+     * direction, and continuous RX mode regardless of TX outcome. */
+    uint8_t rx_pkt_params[6] = {
         (uint8_t)(LORA_PREAMBLE_LENGTH >> 8),
         (uint8_t)(LORA_PREAMBLE_LENGTH & 0xFF),
-        0x00,    // Variable length
-        length,  // Payload length
-        0x01,    // CRC on
-        0x00     // IQ standard
+        0x00,   // Variable length
+        0xFF,   // Payload length (max)
+        0x01,   // CRC on
+        0x00    // IQ standard
     };
-    if (LoRa_SendCommand(SX1268_CMD_SET_PACKETPARAMS, pkt_params, 6) != LORA_OK) {
-        return LORA_ERROR;
-    }
+    LoRa_SendCommand(SX1268_CMD_SET_PACKETPARAMS, rx_pkt_params, 6);
+    HAL_GPIO_WritePin(LORA_TXEN_PORT, LORA_TXEN_PIN, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LORA_RXEN_PORT, LORA_RXEN_PIN, GPIO_PIN_SET);
+    LoRa_SetReceiveMode();
     
-    /* Start TX with timeout (no timeout: 0x000000) */
-    uint8_t tx_params[3] = {0x00, 0x00, 0x00};
-    return LoRa_SendCommand(SX1268_CMD_SET_TX, tx_params, 3);
+    return result;
 }
 
 /* ===== Private Functions ===== */

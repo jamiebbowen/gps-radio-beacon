@@ -116,20 +116,30 @@ uint8_t RF_Receiver_DataAvailable(void)
     }
   }
   
-  /* Get IRQ status for diagnostics */
-  uint16_t irq_status = 0;
-  LoRa_GetIRQStatus(&irq_status);
-  if (irq_status != 0) {
-    rf_last_irq_status = irq_status;  // Store non-zero status
-  }
-  
-  /* Check BUSY pin state */
-  rf_last_busy_state = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0) == GPIO_PIN_SET) ? 1 : 0;
-  
-  /* Get device status to verify mode */
-  uint8_t device_status = 0;
-  if (LoRa_GetDeviceStatus(&device_status) == LORA_OK) {
-    rf_last_device_mode = (device_status >> 5) & 0x07;  // Extract mode from bits [7:5]
+  /* Diagnostics-only reads, throttled to 4 Hz: each is a blocking SPI
+   * transaction with a BUSY wait, and this function runs up to 3x per
+   * main-loop iteration. Doing them every call added dead time to the loop
+   * (hurting button/display latency) for data only shown on debug screens. */
+  static uint32_t last_diag_ms = 0;
+  uint32_t now_ms = HAL_GetTick();
+  if (now_ms - last_diag_ms >= 250) {
+    last_diag_ms = now_ms;
+    
+    /* Get IRQ status for diagnostics */
+    uint16_t irq_status = 0;
+    LoRa_GetIRQStatus(&irq_status);
+    if (irq_status != 0) {
+      rf_last_irq_status = irq_status;  // Store non-zero status
+    }
+    
+    /* Check BUSY pin state */
+    rf_last_busy_state = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0) == GPIO_PIN_SET) ? 1 : 0;
+    
+    /* Get device status to verify mode */
+    uint8_t device_status = 0;
+    if (LoRa_GetDeviceStatus(&device_status) == LORA_OK) {
+      rf_last_device_mode = (device_status >> 5) & 0x07;  // Extract mode from bits [7:5]
+    }
   }
   
   /* Check for new LoRa packets */

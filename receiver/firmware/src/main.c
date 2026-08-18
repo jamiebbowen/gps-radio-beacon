@@ -102,6 +102,9 @@ Compass_Data compass_data;
 /* Display mode control */
 static DisplayMode_t current_display_mode = DISPLAY_MODE_NAVIGATION;
 static uint32_t mode_change_time = 0;
+/* Set on a button press so the 500 ms display throttle is bypassed for one
+ * frame; otherwise a mode change could take up to 500 ms to become visible. */
+static uint8_t force_display_update = 0;
 
 /* Flags and counters */
 uint8_t has_valid_local_gps = 0;
@@ -439,9 +442,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    /* Clear display */
-    Display_Clear();
-    
     /* LED = RF activity indicator: pulse for 100 ms after each packet
      * (PC13 is active LOW). Previously the LED was held solid on, which
      * conveyed nothing and contradicted the "pulse" comments. */
@@ -460,6 +460,7 @@ int main(void)
       /* Cycle to next display mode */
       current_display_mode = (current_display_mode + 1) % DISPLAY_MODE_COUNT;
       mode_change_time = HAL_GetTick();
+      force_display_update = 1;  /* Show the new mode this iteration */
     }
 
     /* Auto-return to navigation screen after 120s of no button presses */
@@ -741,11 +742,14 @@ int main(void)
     last_calibration_time = current_time;
   }
   
-  /* Throttle display updates to prevent I2C blocking during packet reception */
+  /* Throttle display updates to prevent I2C blocking during packet reception.
+   * A button-triggered mode change bypasses the throttle so the new screen
+   * appears immediately. */
   static uint32_t last_display_update = 0;
-  if (current_time - last_display_update >= 500) { /* Update display every 500ms to reduce I2C blocking */
+  if (force_display_update || current_time - last_display_update >= 500) {
     Display_Update();
     last_display_update = current_time;
+    force_display_update = 0;
   }
   
   /* No delay - check packets continuously with zero blocking */

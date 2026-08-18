@@ -12,7 +12,6 @@
  * the compiler must not cache them in registers across accesses. */
 static volatile uint32_t last_button_time = 0;
 static volatile Button_State_t last_stable_state = BUTTON_RELEASED;
-static Button_State_t current_raw_state = BUTTON_RELEASED;
 static volatile uint8_t button_press_detected = 0;
 
 /* Debounce time in milliseconds */
@@ -43,7 +42,6 @@ void Button_Init(void)
     /* Initialize state variables */
     last_button_time = HAL_GetTick();
     last_stable_state = BUTTON_RELEASED;
-    current_raw_state = BUTTON_RELEASED;
     button_press_detected = 0;
 }
 
@@ -96,7 +94,7 @@ uint8_t Button_WasPressed(void)
 }
 
 /**
- * @brief Update button state with debouncing (handles release detection and interrupt re-enable)
+ * @brief Update button state with debouncing (handles release detection)
  * @retval None
  * @note Called from main loop. Button presses are interrupt-driven.
  */
@@ -110,10 +108,10 @@ void Button_Update(void)
         if ((current_time - last_button_time) >= BUTTON_DEBOUNCE_MS) {
             last_stable_state = BUTTON_RELEASED;
             
-            /* Re-enable interrupt now that debounce period has passed */
-            /* Clear any pending interrupts first */
-            __HAL_GPIO_EXTI_CLEAR_IT(BUTTON_PIN);
-            HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+            /* Re-arm the debounce window at the release edge so any release
+             * bounce (falling edges) within the next BUTTON_DEBOUNCE_MS is
+             * rejected by the time gate in the ISR. */
+            last_button_time = current_time;
         }
     }
 }
@@ -131,14 +129,17 @@ void EXTI15_10_IRQHandler(void)
         
         uint32_t current_time = HAL_GetTick();
         
-        /* Simple debouncing - only register press if enough time has elapsed */
-        if ((current_time - last_button_time) >= BUTTON_DEBOUNCE_MS) {
+        /* Debounce without disabling the IRQ line (disabling it until the
+         * main loop confirmed release could drop presses that arrived during
+         * long loop iterations, e.g. SD writes or OLED I2C pushes):
+         *  - time gate rejects press-bounce edges within BUTTON_DEBOUNCE_MS
+         *  - state guard rejects release-bounce edges, which arrive while the
+         *    debounced state is still BUTTON_PRESSED */
+        if ((current_time - last_button_time) >= BUTTON_DEBOUNCE_MS &&
+            last_stable_state == BUTTON_RELEASED) {
             last_button_time = current_time;
             last_stable_state = BUTTON_PRESSED;
             button_press_detected = 1;
-            
-            /* Disable interrupt temporarily to ignore bounce */
-            HAL_NVIC_DisableIRQ(EXTI15_10_IRQn);
         }
     }
 }
