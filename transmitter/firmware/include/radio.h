@@ -18,4 +18,7 @@ int transmit_string(const char* str);
 // Radio status
 bool radio_is_transmitting(void);
 
+// Active rocket channel after backup-jumper resolution (see mpu_config.h)
+uint8_t radio_get_channel(void);
+
 #endif // RADIO_H

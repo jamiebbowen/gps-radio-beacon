@@ -43,7 +43,19 @@
 // page. Channel plan (must match receiver inc/lora.h):
 //   CH0 = 433.0 MHz, CH1 = 433.5 MHz, CH2 = 434.0 MHz, CH3 = 434.5 MHz
 #define LORA_CHANNEL        0           // 0-3, unique per rocket
-#define LORA_FREQUENCY      (433.0 + (LORA_CHANNEL) * 0.5)  // MHz, derived from channel
+#define LORA_CHANNEL_FREQ(ch) (433.0f + 0.5f * (float)(ch))  // Channel -> MHz
+
+// Backup channel jumper: short CHANNEL_JUMPER_PIN to GND before power-on to
+// transmit on LORA_CHANNEL_BACKUP instead of LORA_CHANNEL. Lets you move a
+// rocket off a channel that is occupied at the pad without reflashing.
+// The pin is read once in radio_init() with the internal pull-up enabled:
+// open = primary channel, jumpered to GND = backup channel.
+#define CHANNEL_JUMPER_PIN  2                           // Free GPIO on ItsyBitsy M4
+#define LORA_CHANNEL_BACKUP ((LORA_CHANNEL + 2) % 4)    // Override per rocket if desired
+
+// Primary-channel frequency, for reference only: radio.cpp resolves the
+// active channel (primary vs backup jumper) at boot.
+#define LORA_FREQUENCY      LORA_CHANNEL_FREQ(LORA_CHANNEL)
 #define LORA_BANDWIDTH      125.0       // 125 kHz bandwidth
 #define LORA_SPREADING      9           // Spreading Factor 9 (good range/speed balance)
 #define LORA_CODING_RATE    7           // Coding Rate 4/7

@@ -91,13 +91,10 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
     /* NVIC enabled after successful RX entry at the end of LoRa_Init */
     
-    /* Configure TXEN pin (RF switch TX enable) */
-    GPIO_InitStruct.Pin = LORA_TXEN_PIN;
-    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(LORA_TXEN_PORT, &GPIO_InitStruct);
-    HAL_GPIO_WritePin(LORA_TXEN_PORT, LORA_TXEN_PIN, GPIO_PIN_RESET);  // TXEN=0 initially
+    /* NOTE: the module's TXEN pin is NOT connected on this board, and its
+     * former GPIO assignment (PB10) is the mode button. Do not configure or
+     * drive it here - the SX1268 controls the RF switch via DIO2 (automatic
+     * mode) plus the wired RXEN line below. */
     
     /* Configure RXEN pin (RF switch RX enable) */
     GPIO_InitStruct.Pin = LORA_RXEN_PIN;
@@ -277,8 +274,7 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     LoRa_SendCommand(SX1268_CMD_CLR_IRQSTATUS, clear_irq, 2);
     HAL_Delay(10);
     
-    /* Manual RF switch control - set to RX mode */
-    HAL_GPIO_WritePin(LORA_TXEN_PORT, LORA_TXEN_PIN, GPIO_PIN_RESET);  // TXEN=0
+    /* Manual RF switch control - set to RX mode (TXEN not connected) */
     HAL_GPIO_WritePin(LORA_RXEN_PORT, LORA_RXEN_PIN, GPIO_PIN_SET);    // RXEN=1 (RX mode!)
     HAL_Delay(20);  // Let RF switch settle
     
@@ -601,10 +597,10 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
     /* Set standby mode */
     LoRa_SetStandbyMode();
     
-    /* Point the RF switch at the PA before transmitting. Transmitting +22 dBm
-     * with RXEN still asserted would route the PA into the LNA path. */
+    /* Drop RXEN before transmitting so the PA output is not routed into the
+     * LNA path. TXEN is not connected; the SX1268 drives the switch via DIO2
+     * (automatic mode configured in init). */
     HAL_GPIO_WritePin(LORA_RXEN_PORT, LORA_RXEN_PIN, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(LORA_TXEN_PORT, LORA_TXEN_PIN, GPIO_PIN_SET);
     
     /* Write data to buffer */
     if (LoRa_WriteBuffer(0, data, length) == LORA_OK) {
@@ -648,7 +644,6 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
         0x00    // IQ standard
     };
     LoRa_SendCommand(SX1268_CMD_SET_PACKETPARAMS, rx_pkt_params, 6);
-    HAL_GPIO_WritePin(LORA_TXEN_PORT, LORA_TXEN_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(LORA_RXEN_PORT, LORA_RXEN_PIN, GPIO_PIN_SET);
     LoRa_SetReceiveMode();
     

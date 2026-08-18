@@ -48,8 +48,9 @@ extern "C" {
 #define LORA_BUSY_PORT          GPIOB
 #define LORA_DIO1_PIN           GPIO_PIN_1      // PB1 - DIO1 (interrupt) (moved from PA6 to avoid SD card conflict)
 #define LORA_DIO1_PORT          GPIOB
-#define LORA_TXEN_PIN           GPIO_PIN_10     // PB10 - TXEN (RF switch TX enable) - NOT CONNECTED
-#define LORA_TXEN_PORT          GPIOB
+/* TXEN: module pin NOT connected. Its former GPIO assignment (PB10) is the
+ * mode button (see button.h) - never configure or drive PB10 from this
+ * driver. RF switch = DIO2 automatic mode + wired RXEN. */
 #define LORA_RXEN_PIN           GPIO_PIN_9      // PA9 - RXEN (RF switch RX enable)
 #define LORA_RXEN_PORT          GPIOA
 

@@ -10,6 +10,7 @@ SX1268 radio = new Module(LORA_CS, LORA_DIO1, LORA_NRST, LORA_BUSY);
 // Track radio state
 static bool radio_initialized = false;
 static bool radio_enabled = false;
+static uint8_t active_channel = LORA_CHANNEL;
 static uint8_t init_retry_count = 0;
 static const uint8_t MAX_INIT_RETRIES = 3;
 
@@ -44,13 +45,26 @@ void radio_init(void) {
     Serial.print("[Radio] BUSY pin state: ");
     Serial.println(digitalRead(LORA_BUSY) ? "HIGH" : "LOW");
     
+    // Resolve the active channel from the backup-channel jumper:
+    // open (pull-up reads HIGH) = primary, shorted to GND = backup.
+    pinMode(CHANNEL_JUMPER_PIN, INPUT_PULLUP);
+    delay(1);  // Let the pull-up settle before sampling
+    bool backup_jumper = (digitalRead(CHANNEL_JUMPER_PIN) == LOW);
+    active_channel = backup_jumper ? LORA_CHANNEL_BACKUP : LORA_CHANNEL;
+    float freq_mhz = LORA_CHANNEL_FREQ(active_channel);
+    Serial.print("[Radio] Channel: CH");
+    Serial.print(active_channel);
+    Serial.print(backup_jumper ? " (backup jumper) " : " (primary) ");
+    Serial.print(freq_mhz);
+    Serial.println(" MHz");
+    
     // Initialize radio module
     Serial.println("[Radio] Calling radio.begin()...");
     Serial.print("[Radio] TCXO voltage: ");
     Serial.print(LORA_TCXO_VOLTAGE);
     Serial.println("V");
     int state = radio.begin(
-        LORA_FREQUENCY,     // Frequency in MHz
+        freq_mhz,           // Frequency in MHz (jumper-resolved channel)
         LORA_BANDWIDTH,     // Bandwidth in kHz
         LORA_SPREADING,     // Spreading factor
         LORA_CODING_RATE,   // Coding rate
@@ -83,6 +97,13 @@ void radio_init(void) {
         Serial.println("[Radio] Check wiring, power, and SPI connections!");
         radio_initialized = false;
     }
+}
+
+/**
+ * Get the active rocket channel (after backup-jumper resolution)
+ */
+uint8_t radio_get_channel(void) {
+    return active_channel;
 }
 
 /**
