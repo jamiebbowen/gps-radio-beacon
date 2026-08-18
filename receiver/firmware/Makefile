@@ -105,7 +105,7 @@ OBJECTS += $(BUILD_DIR)/startup_stm32f401xc.o
 vpath %.c $(sort $(dir $(C_SOURCES)))
 
 # Default target
-all: $(BUILD_DIR) $(BIN_DIR) $(ELF) $(BIN) $(HEX)
+all: $(BUILD_DIR) $(BIN_DIR) $(ELF) $(BIN) $(HEX) flash
 
 # Create build directory
 $(BUILD_DIR):

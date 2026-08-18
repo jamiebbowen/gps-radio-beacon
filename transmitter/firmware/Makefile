@@ -18,7 +18,7 @@ BUILD_DIR = build
 # accident. Do not reintroduce it.
 
 # Default target
-all: compile
+all: compile flash
 
 # Ensure arduino-cli is installed
 check-tools:
