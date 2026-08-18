@@ -49,6 +49,14 @@ reporting, SD self-test, LED packet pulse, LoRa link.
       NOTE: only do the wire-pull test on the bench, never before a flight.
 - [ ] Compass heading mode: `Cal S_ G_ A_ M_` — wave figure-8 until `M3`,
       then power-cycle and confirm `Cal: Restored` on boot.
+
+      IMPORTANT: after a restore the BNO055 still reports `S0 G0 A0 M0` until
+      fresh motion re-verifies — that is normal, NOT a lost calibration. The
+      cal row shows a trailing `R` when verified offsets are loaded, and the
+      heading is already trustworthy. `Cal: RESTORE FAILED` on the boot screen
+      means the read-back verification failed and the compass really is
+      uncalibrated. The saved calibration lives on the SD card - booting
+      without the card always starts uncalibrated.
 - [ ] Heading sanity: point the antenna north, heading reads ~0°
       (declination is compiled for the Denver area — see
       `COMPASS_MAGNETIC_DECLINATION_DEG` in `compass.c` before travelling).

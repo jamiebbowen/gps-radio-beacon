@@ -64,18 +64,7 @@ tools-test:
 
 tools-test-logs:
 	@echo "--- tools-test: log-format compatibility ---"
-	@out=$$(python3 receiver/tools/analyze_flight.py flight_data/L0001.TXT) || \
-		{ echo "FAIL: analyze_flight.py exited non-zero"; exit 1; }; \
-	echo "$$out" | grep -q "Launch detected" || \
-		{ echo "FAIL: analyze_flight.py parsed no NAV rows from L0001.TXT"; exit 1; }
-	@out=$$(python3 receiver/tools/analyze_flight.py flight_data/L0009.TXT) || \
-		{ echo "FAIL: analyze_flight.py exited non-zero on L0009"; exit 1; }; \
-	echo "$$out" | grep -q "18 packets" || \
-		{ echo "FAIL: analyze_flight.py did not parse all 18 rows of L0009.TXT"; exit 1; }
-	@python3 receiver/tools/calibrate_rf.py flight_data/L0001.TXT 2>&1 | \
-		grep -q "loaded 33 NAV rows" || \
-		{ echo "FAIL: calibrate_rf.py parsed wrong row count from L0001.TXT"; exit 1; }
-	@echo "tools-test: OK (analyze_flight + calibrate_rf parse current log format)"
+	@python3 receiver/tools/tests/check_flight_data.py
 
 # ---------------------------------------------------------------------------
 # SD card I/O helpers

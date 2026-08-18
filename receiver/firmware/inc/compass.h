@@ -81,13 +81,13 @@ uint8_t Compass_SetHeadingOffset(float offset_deg);
 #define BNO055_CAL_DATA_LEN  22  /* ACC(6) + MAG(6) + GYR(6) + radii(4) bytes */
 uint8_t Compass_GetCalibrationData(uint8_t *data, uint8_t len);
 uint8_t Compass_SetCalibrationData(const uint8_t *data, uint8_t len);
+uint8_t Compass_WasCalRestored(void);
 
 /* Error reporting functions */
 uint8_t Compass_GetLastErrorCode(void);
 const char* Compass_GetErrorMessage(void);
 
 /* Debug functions */
-const char* Compass_GetErrorMessage(void);
 const char* Compass_GetDebugMessage(void);
 const char* Compass_GetDebugMessageByIndex(uint8_t index);
 uint32_t Compass_GetDebugTimestamp(void);

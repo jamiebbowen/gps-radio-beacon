@@ -376,17 +376,42 @@ uint8_t Compass_SetCalibrationData(const uint8_t *data, uint8_t len)
     BNO055_CAL_DATA_ADDR, I2C_MEMADD_SIZE_8BIT,
     (uint8_t *)data, BNO055_CAL_DATA_LEN, BNO055_I2C_TIMEOUT);
 
+  /* Read the offsets back (still in CONFIG mode) and verify byte-for-byte.
+   * A restore that silently fails at the I2C level is indistinguishable
+   * from "the calibration didn't persist" in the field, so make success
+   * provable before claiming it. */
+  uint8_t verify[BNO055_CAL_DATA_LEN] = {0};
+  HAL_StatusTypeDef vstatus = HAL_ERROR;
+  if (status == HAL_OK) {
+    vstatus = HAL_I2C_Mem_Read(
+      &hi2c_display, compass_debug.active_addr << 1,
+      BNO055_CAL_DATA_ADDR, I2C_MEMADD_SIZE_8BIT,
+      verify, BNO055_CAL_DATA_LEN, BNO055_I2C_TIMEOUT);
+  }
+
   Compass_WriteRegister(BNO055_OPR_MODE_ADDR, BNO055_OPR_MODE_NDOF);
   HAL_Delay(20);
 
-  if (status == HAL_OK) {
+  if (status == HAL_OK && vstatus == HAL_OK &&
+      memcmp(verify, data, BNO055_CAL_DATA_LEN) == 0) {
     /* BNO055 CALIB_STAT will read mag_cal=0 until the fusion re-verifies
      * against fresh magnetic samples, which won't happen while the device
      * sits still. The offsets ARE loaded though, so trust heading anyway. */
     compass_cal_restored = 1;
     return COMPASS_OK;
   }
+  Compass_SetError(COMPASS_ERROR_CALIB, "Cal restore verify failed", 0);
   return COMPASS_ERROR;
+}
+
+/**
+ * @brief Whether saved calibration offsets were successfully restored
+ *        (and verified by read-back) this boot.
+ * @retval 1 if restored, 0 otherwise
+ */
+uint8_t Compass_WasCalRestored(void)
+{
+  return compass_cal_restored;
 }
 
 /**

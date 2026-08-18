@@ -390,10 +390,15 @@ int main(void)
     if (sd_card_ok) {
       uint8_t cal_data[BNO055_CAL_DATA_LEN];
       if (SD_Card_LoadCompassCal(cal_data, sizeof(cal_data)) == SD_CARD_OK) {
-        Compass_SetCalibrationData(cal_data, sizeof(cal_data));
         Display_Clear();
         Display_DrawTextRowCol(1, 1, "BNO055 Initialized");
-        Display_DrawTextRowCol(2, 1, "Cal: Restored");
+        if (Compass_SetCalibrationData(cal_data, sizeof(cal_data)) == COMPASS_OK) {
+          Display_DrawTextRowCol(2, 1, "Cal: Restored");
+        } else {
+          /* Write happened but read-back verification failed - the compass
+           * is running UNCALIBRATED despite a valid file on the SD card. */
+          Display_DrawTextRowCol(2, 1, "Cal: RESTORE FAILED");
+        }
         Display_Update();
       } else {
         Display_Clear();

@@ -155,10 +155,13 @@ void DisplayMode_CompassHeading(Compass_Data *compass_data, float *compass_headi
   sprintf(buffer, "P:%5.1fd R:%5.1fd", compass_data->pitch, compass_data->roll);
   Display_DrawTextRowCol(1, 0, buffer);
 
-  /* Row 2: calibration status */
+  /* Row 2: calibration status. Trailing "R" = offsets were restored from SD
+   * this boot, so the heading is trustworthy even while the BNO055's live
+   * CALIB_STAT still reads 0 (it stays 0 until fresh motion re-verifies). */
   uint8_t sys_cal, gyro_cal, accel_cal, mag_cal;
   Compass_GetCalibrationStatus(&sys_cal, &gyro_cal, &accel_cal, &mag_cal);
-  sprintf(buffer, "Cal S%d G%d A%d M%d", sys_cal, gyro_cal, accel_cal, mag_cal);
+  sprintf(buffer, "Cal S%d G%d A%d M%d%s", sys_cal, gyro_cal, accel_cal, mag_cal,
+          Compass_WasCalRestored() ? " R" : "");
   Display_DrawTextRowCol(2, 0, buffer);
 
   /* Row 3-5: raw sensor values (int16_t counts) */
