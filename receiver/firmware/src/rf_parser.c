@@ -103,6 +103,8 @@ uint8_t RF_Parser_Init(void)
   parse_attempts = 0;
   parse_successes = 0;
   parse_failures = 0;
+  parse_failures_null_packet = 0;
+  parse_failures_insufficient_fields = 0;
   
   /* Initialize last_valid_packet with a test string for diagnostic purposes */
   strcpy(last_valid_packet, "PARSER_INITIALIZED");
@@ -592,4 +594,6 @@ void RF_Parser_Reset(void)
   parse_attempts = 0;
   parse_successes = 0;
   parse_failures = 0;
+  parse_failures_null_packet = 0;
+  parse_failures_insufficient_fields = 0;
 }
