@@ -500,6 +500,41 @@ uint8_t RF_Receiver_IsSignalQualityGood(void)
 }
 
 /**
+ * @brief Switch to a different rocket channel
+ * @param channel Channel index (0..LORA_CHANNEL_COUNT-1)
+ * @retval RF_OK on success, RF_ERROR otherwise
+ */
+uint8_t RF_Receiver_SetChannel(uint8_t channel)
+{
+  if (LoRa_SetChannel(channel) != LORA_OK) {
+    return RF_ERROR;
+  }
+  /* Anything still pending was received from the previous rocket */
+  rf_packet_ready = 0;
+  last_packet_time = 0;
+  return RF_OK;
+}
+
+/**
+ * @brief Get the currently tuned rocket channel
+ */
+uint8_t RF_Receiver_GetChannel(void)
+{
+  return LoRa_GetChannel();
+}
+
+/**
+ * @brief Cycle to the next rocket channel (wraps around)
+ * @retval The channel that is active after the call (unchanged on failure)
+ */
+uint8_t RF_Receiver_NextChannel(void)
+{
+  uint8_t next = (uint8_t)((LoRa_GetChannel() + 1) % LORA_CHANNEL_COUNT);
+  (void)RF_Receiver_SetChannel(next);
+  return LoRa_GetChannel();
+}
+
+/**
  * @brief Get packet loss diagnostics
  * @param irq_count Pointer to store total DIO1 interrupts (packets arriving at radio)
  * @param lora_packets Pointer to store LoRa packets read from radio

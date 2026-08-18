@@ -38,7 +38,12 @@
 #define BEACON_CALLSIGN "KE0MZS"
 
 // LoRa Configuration for E22-400M33S (SX1268)
-#define LORA_FREQUENCY      433.0       // 433 MHz
+// Multi-rocket support: flash each rocket with a unique LORA_CHANNEL (0-3).
+// The receiver selects the matching channel at runtime on its Rocket Select
+// page. Channel plan (must match receiver inc/lora.h):
+//   CH0 = 433.0 MHz, CH1 = 433.5 MHz, CH2 = 434.0 MHz, CH3 = 434.5 MHz
+#define LORA_CHANNEL        0           // 0-3, unique per rocket
+#define LORA_FREQUENCY      (433.0 + (LORA_CHANNEL) * 0.5)  // MHz, derived from channel
 #define LORA_BANDWIDTH      125.0       // 125 kHz bandwidth
 #define LORA_SPREADING      9           // Spreading Factor 9 (good range/speed balance)
 #define LORA_CODING_RATE    7           // Coding Rate 4/7

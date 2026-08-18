@@ -16,8 +16,19 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
+/* Multi-rocket channel plan. Each transmitter is flashed with one channel
+ * (LORA_CHANNEL in transmitter mpu_config.h); the receiver retunes at runtime
+ * via LoRa_SetChannel(). 500 kHz spacing gives clean separation at 125 kHz
+ * bandwidth, and all channels sit in the same SX1268 image-calibration band
+ * (430-440 MHz), so no recalibration is needed when hopping. */
+#define LORA_CHANNEL_COUNT      4
+#define LORA_CHANNEL_BASE_MHZ   433.0f
+#define LORA_CHANNEL_STEP_MHZ   0.5f
+#define LORA_CHANNEL_FREQ_MHZ(ch) \
+    (LORA_CHANNEL_BASE_MHZ + (float)(ch) * LORA_CHANNEL_STEP_MHZ)
+
 /* LoRa Configuration - Match transmitter settings */
-#define LORA_FREQUENCY_MHZ      433.0f      // 433 MHz
+#define LORA_FREQUENCY_MHZ      LORA_CHANNEL_FREQ_MHZ(0)  // Boot channel (CH0)
 #define LORA_BANDWIDTH_KHZ      125.0f      // 125 kHz bandwidth
 #define LORA_SPREADING_FACTOR   9           // SF9 (good range/speed balance)
 #define LORA_CODING_RATE        7           // 4/7
@@ -219,6 +230,19 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length);
  * @retval Number of times DIO1 interrupt has fired
  */
 uint32_t LoRa_GetIRQCount(void);
+
+/**
+ * @brief Retune the radio to a different rocket channel and re-enter RX
+ * @param channel Channel index (0..LORA_CHANNEL_COUNT-1)
+ * @retval LORA_OK on success; on failure the previous channel is restored
+ */
+uint8_t LoRa_SetChannel(uint8_t channel);
+
+/**
+ * @brief Get the currently tuned rocket channel
+ * @retval Channel index (0..LORA_CHANNEL_COUNT-1)
+ */
+uint8_t LoRa_GetChannel(void);
 
 #ifdef __cplusplus
 }

@@ -48,6 +48,8 @@ C_SOURCES = \
 	$(SRC_DIR)/display_modes/i2c_devices.c \
 	$(SRC_DIR)/display_modes/imu_test_mode.c \
 	$(SRC_DIR)/display_modes/sd_card_mode.c \
+	$(SRC_DIR)/display_modes/channel_mode.c \
+	$(SRC_DIR)/display_modes/rf_stats_mode.c \
 	lib/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_spi.c \
 	lib/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c \
 	lib/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_cortex.c \

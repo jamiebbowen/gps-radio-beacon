@@ -51,6 +51,13 @@ void RF_Receiver_GetAsciiBuffer(char *buffer, uint16_t max_len);
 uint16_t RF_Receiver_GetLastPacketASCII(char *buffer, uint16_t max_len);
 uint8_t RF_Receiver_GetParsedData(GPS_Data *gps_data, char *callsign, uint16_t callsign_size, uint8_t *checksum);
 
+/* Multi-rocket channel selection (see channel plan in lora.h).
+ * Switching channels drops any pending packet and resets the last-packet
+ * timestamp, since data on the old channel belongs to a different rocket. */
+uint8_t RF_Receiver_SetChannel(uint8_t channel);
+uint8_t RF_Receiver_GetChannel(void);
+uint8_t RF_Receiver_NextChannel(void);  /* Cycle to next channel; returns the now-active channel */
+
 /* Timing calibration functions */
 void RF_Receiver_SetBaudFudgeFactor(uint16_t fudge_factor);
 uint16_t RF_Receiver_GetBaudFudgeFactor(void);

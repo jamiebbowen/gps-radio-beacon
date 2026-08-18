@@ -7,15 +7,23 @@
 
 #include "button.h"
 
-/* Private variables. All three ISR-shared variables are volatile: they are
- * written from EXTI15_10_IRQHandler and read/written from the main loop, so
- * the compiler must not cache them in registers across accesses. */
+/* Private variables. ISR-shared variables are volatile: they are written
+ * from EXTI15_10_IRQHandler and read/written from the main loop, so the
+ * compiler must not cache them in registers across accesses. */
 static volatile uint32_t last_button_time = 0;
 static volatile Button_State_t last_stable_state = BUTTON_RELEASED;
-static volatile uint8_t button_press_detected = 0;
+static volatile uint8_t press_pending = 0;       /* Press seen, short/long undecided */
+static volatile uint8_t button_press_detected = 0;       /* Short press (set at release) */
+static uint8_t button_long_press_detected = 0;           /* Long press (set while held) */
 
 /* Debounce time in milliseconds */
 #define BUTTON_DEBOUNCE_MS 50  /* Typical button bounce is 5-20ms, 50ms is safe */
+
+/* Hold duration that turns a press into a long press. A press shorter than
+ * this is reported by Button_WasPressed() at release; holding at least this
+ * long fires Button_WasLongPressed() immediately (before release) and
+ * suppresses the short-press event. */
+#define BUTTON_LONG_PRESS_MS 700
 
 /**
  * @brief Initialize button GPIO with interrupt
@@ -42,7 +50,9 @@ void Button_Init(void)
     /* Initialize state variables */
     last_button_time = HAL_GetTick();
     last_stable_state = BUTTON_RELEASED;
+    press_pending = 0;
     button_press_detected = 0;
+    button_long_press_detected = 0;
 }
 
 /**
@@ -80,9 +90,10 @@ uint8_t Button_IsReleased(void)
 }
 
 /**
- * @brief Check if button was pressed (one-shot detection)
- * @retval 1 if a press was detected since last call, 0 otherwise
- * @note This function clears the press detection flag when called
+ * @brief Check if button was short-pressed (one-shot detection)
+ * @retval 1 if a short press was detected since last call, 0 otherwise
+ * @note Fires at release for presses shorter than BUTTON_LONG_PRESS_MS.
+ *       This function clears the press detection flag when called.
  */
 uint8_t Button_WasPressed(void)
 {
@@ -94,7 +105,22 @@ uint8_t Button_WasPressed(void)
 }
 
 /**
- * @brief Update button state with debouncing (handles release detection)
+ * @brief Check if button was long-pressed (one-shot detection)
+ * @retval 1 if a long press was detected since last call, 0 otherwise
+ * @note Fires while the button is still held, once the hold reaches
+ *       BUTTON_LONG_PRESS_MS. The short-press event is then suppressed.
+ */
+uint8_t Button_WasLongPressed(void)
+{
+    if (button_long_press_detected) {
+        button_long_press_detected = 0;  /* Clear flag */
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * @brief Update button state (long-press promotion and release detection)
  * @retval None
  * @note Called from main loop. Button presses are interrupt-driven.
  */
@@ -103,10 +129,24 @@ void Button_Update(void)
     uint32_t current_time = HAL_GetTick();
     Button_State_t raw_state = Button_GetState();
     
-    /* Check for button release after debounce time */
-    if (raw_state == BUTTON_RELEASED && last_stable_state == BUTTON_PRESSED) {
-        if ((current_time - last_button_time) >= BUTTON_DEBOUNCE_MS) {
+    if (last_stable_state == BUTTON_PRESSED) {
+        /* Promote a held press to a long press while still held */
+        if (press_pending &&
+            (current_time - last_button_time) >= BUTTON_LONG_PRESS_MS) {
+            press_pending = 0;
+            button_long_press_detected = 1;
+        }
+        
+        /* Check for button release after debounce time */
+        if (raw_state == BUTTON_RELEASED &&
+            (current_time - last_button_time) >= BUTTON_DEBOUNCE_MS) {
             last_stable_state = BUTTON_RELEASED;
+            
+            /* Released before the long-press threshold: it's a short press */
+            if (press_pending) {
+                press_pending = 0;
+                button_press_detected = 1;
+            }
             
             /* Re-arm the debounce window at the release edge so any release
              * bounce (falling edges) within the next BUTTON_DEBOUNCE_MS is
@@ -139,7 +179,8 @@ void EXTI15_10_IRQHandler(void)
             last_stable_state == BUTTON_RELEASED) {
             last_button_time = current_time;
             last_stable_state = BUTTON_PRESSED;
-            button_press_detected = 1;
+            /* Outcome (short vs long) is decided in Button_Update */
+            press_pending = 1;
         }
     }
 }

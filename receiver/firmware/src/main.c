@@ -71,6 +71,8 @@ typedef enum {
   DISPLAY_MODE_COMPASS_VISUAL = 3,
   DISPLAY_MODE_COMPASS_HEADING = 4,
   DISPLAY_MODE_SD_CARD = 5,
+  DISPLAY_MODE_CHANNEL = 6,     /* Rocket select: long press cycles channel */
+  DISPLAY_MODE_RF_STATS = 7,    /* Full radio statistics */
   DISPLAY_MODE_COUNT            /* Keep last - used for button cycling */
 } DisplayMode_t;
 /* USER CODE END PTD */
@@ -463,6 +465,22 @@ int main(void)
       force_display_update = 1;  /* Show the new mode this iteration */
     }
 
+    /* Long press on the Rocket Select page cycles the radio channel */
+    if (Button_WasLongPressed()) {
+      if (current_display_mode == DISPLAY_MODE_CHANNEL) {
+        uint8_t before = RF_Receiver_GetChannel();
+        uint8_t after = RF_Receiver_NextChannel();
+        if (after != before) {
+          /* Everything received so far belongs to the previous rocket */
+          has_valid_remote_gps = 0;
+          has_last_good_remote_gps = 0;
+          last_rf_packet_time = 0;
+        }
+        mode_change_time = HAL_GetTick();
+        force_display_update = 1;
+      }
+    }
+
     /* Auto-return to navigation screen after 120s of no button presses */
     if (current_display_mode != DISPLAY_MODE_NAVIGATION &&
         HAL_GetTick() - mode_change_time > 120000) {
@@ -727,6 +745,14 @@ int main(void)
       
     case DISPLAY_MODE_SD_CARD:
       DisplayMode_SDCard();
+      break;
+      
+    case DISPLAY_MODE_CHANNEL:
+      DisplayMode_ChannelSelect();
+      break;
+      
+    case DISPLAY_MODE_RF_STATS:
+      DisplayMode_RFStats();
       break;
       
     default:

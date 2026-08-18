@@ -26,7 +26,8 @@ void Button_Init(void);
 Button_State_t Button_GetState(void);
 uint8_t Button_IsPressed(void);
 uint8_t Button_IsReleased(void);
-uint8_t Button_WasPressed(void);  /* Debounced press detection */
-void Button_Update(void);         /* Call this regularly for debouncing */
+uint8_t Button_WasPressed(void);      /* Debounced short-press detection (fires at release) */
+uint8_t Button_WasLongPressed(void);  /* Long-press detection (fires while held, ~700ms) */
+void Button_Update(void);             /* Call this regularly for debouncing */
 
 #endif /* BUTTON_H */

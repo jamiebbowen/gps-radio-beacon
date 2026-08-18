@@ -12,6 +12,9 @@ static uint8_t lora_initialized = 0;
 static int16_t last_rssi = 0;
 static int8_t last_snr = 0;
 
+/* Currently tuned rocket channel (see channel plan in lora.h) */
+static uint8_t lora_current_channel = 0;
+
 /* Interrupt flag - set by DIO1 ISR, cleared by ReadPacket only if no new IRQ fired during read.
  * File-local; external callers use LoRa_PacketAvailable(). */
 static volatile uint8_t lora_packet_ready = 0;
@@ -36,6 +39,7 @@ static uint8_t LoRa_SendCommand(uint8_t cmd, const uint8_t *params, uint8_t para
 static uint8_t LoRa_ReadCommand(uint8_t cmd, uint8_t *data, uint8_t data_len);
 static uint8_t LoRa_WriteBuffer(uint8_t offset, const uint8_t *data, uint8_t length);
 static uint8_t LoRa_ReadBuffer(uint8_t offset, uint8_t *data, uint8_t length);
+static uint8_t LoRa_SetRfFrequencyMHz(float freq_mhz);
 
 /**
  * @brief Initialize LoRa module
@@ -163,18 +167,11 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
         return 0xB4;  // Packet type command failed
     }
     
-    /* Set RF frequency (433 MHz) */
-    uint32_t freq_in_hz = (uint32_t)(LORA_FREQUENCY_MHZ * 1000000.0f);
-    uint32_t freq_reg = (uint32_t)((double)freq_in_hz / (double)32000000.0 * (double)33554432.0);
-    uint8_t freq_params[4] = {
-        (uint8_t)(freq_reg >> 24),
-        (uint8_t)(freq_reg >> 16),
-        (uint8_t)(freq_reg >> 8),
-        (uint8_t)(freq_reg)
-    };
-    if (LoRa_SendCommand(SX1268_CMD_SET_RFFREQUENCY, freq_params, 4) != LORA_OK) {
+    /* Set RF frequency (boot channel, CH0 = 433 MHz) */
+    if (LoRa_SetRfFrequencyMHz(LORA_FREQUENCY_MHZ) != LORA_OK) {
         return 0xB5;  // RF frequency command failed
     }
+    lora_current_channel = 0;
     
     /* Set PA configuration (for +22dBm output) */
     uint8_t pa_params[4] = {
@@ -476,6 +473,46 @@ uint32_t LoRa_GetIRQCount(void) {
 }
 
 /**
+ * @brief Get the currently tuned rocket channel
+ */
+uint8_t LoRa_GetChannel(void) {
+    return lora_current_channel;
+}
+
+/**
+ * @brief Retune the radio to a different rocket channel and re-enter RX
+ * @note All channels are within the same image-calibration band, so a plain
+ *       SetRfFrequency is sufficient (no recalibration needed).
+ */
+uint8_t LoRa_SetChannel(uint8_t channel) {
+    if (!lora_initialized || channel >= LORA_CHANNEL_COUNT) return LORA_ERROR;
+    if (channel == lora_current_channel) return LORA_OK;
+    
+    /* Leave RX before retuning */
+    if (LoRa_SetStandbyMode() != LORA_OK) {
+        return LORA_ERROR;
+    }
+    
+    if (LoRa_SetRfFrequencyMHz(LORA_CHANNEL_FREQ_MHZ(channel)) != LORA_OK) {
+        /* Best-effort recovery: retune to the old channel and resume RX */
+        (void)LoRa_SetRfFrequencyMHz(LORA_CHANNEL_FREQ_MHZ(lora_current_channel));
+        (void)LoRa_SetReceiveMode();
+        return LORA_ERROR;
+    }
+    
+    /* Any pending IRQ/packet belongs to the old channel (old rocket) */
+    LoRa_ClearIRQ(SX1268_IRQ_ALL);
+    lora_packet_ready = 0;
+    
+    if (LoRa_SetReceiveMode() != LORA_OK) {
+        return LORA_ERROR;
+    }
+    
+    lora_current_channel = channel;
+    return LORA_OK;
+}
+
+/**
  * @brief Get status of LoRa module
  */
 uint8_t LoRa_GetStatus(void) {
@@ -619,6 +656,21 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
 }
 
 /* ===== Private Functions ===== */
+
+/**
+ * @brief Program the SX1268 RF frequency (PLL step = 32 MHz / 2^25)
+ */
+static uint8_t LoRa_SetRfFrequencyMHz(float freq_mhz) {
+    uint32_t freq_in_hz = (uint32_t)(freq_mhz * 1000000.0f);
+    uint32_t freq_reg = (uint32_t)((double)freq_in_hz / (double)32000000.0 * (double)33554432.0);
+    uint8_t freq_params[4] = {
+        (uint8_t)(freq_reg >> 24),
+        (uint8_t)(freq_reg >> 16),
+        (uint8_t)(freq_reg >> 8),
+        (uint8_t)(freq_reg)
+    };
+    return LoRa_SendCommand(SX1268_CMD_SET_RFFREQUENCY, freq_params, 4);
+}
 
 /**
  * @brief Set CS pin high (deselect)
