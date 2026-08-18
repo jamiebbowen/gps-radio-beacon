@@ -465,20 +465,33 @@ int main(void)
       force_display_update = 1;  /* Show the new mode this iteration */
     }
 
-    /* Long press on the Rocket Select page cycles the radio channel */
-    if (Button_WasLongPressed()) {
+    /* Channel switching: button 2 on the Rocket Select page, or a long press
+     * of button 1 as a fallback for units without the second button wired.
+     * On any other page, button 2 jumps straight home to Navigation. */
+    uint8_t cycle_channel = 0;
+    if (Button_WasLongPressed() && current_display_mode == DISPLAY_MODE_CHANNEL) {
+      cycle_channel = 1;
+    }
+    if (Button2_WasPressed()) {
       if (current_display_mode == DISPLAY_MODE_CHANNEL) {
-        uint8_t before = RF_Receiver_GetChannel();
-        uint8_t after = RF_Receiver_NextChannel();
-        if (after != before) {
-          /* Everything received so far belongs to the previous rocket */
-          has_valid_remote_gps = 0;
-          has_last_good_remote_gps = 0;
-          last_rf_packet_time = 0;
-        }
+        cycle_channel = 1;
+      } else {
+        current_display_mode = DISPLAY_MODE_NAVIGATION;
         mode_change_time = HAL_GetTick();
         force_display_update = 1;
       }
+    }
+    if (cycle_channel) {
+      uint8_t before = RF_Receiver_GetChannel();
+      uint8_t after = RF_Receiver_NextChannel();
+      if (after != before) {
+        /* Everything received so far belongs to the previous rocket */
+        has_valid_remote_gps = 0;
+        has_last_good_remote_gps = 0;
+        last_rf_packet_time = 0;
+      }
+      mode_change_time = HAL_GetTick();
+      force_display_update = 1;
     }
 
     /* Auto-return to navigation screen after 120s of no button presses */

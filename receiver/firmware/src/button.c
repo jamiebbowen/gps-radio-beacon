@@ -16,6 +16,12 @@ static volatile uint8_t press_pending = 0;       /* Press seen, short/long undec
 static volatile uint8_t button_press_detected = 0;       /* Short press (set at release) */
 static uint8_t button_long_press_detected = 0;           /* Long press (set while held) */
 
+/* Button 2 (PB2, EXTI2). Fires on press (no long-press semantics), so it
+ * only needs the debounce state, not a pending-outcome flag. */
+static volatile uint32_t last_button2_time = 0;
+static volatile Button_State_t button2_stable_state = BUTTON_RELEASED;
+static volatile uint8_t button2_press_detected = 0;
+
 /* Debounce time in milliseconds */
 #define BUTTON_DEBOUNCE_MS 50  /* Typical button bounce is 5-20ms, 50ms is safe */
 
@@ -47,12 +53,26 @@ void Button_Init(void)
     HAL_NVIC_SetPriority(EXTI15_10_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
     
+    /* Configure PB2 (button 2) the same way on its own EXTI line */
+    GPIO_InitStruct.Pin = BUTTON2_PIN;
+    GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(BUTTON2_GPIO_PORT, &GPIO_InitStruct);
+    
+    HAL_NVIC_SetPriority(EXTI2_IRQn, 2, 0);
+    HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+    
     /* Initialize state variables */
     last_button_time = HAL_GetTick();
     last_stable_state = BUTTON_RELEASED;
     press_pending = 0;
     button_press_detected = 0;
     button_long_press_detected = 0;
+    
+    last_button2_time = HAL_GetTick();
+    button2_stable_state = BUTTON_RELEASED;
+    button2_press_detected = 0;
 }
 
 /**
@@ -120,6 +140,21 @@ uint8_t Button_WasLongPressed(void)
 }
 
 /**
+ * @brief Check if button 2 was pressed (one-shot detection)
+ * @retval 1 if a press was detected since last call, 0 otherwise
+ * @note Fires on press (falling edge), so the action feels instant.
+ *       This function clears the press detection flag when called.
+ */
+uint8_t Button2_WasPressed(void)
+{
+    if (button2_press_detected) {
+        button2_press_detected = 0;  /* Clear flag */
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * @brief Update button state (long-press promotion and release detection)
  * @retval None
  * @note Called from main loop. Button presses are interrupt-driven.
@@ -154,6 +189,14 @@ void Button_Update(void)
             last_button_time = current_time;
         }
     }
+    
+    /* Button 2 release detection (same time-gate/state-guard scheme) */
+    if (button2_stable_state == BUTTON_PRESSED &&
+        HAL_GPIO_ReadPin(BUTTON2_GPIO_PORT, BUTTON2_PIN) == GPIO_PIN_SET &&
+        (current_time - last_button2_time) >= BUTTON_DEBOUNCE_MS) {
+        button2_stable_state = BUTTON_RELEASED;
+        last_button2_time = current_time;
+    }
 }
 
 /**
@@ -181,6 +224,29 @@ void EXTI15_10_IRQHandler(void)
             last_stable_state = BUTTON_PRESSED;
             /* Outcome (short vs long) is decided in Button_Update */
             press_pending = 1;
+        }
+    }
+}
+
+/**
+ * @brief GPIO EXTI interrupt handler for button 2 (PB2)
+ * @retval None
+ * @note Same debounce scheme as button 1, but the press event fires here on
+ *       the falling edge - button 2 triggers a one-shot context action, so
+ *       there is no short/long outcome to wait for.
+ */
+void EXTI2_IRQHandler(void)
+{
+    if (__HAL_GPIO_EXTI_GET_IT(BUTTON2_PIN) != RESET) {
+        __HAL_GPIO_EXTI_CLEAR_IT(BUTTON2_PIN);
+        
+        uint32_t current_time = HAL_GetTick();
+        
+        if ((current_time - last_button2_time) >= BUTTON_DEBOUNCE_MS &&
+            button2_stable_state == BUTTON_RELEASED) {
+            last_button2_time = current_time;
+            button2_stable_state = BUTTON_PRESSED;
+            button2_press_detected = 1;
         }
     }
 }

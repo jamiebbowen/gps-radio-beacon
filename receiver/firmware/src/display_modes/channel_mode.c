@@ -58,5 +58,5 @@ void DisplayMode_ChannelSelect(void)
     }
     Display_DrawTextRowCol(6, 0, buffer);
 
-    Display_DrawTextRowCol(7, 0, "Hold btn: next ch");
+    Display_DrawTextRowCol(7, 0, "B2/hold B1: next ch");
 }
