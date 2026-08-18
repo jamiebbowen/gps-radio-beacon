@@ -5,9 +5,12 @@
 #   make transmitter       - build transmitter firmware
 #   make tools             - build host-side lfs_extract + lfs_format
 #   make test              - run host-side unit tests (receiver + transmitter)
-#   make extract DEV=/dev/sdX [OUT=./flight_data]
+#   make extract DEV=/dev/sdX [OUT=./flight_data/<timestamp>]
 #                          - copy every file off a LittleFS-formatted SD card
-#                            into OUT/. Requires root (raw block-device read).
+#                            into OUT/. Defaults to a fresh timestamped
+#                            subdirectory so repeated extractions never
+#                            clobber earlier ones. Requires root (raw
+#                            block-device read).
 #   make format-card DEV=/dev/sdX
 #                          - wipe the SD card and write a fresh LittleFS
 #                            superblock with the firmware's geometry. Asks
@@ -23,7 +26,9 @@ RECEIVER_DIR     := receiver/firmware
 TRANSMITTER_DIR  := transmitter/firmware
 TOOLS_DIR        := tools/lfs_extract
 
-OUT ?= ./flight_data
+# Each extraction lands in its own timestamped subdirectory by default so a
+# new bench session can never overwrite logs from a previous one.
+OUT ?= ./flight_data/$(shell date +%Y-%m-%d_%H%M%S)
 
 .PHONY: all receiver transmitter tools test tools-test tools-test-logs extract format-card clean help
 
@@ -56,7 +61,7 @@ test: tools-test
 tools-test:
 	@echo "--- tools-test: unit tests ---"
 	python3 -m unittest discover -s receiver/tools/tests
-	@if ls flight_data/L*.TXT >/dev/null 2>&1; then \
+	@if find flight_data -name 'L*.TXT' 2>/dev/null | grep -q .; then \
 		$(MAKE) -s tools-test-logs; \
 	else \
 		echo "--- tools-test: flight_data/ has no logs, skipping log-format smoke test ---"; \
@@ -72,9 +77,11 @@ tools-test-logs:
 
 extract: tools
 	@if [ -z "$(DEV)" ]; then \
-		echo "Usage: make extract DEV=/dev/sdX [OUT=./flight_data]"; exit 1; \
+		echo "Usage: make extract DEV=/dev/sdX [OUT=./flight_data/<dir>]"; exit 1; \
 	fi
+	mkdir -p $(OUT)
 	sudo $(TOOLS_DIR)/lfs_extract $(DEV) $(OUT)
+	@echo "Extraction saved to: $(OUT)"
 
 format-card: tools
 	@if [ -z "$(DEV)" ]; then \

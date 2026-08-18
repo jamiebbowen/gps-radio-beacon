@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """check_flight_data.py - Log-format drift detector.
 
-Runs against whatever real logs are in flight_data/ (populated by
-`make extract`): every ",NAV," line in every log must be parseable by
+Runs against whatever real logs are in flight_data/ - searched recursively,
+since `make extract` puts each extraction in its own timestamped
+subdirectory: every ",NAV," line in every log must be parseable by
 analyze_flight.load_nav_rows. If the firmware's NAV CSV columns and the
 host tools drift apart, rows silently fail to parse and this catches it
 without hard-coding expectations about any particular flight.
@@ -19,7 +20,7 @@ from analyze_flight import load_nav_rows  # noqa: E402
 
 
 def main():
-    logs = sorted(glob.glob("flight_data/L*.TXT"))
+    logs = sorted(glob.glob("flight_data/**/L*.TXT", recursive=True))
     if not logs:
         print("check_flight_data: no logs found (nothing to check)")
         return 0
