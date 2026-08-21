@@ -233,11 +233,16 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     }
     
     /* Configure DIO/IRQ - needed for RX mode to work properly */
-    /* IRQ mask: RxDone=0x02, Timeout=0x200, CRCError=0x40 = 0x0242 */
-    uint16_t irq_mask = SX1268_IRQ_RX_DONE | SX1268_IRQ_TIMEOUT | SX1268_IRQ_CRC_ERROR;
+    /* Latched IRQs include the CAD pair: sources missing from this mask never
+     * set their bit in the IRQ register, so the CAD scan's SPI polling would
+     * see nothing. CAD bits are deliberately NOT routed to DIO1 (polled only,
+     * no interrupt churn); DIO1 keeps its original RX-side mask. */
+    uint16_t irq_mask = SX1268_IRQ_RX_DONE | SX1268_IRQ_TIMEOUT | SX1268_IRQ_CRC_ERROR
+                      | SX1268_IRQ_CAD_DONE | SX1268_IRQ_CAD_DETECTED;
+    uint16_t dio1_mask = SX1268_IRQ_RX_DONE | SX1268_IRQ_TIMEOUT | SX1268_IRQ_CRC_ERROR;
     uint8_t irq_params[8] = {
-        (uint8_t)(irq_mask >> 8), (uint8_t)(irq_mask & 0xFF),  // IRQ mask MSB, LSB
-        (uint8_t)(irq_mask >> 8), (uint8_t)(irq_mask & 0xFF),  // DIO1 mask (same)
+        (uint8_t)(irq_mask >> 8), (uint8_t)(irq_mask & 0xFF),   // IRQ mask MSB, LSB
+        (uint8_t)(dio1_mask >> 8), (uint8_t)(dio1_mask & 0xFF), // DIO1 mask
         0x00, 0x00,  // DIO2 mask (none)
         0x00, 0x00   // DIO3 mask (none)
     };
@@ -506,6 +511,64 @@ uint8_t LoRa_SetChannel(uint8_t channel) {
     
     lora_current_channel = channel;
     return LORA_OK;
+}
+
+/**
+ * @brief Start a single Channel Activity Detection on the tuned channel
+ */
+uint8_t LoRa_StartCad(void) {
+    if (!lora_initialized) return LORA_ERROR;
+    
+    /* Configuration commands belong in standby; the chip may currently be
+     * in continuous RX (scan hop path re-enters RX before the next CAD). */
+    if (LoRa_SetStandbyMode() != LORA_OK) {
+        return LORA_ERROR;
+    }
+    
+    /* Detection parameters + exit mode. Sent before every CAD: it costs one
+     * short SPI command and guarantees the config survives any resets or
+     * mode excursions between scans. cadTimeout only applies in CAD_RX exit
+     * mode and bounds the packet reception started by a detection. */
+    uint32_t timeout_ticks = (uint32_t)(LORA_CAD_RX_TIMEOUT_MS * 64u); /* 15.625 us units */
+    uint8_t cad_params[7] = {
+        LORA_CAD_SYMBOLS,
+        LORA_CAD_DET_PEAK,
+        LORA_CAD_DET_MIN,
+        LORA_CAD_EXIT_RX,
+        (uint8_t)(timeout_ticks >> 16),
+        (uint8_t)(timeout_ticks >> 8),
+        (uint8_t)(timeout_ticks & 0xFF)
+    };
+    if (LoRa_SendCommand(SX1268_CMD_SET_CADPARAMS, cad_params, 7) != LORA_OK) {
+        return LORA_ERROR;
+    }
+    
+    /* Stale CAD flags from a previous run would be misread as this run's
+     * result. RX-side IRQs are left alone - they belong to the packet path. */
+    if (LoRa_ClearIRQ(SX1268_IRQ_CAD_DONE | SX1268_IRQ_CAD_DETECTED) != LORA_OK) {
+        return LORA_ERROR;
+    }
+    
+    return LoRa_SendCommand(SX1268_CMD_SET_CAD, NULL, 0);
+}
+
+/**
+ * @brief Poll the outcome of a CAD started with LoRa_StartCad()
+ */
+uint8_t LoRa_CadResult(void) {
+    if (!lora_initialized) return LORA_CAD_FAIL;
+    
+    uint16_t irq_status = 0;
+    if (LoRa_GetIRQStatus(&irq_status) != LORA_OK) {
+        return LORA_CAD_FAIL;
+    }
+    if (!(irq_status & SX1268_IRQ_CAD_DONE)) {
+        return LORA_CAD_PENDING;
+    }
+    
+    uint8_t detected = (irq_status & SX1268_IRQ_CAD_DETECTED) ? 1 : 0;
+    (void)LoRa_ClearIRQ(SX1268_IRQ_CAD_DONE | SX1268_IRQ_CAD_DETECTED);
+    return detected ? LORA_CAD_DETECTED : LORA_CAD_NONE;
 }
 
 /**

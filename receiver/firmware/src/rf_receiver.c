@@ -22,6 +22,23 @@
  * locks on the first CRC-valid packet from any channel. */
 #define RF_SCAN_DWELL_MS           6500U
 
+/* CAD fast-scan phase: sniff each channel for a LoRa preamble (~20 ms per
+ * channel, <0.3 s per lap over all 8) instead of dwelling 6.5 s. A CAD only
+ * fires while a preamble is actually on the air, so laps repeat for
+ * RF_SCAN_CAD_PHASE_MS; each transmission is another chance to be caught
+ * mid-preamble. If nothing is caught (beacon idle, weak signal, or CAD
+ * config rejected by the chip), the scan falls back to the dwell phase,
+ * which guarantees a lock within one 52 s lap of a transmitting beacon. */
+#define RF_SCAN_CAD_PHASE_MS       30000U  /* fast phase length (~6 heartbeats) */
+#define RF_SCAN_CAD_TIMEOUT_MS     150U    /* CAD itself must finish in ~20 ms */
+#define RF_SCAN_CAD_RX_WAIT_MS     800U    /* detection -> packet grace period */
+#define RF_SCAN_CAD_MAX_STRIKES    3U      /* timed-out CADs before fallback */
+
+/* CAD scan sub-states */
+#define RF_CAD_IDLE     0   /* next update starts a CAD */
+#define RF_CAD_RUNNING  1   /* CAD in flight, polling for the result */
+#define RF_CAD_RX_WAIT  2   /* preamble detected, chip receiving the packet */
+
 /* Private variables */
 static SPI_HandleTypeDef hspi_lora;
 /* DMA handles are attached to hspi_lora so lora.c can issue HAL_SPI_Receive_DMA
@@ -49,6 +66,11 @@ static uint32_t last_packet_time = 0;  /* Timestamp of last valid packet */
 static uint8_t scan_active = 0;
 static uint32_t scan_dwell_start = 0;
 static uint32_t scan_dwell_pkt_count = 0;
+static uint8_t scan_cad_phase = 0;       /* 1 = CAD fast phase, 0 = dwell */
+static uint32_t scan_cad_phase_start = 0;
+static uint8_t scan_cad_state = RF_CAD_IDLE;
+static uint32_t scan_cad_deadline = 0;   /* per-state timeout */
+static uint8_t scan_cad_strikes = 0;     /* consecutive timed-out CADs */
 
 /* Last heartbeat received (no-fix keepalive from the beacon) */
 static HeartbeatPacket_t last_heartbeat;
@@ -683,6 +705,10 @@ void RF_Receiver_StartScan(void)
   scan_active = 1;
   scan_dwell_start = HAL_GetTick();
   scan_dwell_pkt_count = rf_lora_packets_received;
+  scan_cad_phase = 1;
+  scan_cad_phase_start = scan_dwell_start;
+  scan_cad_state = RF_CAD_IDLE;
+  scan_cad_strikes = 0;
 }
 
 /**
@@ -690,6 +716,12 @@ void RF_Receiver_StartScan(void)
  */
 void RF_Receiver_StopScan(void)
 {
+  if (scan_active && scan_cad_phase && scan_cad_state != RF_CAD_RX_WAIT) {
+    /* The CAD phase leaves the chip in standby between sniffs; a scan
+     * stopped there would leave the receiver deaf on the picked channel.
+     * (RX_WAIT means the chip is already receiving - leave it alone.) */
+    (void)LoRa_SetReceiveMode();
+  }
   scan_active = 0;
 }
 
@@ -699,6 +731,18 @@ void RF_Receiver_StopScan(void)
 uint8_t RF_Receiver_IsScanning(void)
 {
   return scan_active;
+}
+
+/**
+ * @brief Leave the CAD fast phase and hand the scan to the dwell phase
+ */
+static void RF_Scan_FallbackToDwell(void)
+{
+  scan_cad_phase = 0;
+  /* CAD leaves the chip in standby; the dwell phase listens continuously */
+  (void)LoRa_SetReceiveMode();
+  scan_dwell_start = HAL_GetTick();
+  scan_dwell_pkt_count = rf_lora_packets_received;
 }
 
 /**
@@ -717,9 +761,81 @@ uint8_t RF_Receiver_ScanUpdate(void)
    * callsign packets all count. */
   if (rf_lora_packets_received > scan_dwell_pkt_count) {
     scan_active = 0;
+    if (scan_cad_phase) {
+      /* CAD_RX reception is single-shot: after RX_DONE the chip idles in
+       * standby, so continuous RX must be restored on the locked channel. */
+      (void)LoRa_SetReceiveMode();
+    }
     return 1;
   }
   
+  /* ---- CAD fast phase: preamble-sniff each channel (~0.3 s per lap) ---- */
+  if (scan_cad_phase) {
+    uint32_t now = HAL_GetTick();
+    
+    if (now - scan_cad_phase_start >= RF_SCAN_CAD_PHASE_MS) {
+      RF_Scan_FallbackToDwell();
+      return 0;
+    }
+    
+    switch (scan_cad_state) {
+      case RF_CAD_IDLE:
+        if (LoRa_StartCad() == LORA_OK) {
+          scan_cad_state = RF_CAD_RUNNING;
+          scan_cad_deadline = now + RF_SCAN_CAD_TIMEOUT_MS;
+        } else {
+          /* Chip rejected CAD (SPI trouble, unsupported state): the dwell
+           * scan needs nothing special, degrade to it immediately. */
+          RF_Scan_FallbackToDwell();
+        }
+        break;
+      
+      case RF_CAD_RUNNING: {
+        uint8_t res = LoRa_CadResult();
+        if (res == LORA_CAD_DETECTED) {
+          /* Chip dropped into RX and is capturing the packet; the DIO1 /
+           * DataAvailable path reads it and the lock check above fires. */
+          scan_cad_state = RF_CAD_RX_WAIT;
+          scan_cad_deadline = now + RF_SCAN_CAD_RX_WAIT_MS;
+          scan_cad_strikes = 0;
+        } else if (res == LORA_CAD_NONE) {
+          /* Quiet channel: hop and sniff the next one */
+          (void)RF_Receiver_NextChannel();
+          scan_dwell_pkt_count = rf_lora_packets_received;
+          scan_cad_state = RF_CAD_IDLE;
+          scan_cad_strikes = 0;
+        } else if (res == LORA_CAD_FAIL) {
+          /* SPI fault reading the result: don't trust CAD at all */
+          RF_Scan_FallbackToDwell();
+        } else if ((int32_t)(now - scan_cad_deadline) >= 0) {
+          /* CAD never completed. Usually a transient abort - e.g. the
+           * one-time RF_EnsureRxMode() call issues a SetRx that cancels
+           * whatever CAD is in flight when the main loop first polls the
+           * radio - so retry before concluding CAD doesn't work here. */
+          if (++scan_cad_strikes >= RF_SCAN_CAD_MAX_STRIKES) {
+            RF_Scan_FallbackToDwell();
+          } else {
+            scan_cad_state = RF_CAD_IDLE;
+          }
+        }
+        /* LORA_CAD_PENDING within the deadline: keep polling */
+        break;
+      }
+      
+      case RF_CAD_RX_WAIT:
+      default:
+        if ((int32_t)(now - scan_cad_deadline) >= 0) {
+          /* False detection (noise burst): nothing decodable arrived */
+          (void)RF_Receiver_NextChannel();
+          scan_dwell_pkt_count = rf_lora_packets_received;
+          scan_cad_state = RF_CAD_IDLE;
+        }
+        break;
+    }
+    return 0;
+  }
+  
+  /* ---- Dwell phase: listen RF_SCAN_DWELL_MS per channel ---- */
   /* Dwell expired with nothing heard: hop to the next channel. But never
    * hop over an unread packet: LoRa_SetChannel discards the radio's pending
    * flag, so a heartbeat that landed at the end of the dwell (the only one

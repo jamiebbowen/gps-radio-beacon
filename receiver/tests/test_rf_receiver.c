@@ -62,6 +62,20 @@ uint8_t LoRa_SetChannel(uint8_t ch)
 uint8_t  LoRa_GetChannel(void) { return fake_channel; }
 uint32_t LoRa_GetIRQCount(void) { return 0; }
 
+/* CAD fake: unavailable by default, so the scan degrades to the dwell phase
+ * on its first update (mirrors a chip that rejects SetCad) and the dwell
+ * tests exercise the exact fallback path real hardware would take. */
+static uint8_t  fake_cad_available = 0;
+static uint8_t  fake_cad_result    = LORA_CAD_NONE;
+static uint32_t fake_cad_starts    = 0;
+uint8_t LoRa_StartCad(void)
+{
+    if (!fake_cad_available) return LORA_ERROR;
+    fake_cad_starts++;
+    return LORA_OK;
+}
+uint8_t LoRa_CadResult(void) { return fake_cad_result; }
+
 /* HAL fakes (declared in the stub headers) */
 void HAL_GPIO_Init(GPIO_TypeDef *p, GPIO_InitTypeDef *i) { (void)p; (void)i; }
 GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *p, uint16_t pin)
@@ -260,6 +274,7 @@ TEST(test_channel_scan_locks_on_packet)
      * hop (hopping would discard it and the scan would cycle past a live
      * beacon), then lock once the main loop reads it. */
     RF_Receiver_StartScan();
+    CHECK(RF_Receiver_ScanUpdate() == 0);    /* CAD refused -> dwell phase */
     inject_heartbeat(2, 1, 4, 20);          /* pending, NOT yet read */
     now_ms += 7000;                          /* dwell long expired */
     Test_SetTick(now_ms);
@@ -275,6 +290,71 @@ TEST(test_channel_scan_locks_on_packet)
     CHECK(RF_Receiver_IsScanning() == 0);
     CHECK(RF_Receiver_ScanUpdate() == 0);
 
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+}
+
+TEST(test_channel_scan_cad_fast_phase)
+{
+    CHECK(RF_Receiver_GetChannel() == 0);
+    fake_cad_available = 1;
+    fake_cad_result    = LORA_CAD_NONE;
+    
+    /* Quiet band: every CAD comes back clean and the scan laps the whole
+     * wheel in update pairs (start CAD, read result+hop) - no dwell time. */
+    RF_Receiver_StartScan();
+    fake_cad_starts = 0;
+    for (uint8_t i = 0; i < 2 * LORA_CHANNEL_COUNT; i++) {
+        now_ms += 5;                         /* ~real polling cadence */
+        Test_SetTick(now_ms);
+        CHECK(RF_Receiver_ScanUpdate() == 0);
+    }
+    CHECK(fake_cad_starts == LORA_CHANNEL_COUNT);
+    CHECK(RF_Receiver_GetChannel() == 0);    /* full lap, wrapped around */
+    CHECK(RF_Receiver_IsScanning() == 1);
+    
+    /* Preamble detected: the scan parks in RX-wait, the packet arrives,
+     * and the very next update locks on the channel that sniffed it. */
+    fake_cad_result = LORA_CAD_DETECTED;
+    CHECK(RF_Receiver_ScanUpdate() == 0);    /* IDLE: starts a CAD */
+    CHECK(RF_Receiver_ScanUpdate() == 0);    /* RUNNING: sees DETECTED */
+    CHECK(RF_Receiver_GetChannel() == 0);    /* no hop while receiving */
+    inject_heartbeat(1, 0, 5, 30);
+    run_for(250, 250);                       /* main loop reads the packet */
+    CHECK(RF_Receiver_ScanUpdate() == 1);    /* locked */
+    CHECK(RF_Receiver_IsScanning() == 0);
+    CHECK(RF_Receiver_GetChannel() == 0);
+    
+    /* False detection (noise burst, nothing decodable): after the RX-wait
+     * grace period the scan gives up on the channel and resumes sniffing. */
+    RF_Receiver_StartScan();
+    CHECK(RF_Receiver_ScanUpdate() == 0);    /* start CAD */
+    CHECK(RF_Receiver_ScanUpdate() == 0);    /* DETECTED -> RX wait */
+    now_ms += 900;                           /* > RX-wait grace (800 ms) */
+    Test_SetTick(now_ms);
+    CHECK(RF_Receiver_ScanUpdate() == 0);
+    CHECK(RF_Receiver_GetChannel() == 1);    /* hopped on, still scanning */
+    CHECK(RF_Receiver_IsScanning() == 1);
+    
+    /* Fast-phase timeout: with CAD never detecting, the scan must fall
+     * back to the dwell phase (the 52 s guarantee) instead of trusting
+     * CAD forever - a weak/odd signal may be receivable yet CAD-invisible. */
+    fake_cad_result = LORA_CAD_NONE;
+    now_ms += 31000;                         /* > RF_SCAN_CAD_PHASE_MS */
+    Test_SetTick(now_ms);
+    fake_cad_starts = 0;
+    CHECK(RF_Receiver_ScanUpdate() == 0);    /* falls back to dwell */
+    run_for(7000, 250);                      /* one dwell, no CAD activity */
+    (void)RF_Receiver_ScanUpdate();
+    CHECK(fake_cad_starts == 0);             /* CAD phase really over */
+    CHECK(RF_Receiver_IsScanning() == 1);    /* dwell scan carries on */
+    
+    /* A packet still locks the dwell fallback */
+    inject_heartbeat(2, 2, 6, 40);
+    run_for(250, 250);
+    CHECK(RF_Receiver_ScanUpdate() == 1);
+    
+    /* Restore defaults for any later tests */
+    fake_cad_available = 0;
     CHECK(RF_Receiver_SetChannel(0) == RF_OK);
 }
 
@@ -344,6 +424,7 @@ int main(void)
     run_test_heartbeat_lifecycle();
     run_test_position_packet_flow();
     run_test_channel_scan_locks_on_packet();
+    run_test_channel_scan_cad_fast_phase();
     run_test_noise_floor_estimation_and_alert();
 
     return TEST_SUMMARY();

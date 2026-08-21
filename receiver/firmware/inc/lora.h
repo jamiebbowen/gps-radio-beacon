@@ -129,6 +129,24 @@ extern "C" {
 #define LORA_CRC_ERROR          4
 #define LORA_NO_DATA            5
 
+/* Channel Activity Detection (CAD): the modem samples the channel for a few
+ * symbol periods and reports whether a LoRa preamble is on the air - a ~20 ms
+ * sniff versus a 6.5 s listen, which is what makes a fast channel scan
+ * possible. Detection parameters follow Semtech AN1200.48 for SF9/BW125.
+ * Exit mode CAD_RX: on detection the chip drops straight into RX and captures
+ * the packet whose preamble it just sniffed. */
+#define LORA_CAD_SYMBOLS        0x02    /* 4 symbols (~16.4 ms at SF9/125) */
+#define LORA_CAD_DET_PEAK       23      /* AN1200.48 recommendation, SF9 */
+#define LORA_CAD_DET_MIN        10
+#define LORA_CAD_EXIT_RX        0x01    /* enter RX on detection */
+#define LORA_CAD_RX_TIMEOUT_MS  600     /* > max packet airtime at SF9/125 */
+
+/* LoRa_CadResult() return values */
+#define LORA_CAD_PENDING        0       /* CAD still running */
+#define LORA_CAD_NONE           1       /* done: channel is quiet */
+#define LORA_CAD_DETECTED       2       /* done: preamble heard, chip in RX */
+#define LORA_CAD_FAIL           3       /* SPI/IRQ read failed */
+
 /* LoRa Packet Structure */
 typedef struct {
     uint8_t data[256];          // Packet payload
@@ -253,6 +271,24 @@ uint32_t LoRa_GetIRQCount(void);
  * @retval LORA_OK on success; on failure the previous channel is restored
  */
 uint8_t LoRa_SetChannel(uint8_t channel);
+
+/**
+ * @brief Start a single Channel Activity Detection on the tuned channel
+ * @note Exit mode is CAD_RX: if a preamble is detected the chip enters RX
+ *       (for up to LORA_CAD_RX_TIMEOUT_MS) and receives the packet, firing
+ *       DIO1 RX_DONE exactly like normal reception. If nothing is detected
+ *       the chip falls back to standby. Poll LoRa_CadResult() to find out.
+ * @retval LORA_OK if the CAD was started
+ */
+uint8_t LoRa_StartCad(void);
+
+/**
+ * @brief Poll the outcome of a CAD started with LoRa_StartCad()
+ * @retval LORA_CAD_PENDING / LORA_CAD_NONE / LORA_CAD_DETECTED / LORA_CAD_FAIL
+ * @note Clears the CAD IRQ bits once the result is read. On LORA_CAD_NONE
+ *       the chip is in standby - the caller decides what mode comes next.
+ */
+uint8_t LoRa_CadResult(void);
 
 /**
  * @brief Get the currently tuned rocket channel

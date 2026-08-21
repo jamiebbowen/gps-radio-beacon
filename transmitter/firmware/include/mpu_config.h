@@ -87,7 +87,14 @@
 #define LORA_CODING_RATE    7           // Coding Rate 4/7
 #define LORA_SYNC_WORD      0x12        // Private sync word (0x12 = private, 0x34 = LoRaWAN)
 #define LORA_TX_POWER       22          // 22 dBm (~160mW - SX1268 chip maximum)
-#define LORA_PREAMBLE       8           // Preamble length
+// Preamble length: 16 symbols (~66 ms at SF9/BW125) instead of the LoRa
+// default 8. The receiver's boot scan sniffs each channel with CAD
+// (~20 ms) in a ~0.3 s lap over all 8 channels; a longer preamble roughly
+// doubles the chance a lap catches a transmission mid-preamble, at a cost
+// of +33 ms airtime per packet. Reception is unaffected: the RX decodes
+// any preamble length, and older 8-symbol beacons still work (the scan's
+// dwell fallback finds them within one 52 s lap).
+#define LORA_PREAMBLE       16          // Preamble length (symbols)
 #define LORA_TCXO_VOLTAGE   1.8         // E22-400M33S uses 1.8V TCXO
 
 #endif // _ITSYBITSY_M4_CONFIG_H_
