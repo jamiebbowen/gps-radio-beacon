@@ -33,7 +33,8 @@ static bool UpdateCompassData(Compass_Data *compass_data, float *compass_heading
   } else {
     /* Display error if compass update failed */
     Display_DrawTextRowCol(1, 0, "BNO055 ERROR");
-    Display_DrawTextRowCol(3, 0, "Compass not responding");
+    /* Max 21 cols (128px / 6px font) - longer strings clip silently */
+    Display_DrawTextRowCol(3, 0, "Compass no response");
     Display_DrawTextRowCol(5, 0, "Check connections");
     
     /* Set default heading if pointer is provided */
@@ -164,16 +165,18 @@ void DisplayMode_CompassHeading(Compass_Data *compass_data, float *compass_headi
           Compass_WasCalRestored() ? " R" : "");
   Display_DrawTextRowCol(2, 0, buffer);
 
-  /* Row 3-5: raw sensor values (int16_t counts) */
-  sprintf(buffer, "A:%d,%d,%d",
+  /* Row 3-5: raw sensor values (int16_t counts). No colon after the axis
+   * letter: three full-range int16s ("-32768") plus two commas is 20 chars,
+   * so the 1-char prefix makes worst case exactly the 21-column width. */
+  sprintf(buffer, "A%d,%d,%d",
           compass_data->accel_x, compass_data->accel_y, compass_data->accel_z);
   Display_DrawTextRowCol(3, 0, buffer);
 
-  sprintf(buffer, "G:%d,%d,%d",
+  sprintf(buffer, "G%d,%d,%d",
           compass_data->gyro_x, compass_data->gyro_y, compass_data->gyro_z);
   Display_DrawTextRowCol(4, 0, buffer);
 
-  sprintf(buffer, "M:%d,%d,%d",
+  sprintf(buffer, "M%d,%d,%d",
           compass_data->mag_x, compass_data->mag_y, compass_data->mag_z);
   Display_DrawTextRowCol(5, 0, buffer);
 

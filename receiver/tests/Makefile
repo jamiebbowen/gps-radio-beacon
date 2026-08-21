@@ -21,8 +21,14 @@ BUILD    := build
 SRC_DIR  := ../firmware/src
 
 # Modules with a matching test_<module>.c and $(SRC_DIR)/<module>.c
-MODULES  := rf_parser gps_parser math_utils
+MODULES  := rf_parser gps_parser math_utils rf_receiver
 BINS     := $(addprefix $(BUILD)/test_,$(MODULES))
+
+# rf_receiver.c calls into the real parser, so its test links rf_parser.c
+# too (the LoRa driver + HAL are faked inside test_rf_receiver.c).
+$(BUILD)/test_rf_receiver: test_rf_receiver.c $(SRC_DIR)/rf_receiver.c \
+                           $(SRC_DIR)/rf_parser.c test_harness.h | $(BUILD)
+	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< $(SRC_DIR)/rf_receiver.c $(SRC_DIR)/rf_parser.c $(LDFLAGS)
 
 .PHONY: all test coverage clean
 

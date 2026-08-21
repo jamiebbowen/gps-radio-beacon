@@ -120,7 +120,8 @@ void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps,
     
     /* Display remote GPS fix status and satellite count */
     if (using_last_good) {
-      sprintf(buffer, "Fix: L (was Y) Sat: %d", display_gps->satellites);
+      /* Compact: "Fix: L (was Y) Sat: NN" is 22 chars, one past the display */
+      sprintf(buffer, "Fix:L(was Y) Sat:%d", display_gps->satellites);
     } else {
       sprintf(buffer, "Fix: %s Sat: %d", display_gps->fix ? "Y" : "N", display_gps->satellites);
     }

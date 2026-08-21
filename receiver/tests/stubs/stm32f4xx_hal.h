@@ -18,4 +18,8 @@
 uint32_t HAL_GetTick(void);
 void     Test_SetTick(uint32_t tick_ms);
 
+/* GPIO/SPI/DMA/NVIC surface used by rf_receiver.c (types + no-op macros;
+ * function fakes live in the test executables that need them). */
+#include "stm32f4xx_hal_ext.h"
+
 #endif /* __STM32F4xx_HAL_H */
