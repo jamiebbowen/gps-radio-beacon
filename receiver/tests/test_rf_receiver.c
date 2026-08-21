@@ -256,6 +256,19 @@ TEST(test_channel_scan_locks_on_packet)
     CHECK(RF_Receiver_IsScanning() == 0);
     CHECK(RF_Receiver_GetChannel() == 1);
 
+    /* A packet sitting unread in the radio at dwell expiry must block the
+     * hop (hopping would discard it and the scan would cycle past a live
+     * beacon), then lock once the main loop reads it. */
+    RF_Receiver_StartScan();
+    inject_heartbeat(2, 1, 4, 20);          /* pending, NOT yet read */
+    now_ms += 7000;                          /* dwell long expired */
+    Test_SetTick(now_ms);
+    CHECK(RF_Receiver_ScanUpdate() == 0);    /* no lock yet... */
+    CHECK(RF_Receiver_GetChannel() == 1);    /* ...but no hop either */
+    run_for(250, 250);                       /* main loop reads the packet */
+    CHECK(RF_Receiver_ScanUpdate() == 1);    /* now it locks */
+    CHECK(RF_Receiver_GetChannel() == 1);
+
     /* Manual stop */
     RF_Receiver_StartScan();
     RF_Receiver_StopScan();

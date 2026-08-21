@@ -38,7 +38,7 @@ help:
 	@sed -n 's/^# //p' Makefile | head -n 20
 
 receiver:
-	$(MAKE) -C $(RECEIVER_DIR)
+	$(MAKE) -C $(RECEIVER_DIR) all
 
 transmitter:
 	$(MAKE) -C $(TRANSMITTER_DIR) || true  # transmitter uses Arduino build separately

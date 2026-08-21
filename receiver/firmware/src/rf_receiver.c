@@ -720,8 +720,16 @@ uint8_t RF_Receiver_ScanUpdate(void)
     return 1;
   }
   
-  /* Dwell expired with nothing heard: hop to the next channel */
+  /* Dwell expired with nothing heard: hop to the next channel. But never
+   * hop over an unread packet: LoRa_SetChannel discards the radio's pending
+   * flag, so a heartbeat that landed at the end of the dwell (the only one
+   * we'll get - they are 1 per dwell) would be lost and the scan would keep
+   * cycling past a live beacon. Let DataAvailable() read it first; the lock
+   * check above fires on the next call. */
   if (HAL_GetTick() - scan_dwell_start >= RF_SCAN_DWELL_MS) {
+    if (LoRa_PacketAvailable()) {
+      return 0;
+    }
     (void)RF_Receiver_NextChannel();
     scan_dwell_start = HAL_GetTick();
     scan_dwell_pkt_count = rf_lora_packets_received;
