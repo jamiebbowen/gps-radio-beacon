@@ -11,6 +11,15 @@ ARDUINO_CLI = arduino-cli
 # Build directory
 BUILD_DIR = build
 
+# Per-rocket build: `make flash ROCKET=2` compiles with LORA_CHANNEL=2 and
+# ROCKET_ID=2 (see include/mpu_config.h) without editing any source. Each
+# rocket gets its own build dir so objects from one channel never leak into
+# another rocket's binary. Omit ROCKET to build with the source defaults.
+ifdef ROCKET
+BUILD_DIR = build/rocket$(ROCKET)
+BUILD_PROPS = --build-property "compiler.cpp.extra_flags=-DLORA_CHANNEL=$(ROCKET) -DROCKET_ID=$(ROCKET)"
+endif
+
 # The sketch is firmware.ino (arduino-cli compiles every .cpp/.c in this
 # directory alongside it). Historical note: a generated gps_radio_beacon.ino
 # wrapper containing '#include "main.cpp"' used to live here - it resolved
@@ -39,7 +48,7 @@ prepare:
 # Compile the sketch
 compile: check-tools prepare
 	@echo "Compiling for ItsyBitsy M4 Express..."
-	$(ARDUINO_CLI) compile --fqbn $(BOARD_FQBN) --build-path $(BUILD_DIR) .
+	$(ARDUINO_CLI) compile --fqbn $(BOARD_FQBN) --build-path $(BUILD_DIR) $(BUILD_PROPS) .
 
 # Upload to board
 upload: compile
@@ -96,6 +105,7 @@ help:
 	@echo "  make flash-direct       - Build and upload (recommended)"
 	@echo "  make monitor            - View serial output"
 	@echo "  make PORT=/dev/ttyACM1 flash-direct  - Upload to specific port"
+	@echo "  make flash ROCKET=2     - Build/flash rocket 2 (channel 2, ID 2)"
 	@echo ""
 	@echo "Note: ItsyBitsy M4 uses native USB, no external programmer needed"
 

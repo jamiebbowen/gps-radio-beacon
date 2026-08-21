@@ -166,7 +166,11 @@ void setup() {
 
     delay(1000);  // Let everything stabilize
 
-    beacon_transmit_callsign(transmit_beacon_flag);
+    /* transmit_fast_flag (not transmit_beacon_flag): the parameter means
+     * "radio already enabled, skip enable/disable", which is only true in
+     * the fast/LAUNCH phase. Passing the pending-TX flag here skipped
+     * radio_enable() whenever a beacon TX happened to be queued. */
+    beacon_transmit_callsign(transmit_fast_flag);
     time_since_last_callsign_tx = system_time_seconds;
 
     // Poll GPS for data
@@ -260,7 +264,7 @@ void loop() {
     }
 
     if (system_time_seconds - time_since_last_callsign_tx >= CALLSIGN_TRANSMIT_INTERVAL_SEC && !transmit_fast_flag) {
-        beacon_transmit_callsign(transmit_beacon_flag);
+        beacon_transmit_callsign(transmit_fast_flag);
         time_since_last_callsign_tx = system_time_seconds;
     }
 

@@ -260,10 +260,18 @@ void beacon_transmit_callsign(uint8_t transmit_fast) {
         delay(10);
     }
     
+    /* "CALLSIGN-<rocket id> CH<active channel>". No commas, so the receiver
+     * parser classifies it as a callsign packet (must stay under its
+     * 16-char callsign limit: "KE0MZS-2 CH3" = 12). The channel reflects the
+     * backup jumper, letting the operator confirm airframe AND frequency. */
+    char callsign_msg[24];
+    snprintf(callsign_msg, sizeof(callsign_msg), "%s-%u CH%u",
+             BEACON_CALLSIGN, (unsigned)ROCKET_ID, (unsigned)radio_get_channel());
+    
     // Transmit callsign
     Serial.print("[Beacon] Transmitting callsign: ");
-    Serial.println(BEACON_CALLSIGN);
-    transmit_string(BEACON_CALLSIGN);
+    Serial.println(callsign_msg);
+    transmit_string(callsign_msg);
     
 #if INCLUDE_CARRIAGE_RETURNS
     transmit_string("\r\n");

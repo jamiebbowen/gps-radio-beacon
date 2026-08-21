@@ -42,8 +42,20 @@
 // The receiver selects the matching channel at runtime on its Rocket Select
 // page. Channel plan (must match receiver inc/lora.h):
 //   CH0 = 433.0 MHz, CH1 = 433.5 MHz, CH2 = 434.0 MHz, CH3 = 434.5 MHz
+// LORA_CHANNEL and ROCKET_ID can be set per rocket from the build command
+// without editing this file:  make flash ROCKET=2  (see Makefile).
+#ifndef LORA_CHANNEL
 #define LORA_CHANNEL        0           // 0-3, unique per rocket
+#endif
 #define LORA_CHANNEL_FREQ(ch) (433.0f + 0.5f * (float)(ch))  // Channel -> MHz
+
+// Rocket ID, transmitted with the callsign as "CALLSIGN-<id> CH<n>" so the
+// receiver operator can confirm which airframe they are tracking. Stays
+// fixed for the airframe even if the backup-channel jumper moves it to a
+// different frequency (the CH<n> suffix shows the actual active channel).
+#ifndef ROCKET_ID
+#define ROCKET_ID           LORA_CHANNEL
+#endif
 
 // Backup channel jumper: short CHANNEL_JUMPER_PIN to GND before power-on to
 // transmit on LORA_CHANNEL_BACKUP instead of LORA_CHANNEL. Lets you move a
