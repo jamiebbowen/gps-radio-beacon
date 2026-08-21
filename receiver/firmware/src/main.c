@@ -552,6 +552,30 @@ int main(void)
       }
     }
 
+    /* Log noise-alert transitions (edge-triggered; the alert itself has
+     * hysteresis in rf_receiver). Deliberately no EnsureLogFile: noise can
+     * occur with no beacon on the air, and a no-RF boot must not leave
+     * artifacts on the card - the event is dropped until a real packet
+     * (NAV/heartbeat/scan lock) creates the file. */
+    if (rf_initialized) {
+      static uint8_t prev_noise_alert = 0;
+      uint8_t noise_alert = RF_Receiver_NoiseAlert();
+      if (noise_alert != prev_noise_alert) {
+        prev_noise_alert = noise_alert;
+        if (sd_card_ok) {
+          int16_t nf = 0;
+          (void)RF_Receiver_GetNoiseFloor(&nf);
+          char nf_msg[48];
+          uint8_t ch = RF_Receiver_GetChannel();
+          snprintf(nf_msg, sizeof(nf_msg), "RF NOISE %s CH%u %.1fMHz nf=%ddBm",
+                   noise_alert ? "HIGH" : "clear",
+                   (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)nf);
+          SD_Card_LogEvent(nf_msg);
+        }
+        force_display_update = 1;  /* Surface the warning immediately */
+      }
+    }
+
     /* Auto-return to navigation screen after 120s of no button presses */
     if (current_display_mode != DISPLAY_MODE_NAVIGATION &&
         HAL_GetTick() - mode_change_time > 120000) {

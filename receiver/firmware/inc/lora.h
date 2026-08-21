@@ -219,6 +219,15 @@ uint8_t LoRa_ClearIRQStatus(uint16_t irq_mask);
 uint8_t LoRa_GetDeviceStatus(uint8_t *status);
 
 /**
+ * @brief Read the instantaneous RSSI at the antenna (GetRssiInst, 0x15)
+ * @note Only meaningful while the chip is in RX mode. Between packets this
+ *       measures the ambient noise/interference level on the tuned channel.
+ * @param rssi_dbm Output: signal level in dBm (negative)
+ * @retval Status code
+ */
+uint8_t LoRa_GetRssiInst(int16_t *rssi_dbm);
+
+/**
  * @brief Transmit packet (for testing)
  * @param data Pointer to data buffer
  * @param length Length of data

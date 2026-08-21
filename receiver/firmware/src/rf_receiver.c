@@ -53,6 +53,21 @@ static uint32_t scan_dwell_pkt_count = 0;
 /* Last heartbeat received (no-fix keepalive from the beacon) */
 static HeartbeatPacket_t last_heartbeat;
 static uint8_t heartbeat_pending = 0;
+static uint32_t last_heartbeat_time = 0;   /* 0 = never heard one */
+
+/* Ambient noise-floor monitor.
+ * GetRssiInst is sampled ~1 Hz while the radio sits in continuous RX. The
+ * floor estimate is the 25th percentile of a sliding window: samples taken
+ * mid-packet (or during a scan retune) land in the upper percentiles, so
+ * they can't inflate the estimate, while a genuinely raised floor lifts
+ * the whole window and shows through. */
+#define RF_NOISE_WINDOW        16                        /* samples (~16 s) */
+#define RF_NOISE_PCTL_IDX      (RF_NOISE_WINDOW / 4)     /* 25th percentile */
+#define RF_NOISE_MIN_SAMPLES   (RF_NOISE_WINDOW / 2)     /* before valid */
+static int16_t  noise_samples[RF_NOISE_WINDOW];
+static uint8_t  noise_sample_idx = 0;
+static uint8_t  noise_sample_count = 0;
+static uint8_t  noise_alert_active = 0;
 
 /* Private function prototypes */
 static void RF_SPI_Init(void);
@@ -158,6 +173,30 @@ uint8_t RF_Receiver_DataAvailable(void)
     }
   }
   
+  /* Ambient noise-floor sampling, 1 Hz. Only sample while the chip is
+   * confirmed in RX mode (mode 5) - GetRssiInst is undefined in standby,
+   * which the radio briefly enters during scan/manual retunes. */
+  static uint32_t last_noise_ms = 0;
+  if (now_ms - last_noise_ms >= 1000) {
+    last_noise_ms = now_ms;
+    int16_t inst_rssi;
+    if (rf_last_device_mode == 5 && LoRa_GetRssiInst(&inst_rssi) == LORA_OK) {
+      noise_samples[noise_sample_idx] = inst_rssi;
+      noise_sample_idx = (uint8_t)((noise_sample_idx + 1) % RF_NOISE_WINDOW);
+      if (noise_sample_count < RF_NOISE_WINDOW) noise_sample_count++;
+      
+      /* Update the alert with hysteresis so it doesn't flap at the edge */
+      int16_t nf;
+      if (RF_Receiver_GetNoiseFloor(&nf)) {
+        if (!noise_alert_active && nf >= RF_NOISE_ALERT_DBM) {
+          noise_alert_active = 1;
+        } else if (noise_alert_active && nf <= RF_NOISE_CLEAR_DBM) {
+          noise_alert_active = 0;
+        }
+      }
+    }
+  }
+  
   /* Check for new LoRa packets */
   if (!rf_packet_ready && LoRa_PacketAvailable()) {
     /* Read the packet */
@@ -204,6 +243,7 @@ uint8_t RF_Receiver_DataAvailable(void)
          * rf_lora_packets_received, which is what locks the channel scan. */
         memcpy(&last_heartbeat, last_packet.data, sizeof(last_heartbeat));
         heartbeat_pending = 1;
+        last_heartbeat_time = HAL_GetTick();
       }
 #else
       /* ASCII packet format */
@@ -536,6 +576,12 @@ uint8_t RF_Receiver_SetChannel(uint8_t channel)
   /* Anything still pending was received from the previous rocket */
   rf_packet_ready = 0;
   last_packet_time = 0;
+  /* Noise samples and the last heartbeat belong to the previous frequency */
+  noise_sample_count = 0;
+  noise_sample_idx = 0;
+  noise_alert_active = 0;
+  heartbeat_pending = 0;
+  last_heartbeat_time = 0;
   return RF_OK;
 }
 
@@ -571,6 +617,59 @@ uint8_t RF_Receiver_GetHeartbeat(HeartbeatPacket_t *hb)
   memcpy(hb, &last_heartbeat, sizeof(*hb));
   heartbeat_pending = 0;
   return 1;
+}
+
+/**
+ * @brief Get the last heartbeat without consuming it (for display)
+ * @param hb Output buffer for the heartbeat packet (may be NULL)
+ * @param age_ms Output: milliseconds since it was received (may be NULL)
+ * @retval 1 if a heartbeat has ever been received on this channel, 0 otherwise
+ */
+uint8_t RF_Receiver_GetLastHeartbeat(HeartbeatPacket_t *hb, uint32_t *age_ms)
+{
+  if (last_heartbeat_time == 0) {
+    return 0;
+  }
+  if (hb) memcpy(hb, &last_heartbeat, sizeof(*hb));
+  if (age_ms) *age_ms = HAL_GetTick() - last_heartbeat_time;
+  return 1;
+}
+
+/**
+ * @brief Get the estimated ambient noise floor on the tuned channel
+ * @param nf_dbm Output: noise floor in dBm
+ * @retval 1 if the estimate is valid (enough samples collected), 0 otherwise
+ */
+uint8_t RF_Receiver_GetNoiseFloor(int16_t *nf_dbm)
+{
+  if (noise_sample_count < RF_NOISE_MIN_SAMPLES || nf_dbm == NULL) {
+    return 0;
+  }
+  
+  /* Partial selection sort: only the lowest RF_NOISE_PCTL_IDX+1 elements
+   * are needed. Window is 16 entries so this is trivially cheap. */
+  int16_t tmp[RF_NOISE_WINDOW];
+  memcpy(tmp, noise_samples, noise_sample_count * sizeof(tmp[0]));
+  uint8_t pctl = RF_NOISE_PCTL_IDX;
+  if (pctl >= noise_sample_count) pctl = (uint8_t)(noise_sample_count - 1);
+  for (uint8_t i = 0; i <= pctl; i++) {
+    uint8_t min_j = i;
+    for (uint8_t j = (uint8_t)(i + 1); j < noise_sample_count; j++) {
+      if (tmp[j] < tmp[min_j]) min_j = j;
+    }
+    int16_t t = tmp[i]; tmp[i] = tmp[min_j]; tmp[min_j] = t;
+  }
+  *nf_dbm = tmp[pctl];
+  return 1;
+}
+
+/**
+ * @brief Check whether the tuned channel's noise floor is abnormally high
+ * @retval 1 while the noise alert is active (with hysteresis), 0 otherwise
+ */
+uint8_t RF_Receiver_NoiseAlert(void)
+{
+  return noise_alert_active;
 }
 
 /**

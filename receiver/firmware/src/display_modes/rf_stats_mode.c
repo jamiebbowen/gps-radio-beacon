@@ -67,9 +67,16 @@ void DisplayMode_RFStats(void)
              (unsigned long)lora_packets, (unsigned long)dio1_irqs);
     Display_DrawTextRowCol(2, 0, buffer);
 
-    /* Row 3: signal quality of last packet */
-    snprintf(buffer, sizeof(buffer), "RSSI:%d  SNR:%d",
-             (int)rssi, (int)snr);
+    /* Row 3: signal quality of last packet + ambient noise floor */
+    int16_t nf = 0;
+    if (RF_Receiver_GetNoiseFloor(&nf)) {
+        snprintf(buffer, sizeof(buffer), "R:%d S:%d NF:%d%s",
+                 (int)rssi, (int)snr, (int)nf,
+                 RF_Receiver_NoiseAlert() ? "!" : "");
+    } else {
+        snprintf(buffer, sizeof(buffer), "RSSI:%d  SNR:%d",
+                 (int)rssi, (int)snr);
+    }
     Display_DrawTextRowCol(3, 0, buffer);
 
     /* Row 4: age of last valid packet */

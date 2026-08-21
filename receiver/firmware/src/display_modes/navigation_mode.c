@@ -284,10 +284,29 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
     }
     Display_DrawTextRowCol(0, 0, wide);
 
-    /* Row 1: Time since last packet (freshness of everything above/below) */
-    if (last_rf_packet_time > 0) {
+    /* Row 1: Time since last packet (freshness of everything above/below).
+     * If the beacon lost its fix and dropped back to heartbeats, show the
+     * heartbeat age instead - it's the live proof-of-link, while the
+     * position age just grows. A raised noise floor overrides both: it
+     * threatens the link itself, which trumps freshness bookkeeping. */
+    uint32_t hb_age_ms = 0;
+    uint8_t  hb_heard = RF_Receiver_GetLastHeartbeat(NULL, &hb_age_ms);
+    if (RF_Receiver_NoiseAlert()) {
+      int16_t nf = 0;
+      (void)RF_Receiver_GetNoiseFloor(&nf);
+      snprintf(wide, sizeof(wide), "RF NOISE! %ddBm", (int)nf);
+    } else if (last_rf_packet_time > 0) {
       uint32_t age_s = (HAL_GetTick() - last_rf_packet_time) / 1000u;
-      snprintf(wide, sizeof(wide), "Last: %lus", (unsigned long)age_s);
+      uint32_t hb_s  = hb_age_ms / 1000u;
+      if (hb_heard && hb_s < age_s) {
+        /* Clamp so "Last: 99999s HB:999s" (20 chars) always fits */
+        if (age_s > 99999u) age_s = 99999u;
+        if (hb_s  > 999u)   hb_s  = 999u;
+        snprintf(wide, sizeof(wide), "Last: %lus HB:%lus",
+                 (unsigned long)age_s, (unsigned long)hb_s);
+      } else {
+        snprintf(wide, sizeof(wide), "Last: %lus", (unsigned long)age_s);
+      }
     } else {
       snprintf(wide, sizeof(wide), "Last: SD");
     }
@@ -434,10 +453,46 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
     }
 
   } else {
-    if (!has_valid_local_gps) {
-      Display_DrawTextRowCol(4, 0, "No GPS Fix");
+    /* No position from the beacon yet. If it's sending no-fix heartbeats,
+     * show them - the operator can watch sat acquisition from the pad
+     * instead of staring at "No RF Data" wondering if the link is up. */
+    HeartbeatPacket_t hb;
+    uint32_t hb_age_ms = 0;
+    char wide[NAV_WIDE_COLS + 2];
+
+    Display_DrawTextRowCol(0, 0, has_valid_local_gps ? "L:Fix" : "L:No GPS Fix");
+
+    if (RF_Receiver_GetLastHeartbeat(&hb, &hb_age_ms)) {
+      snprintf(wide, sizeof(wide), "Beacon HB %lus ago",
+               (unsigned long)(hb_age_ms / 1000u));
+      Display_DrawTextRowCol(2, 0, wide);
+      snprintf(wide, sizeof(wide), "R%u CH%u sats:%u",
+               (unsigned)hb.rocket_id, (unsigned)hb.channel,
+               (unsigned)hb.satellites);
+      Display_DrawTextRowCol(3, 0, wide);
+      int16_t hb_rssi = 0;
+      int8_t  hb_snr  = 0;
+      RF_Receiver_GetSignalQuality(&hb_rssi, &hb_snr);
+      snprintf(wide, sizeof(wide), "No fix, up %lus",
+               (unsigned long)hb.uptime_s);
+      Display_DrawTextRowCol(4, 0, wide);
+      snprintf(wide, sizeof(wide), "RSSI %d SNR %+d",
+               (int)hb_rssi, (int)hb_snr);
+      Display_DrawTextRowCol(5, 0, wide);
     } else {
-      Display_DrawTextRowCol(5, 0, "No RF Data");
+      Display_DrawTextRowCol(4, 0, "No RF Data");
+    }
+
+    /* Row 7: channel noise floor - most useful exactly when nothing is
+     * being received, to distinguish "beacon off" from "channel jammed". */
+    int16_t nf = 0;
+    if (RF_Receiver_GetNoiseFloor(&nf)) {
+      if (RF_Receiver_NoiseAlert()) {
+        snprintf(wide, sizeof(wide), "NF:%ddBm NOISY!", (int)nf);
+      } else {
+        snprintf(wide, sizeof(wide), "NF:%ddBm", (int)nf);
+      }
+      Display_DrawTextRowCol(7, 0, wide);
     }
   }
 }

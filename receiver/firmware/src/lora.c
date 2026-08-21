@@ -584,6 +584,22 @@ uint8_t LoRa_GetDeviceStatus(uint8_t *status) {
 }
 
 /**
+ * @brief Read the instantaneous RSSI at the antenna (GetRssiInst, 0x15)
+ * @note Datasheet: signal power = -RssiInst/2 dBm. Only meaningful in RX
+ *       mode; between packets this is the ambient noise/interference level.
+ */
+uint8_t LoRa_GetRssiInst(int16_t *rssi_dbm) {
+    if (!lora_initialized || rssi_dbm == NULL) return LORA_ERROR;
+
+    uint8_t raw = 0;
+    uint8_t result = LoRa_ReadCommand(SX1268_CMD_GET_RSSIINST, &raw, 1);
+    if (result != LORA_OK) return result;
+
+    *rssi_dbm = -((int16_t)raw / 2);
+    return LORA_OK;
+}
+
+/**
  * @brief Transmit packet (for testing)
  * @note Currently unused by the receiver firmware. Kept safe for future use:
  *       switches the RF switch to TX, waits for TX_DONE, then restores the
