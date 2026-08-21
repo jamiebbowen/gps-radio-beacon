@@ -128,6 +128,14 @@ SD_Card_Status SD_Card_LogCompass(float heading, int16_t raw_x, int16_t raw_y, i
 SD_Card_Status SD_Card_LogEvent(const char *event_message);
 
 /**
+ * @brief Open the log file now if not already open (normally created lazily
+ *        on the first NAV row). Use before logging pre-fix events that prove
+ *        a real beacon is on the air, which would otherwise be dropped.
+ * @retval SD_CARD_OK if the log file is open after the call
+ */
+SD_Card_Status SD_Card_EnsureLogFile(void);
+
+/**
  * @brief Log error message to SD card
  * @param error_message Error description string
  * @retval SD_Card_Status

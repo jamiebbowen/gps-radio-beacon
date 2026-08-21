@@ -256,6 +256,11 @@ void loop() {
         // Only update transmission timing if transmission was successful
         if (tx_result) {
             last_transmission_time = system_time_seconds;
+        } else {
+            /* GPS data rejected (no fix / <4 sats) or TX failed: send a
+             * rate-limited heartbeat so the receiver still hears us. */
+            beacon_transmit_heartbeat(gps_get_current_coordinates(),
+                                      system_time_seconds, transmit_fast_flag);
         }
 
         if (!transmit_fast_flag) {

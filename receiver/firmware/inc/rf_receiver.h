@@ -12,6 +12,7 @@ extern "C" {
 
 #include "stm32f4xx_hal.h"
 #include "gps.h"
+#include "packet_format.h"  /* HeartbeatPacket_t */
 #include <stdint.h>
 
 /* RF status codes */
@@ -57,6 +58,9 @@ uint8_t RF_Receiver_GetParsedData(GPS_Data *gps_data, char *callsign, uint16_t c
 uint8_t RF_Receiver_SetChannel(uint8_t channel);
 uint8_t RF_Receiver_GetChannel(void);
 uint8_t RF_Receiver_NextChannel(void);  /* Cycle to next channel; returns the now-active channel */
+
+/* No-fix heartbeat from the beacon (one-shot; 1 = new heartbeat copied) */
+uint8_t RF_Receiver_GetHeartbeat(HeartbeatPacket_t *hb);
 
 /* Boot-time channel scan: hop channels until a CRC-valid packet is heard */
 void    RF_Receiver_StartScan(void);

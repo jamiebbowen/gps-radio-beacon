@@ -524,9 +524,32 @@ int main(void)
         uint8_t locked_ch = RF_Receiver_GetChannel();
         snprintf(ch_msg, sizeof(ch_msg), "RF scan locked CH%u %.1fMHz",
                  (unsigned)locked_ch, LORA_CHANNEL_FREQ_MHZ(locked_ch));
+        /* A lock proves a beacon is on the air; the lazily-created log file
+         * may not exist yet (no NAV row before the first position packet) */
+        SD_Card_EnsureLogFile();
         SD_Card_LogEvent(ch_msg);
       }
       force_display_update = 1;
+    }
+
+    /* Log beacon heartbeats (no-fix keepalives). Rate-limited to one per
+     * 5 s at the transmitter, so logging each one is cheap and gives a
+     * pad-wait record of sat acquisition progress. */
+    if (rf_initialized && sd_card_ok) {
+      HeartbeatPacket_t hb;
+      if (RF_Receiver_GetHeartbeat(&hb)) {
+        int16_t hb_rssi;
+        int8_t  hb_snr;
+        RF_Receiver_GetSignalQuality(&hb_rssi, &hb_snr);
+        char hb_msg[64];
+        snprintf(hb_msg, sizeof(hb_msg),
+                 "HEARTBEAT id=%u CH%u sats=%u fix=%u up=%us rssi=%d",
+                 (unsigned)hb.rocket_id, (unsigned)hb.channel,
+                 (unsigned)hb.satellites, (unsigned)hb.fix_quality,
+                 (unsigned)hb.uptime_s, (int)hb_rssi);
+        SD_Card_EnsureLogFile();
+        SD_Card_LogEvent(hb_msg);
+      }
     }
 
     /* Auto-return to navigation screen after 120s of no button presses */
@@ -663,6 +686,7 @@ int main(void)
               char cs_msg[48];
               snprintf(cs_msg, sizeof(cs_msg), "CALLSIGN %s rx-ch CH%u",
                        heard_callsign, (unsigned)RF_Receiver_GetChannel());
+              SD_Card_EnsureLogFile();
               if (SD_Card_LogEvent(cs_msg) == SD_CARD_OK) {
                 strncpy(last_logged_callsign, heard_callsign,
                         sizeof(last_logged_callsign) - 1);

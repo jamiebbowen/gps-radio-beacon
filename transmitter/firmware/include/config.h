@@ -14,6 +14,13 @@
 // Set to 1 for testing mode, 0 for production mode
 #define TESTING_MODE 0
 
+/* Minimum seconds between no-fix heartbeat packets. A heartbeat is sent when
+ * a beacon TX was requested but no transmittable GPS fix exists, keeping the
+ * receiver's channel scan and operator informed that the beacon is alive.
+ * Matches the production pad interval so the RX scan dwell (6.5 s) still
+ * exceeds the slowest pad-state packet spacing. */
+#define HEARTBEAT_INTERVAL_SEC 5
+
 /**
  * Bench-test switch: when 1, the beacon boots directly into BEACON_STATE_LAUNCH
  * so the TX continuously streams packets as if a launch had been detected.

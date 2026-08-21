@@ -405,6 +405,22 @@ SD_Card_Status SD_Card_Flush(void)
     return SD_CARD_OK;
 }
 
+/**
+ * @brief Open the log file now if it isn't open yet.
+ *
+ * The log file is normally created lazily by SD_Card_LogNavigation on the
+ * first position packet, and SD_Card_WriteLogEntry silently drops entries
+ * until then (so no-RF boots leave no artifact on the card). Call this
+ * before logging an event that proves a real beacon is on the air (heard
+ * heartbeat/callsign, channel-scan lock) so those pre-fix entries are kept.
+ */
+SD_Card_Status SD_Card_EnsureLogFile(void)
+{
+    if (!sd_initialized || !lfs_mounted) return SD_CARD_ERROR;
+    if (log_file_open) return SD_CARD_OK;
+    return sd_open_new_log_file(NULL, 0);
+}
+
 /* ========================================================================= */
 /* Navigation logging (primary data path)                                    */
 /* ========================================================================= */

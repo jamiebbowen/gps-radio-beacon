@@ -50,6 +50,10 @@ static uint8_t scan_active = 0;
 static uint32_t scan_dwell_start = 0;
 static uint32_t scan_dwell_pkt_count = 0;
 
+/* Last heartbeat received (no-fix keepalive from the beacon) */
+static HeartbeatPacket_t last_heartbeat;
+static uint8_t heartbeat_pending = 0;
+
 /* Private function prototypes */
 static void RF_SPI_Init(void);
 
@@ -192,6 +196,14 @@ uint8_t RF_Receiver_DataAvailable(void)
           rf_header_matches++;
           last_packet_time = HAL_GetTick();
         }
+      } else if (last_packet.length == HEARTBEAT_PACKET_SIZE
+              && last_packet.data[0] == PACKET_TYPE_HEARTBEAT) {
+        /* No-fix keepalive. Deliberately does NOT set rf_packet_ready or
+         * last_packet_time: a heartbeat proves the link is alive, not that
+         * position data is fresh. It still counts toward
+         * rf_lora_packets_received, which is what locks the channel scan. */
+        memcpy(&last_heartbeat, last_packet.data, sizeof(last_heartbeat));
+        heartbeat_pending = 1;
       }
 #else
       /* ASCII packet format */
@@ -544,6 +556,21 @@ uint8_t RF_Receiver_NextChannel(void)
   uint8_t next = (uint8_t)((LoRa_GetChannel() + 1) % LORA_CHANNEL_COUNT);
   (void)RF_Receiver_SetChannel(next);
   return LoRa_GetChannel();
+}
+
+/**
+ * @brief Get the last received heartbeat (one-shot)
+ * @param hb Output buffer for the heartbeat packet
+ * @retval 1 if a new heartbeat arrived since the last call, 0 otherwise
+ */
+uint8_t RF_Receiver_GetHeartbeat(HeartbeatPacket_t *hb)
+{
+  if (!heartbeat_pending || hb == NULL) {
+    return 0;
+  }
+  memcpy(hb, &last_heartbeat, sizeof(*hb));
+  heartbeat_pending = 0;
+  return 1;
 }
 
 /**

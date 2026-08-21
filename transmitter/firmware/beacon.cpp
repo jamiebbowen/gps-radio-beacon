@@ -251,6 +251,65 @@ uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t
 }
 
 /**
+ * Transmit a no-fix heartbeat packet (rate-limited)
+ *
+ * Called from the main loop whenever a beacon TX was requested but the GPS
+ * data was rejected (no fix, <4 sats, bad altitude). Without this, a beacon
+ * with no fix is silent except for the 5-minute callsign, which makes the
+ * receiver's channel scan and the operator wait far too long to learn the
+ * rocket is powered and listening for satellites.
+ *
+ * @param coords Current (invalid/partial) GPS coordinates for sat count
+ * @param system_time_seconds Seconds since boot
+ * @param transmit_fast If true, radio is already enabled (LAUNCH phase)
+ * @return 1 if a heartbeat was transmitted, 0 if rate-limited or TX failed
+ */
+uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast) {
+    /* Rate limit: the GPS TX path retries every second when there is no fix;
+     * do not turn every retry into an RF transmission. */
+    static uint32_t last_heartbeat_ms = 0;
+    uint32_t now_ms = millis();
+    if (last_heartbeat_ms != 0 &&
+        (now_ms - last_heartbeat_ms) < (uint32_t)HEARTBEAT_INTERVAL_SEC * 1000UL) {
+        return 0;
+    }
+    
+    HeartbeatPacket_t hb;
+    hb.packet_type = PACKET_TYPE_HEARTBEAT;
+    hb.rocket_id   = (uint8_t)ROCKET_ID;
+    hb.channel     = radio_get_channel();
+    hb.satellites  = coords ? (uint8_t)atoi(coords->satellites) : 0;
+    hb.fix_quality = coords ? coords->fix_quality : 0;
+    hb.uptime_s    = (system_time_seconds > 65535UL) ? 65535U
+                                                     : (uint16_t)system_time_seconds;
+    
+    if (!transmit_fast) {
+        radio_enable();
+        delay(10);
+    }
+    
+    Serial.print(F("[Beacon] Transmitting heartbeat: sats="));
+    Serial.print(hb.satellites);
+    Serial.print(F(" fix="));
+    Serial.print(hb.fix_quality);
+    Serial.print(F(" up="));
+    Serial.println(hb.uptime_s);
+    
+    int result = transmit_packet((uint8_t*)&hb, sizeof(hb));
+    
+    if (!transmit_fast) {
+        delay(1);
+        radio_disable();
+    }
+    
+    if (result == 0) {
+        last_heartbeat_ms = now_ms;
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * Transmit callsign via LoRa beacon
  * @param transmit_fast If true, transmit callsign in fast mode
  */

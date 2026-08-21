@@ -21,6 +21,21 @@ typedef struct __attribute__((packed)) {
 #define PACKET_TYPE_CALLSIGN    0x02  // Future use
 #define PACKET_TYPE_TELEMETRY   0x03  // Future use
 #define PACKET_TYPE_FUSED       0x04  // EKF-fused position + velocity (TX nav module)
+#define PACKET_TYPE_HEARTBEAT   0x05  // No-fix keepalive (see HeartbeatPacket_t)
+
+/* Heartbeat: 7 bytes. The transmitter sends this instead of a GPS packet
+ * when it has no transmittable fix (no fix / <4 sats), so the channel scan
+ * can lock and the operator can see the beacon is alive on the pad. Must
+ * stay in sync with the transmitter's copy of this header. */
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;   // PACKET_TYPE_HEARTBEAT
+    uint8_t  rocket_id;     // ROCKET_ID of the airframe
+    uint8_t  channel;       // Active (jumper-resolved) channel
+    uint8_t  satellites;    // Satellites currently tracked
+    uint8_t  fix_quality;   // GGA fix quality (0 = none)
+    uint16_t uptime_s;      // Seconds since beacon boot (saturates at 65535)
+} HeartbeatPacket_t;
+#define HEARTBEAT_PACKET_SIZE   7
 
 // Flags byte bit definitions
 #define FLAG_LAUNCH_DETECTED    0x80  // Bit 7: 1 = launched, 0 = on ground
