@@ -452,6 +452,15 @@ int main(void)
   strncpy(gps_data.debug_sats, "INIT-SAT", GPS_DEBUG_BUFFER_SIZE - 1);
   gps_data.debug_sats[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
   
+  /* Re-arm the scan dwell now that we can actually service it. StartScan ran
+   * ~5 s into boot, but the init screens above take long enough that the boot
+   * channel's entire dwell expired before the first ScanUpdate(), so the scan
+   * hopped off CH-boot without ever listening there and burned a full 52 s
+   * lap before coming back (measured: every logged boot locked at ~61 s). */
+  if (rf_initialized && RF_Receiver_IsScanning()) {
+    RF_Receiver_StartScan();
+  }
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)

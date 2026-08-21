@@ -435,6 +435,17 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
       snprintf(narrow, sizeof(narrow), "HB R%u CH%u",
                (unsigned)hb.rocket_id, (unsigned)hb.channel);
       Display_DrawTextRowCol(5, 0, narrow);
+    } else if (RF_Receiver_IsScanning()) {
+      /* Boot scan in progress: a full lap over 8 channels takes ~52 s, so
+       * without this the screen reads "No signal" for up to a minute while
+       * the receiver is working exactly as intended. */
+      uint32_t f100 = (uint32_t)(LORA_CHANNEL_FREQ_MHZ(RF_Receiver_GetChannel())
+                                 * 100.0f + 0.5f);
+      Display_DrawTextRowCol(4, 0, "Scanning...");
+      snprintf(narrow, sizeof(narrow), "CH%u %lu.%02lu",
+               (unsigned)RF_Receiver_GetChannel(),
+               (unsigned long)(f100 / 100), (unsigned long)(f100 % 100));
+      Display_DrawTextRowCol(5, 0, narrow);
     } else {
       Display_DrawTextRowCol(4, 0, "No signal");
       Display_DrawTextRowCol(5, 0, "");
@@ -506,6 +517,13 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
       snprintf(wide, sizeof(wide), "RSSI %d SNR %+d",
                (int)hb_rssi, (int)hb_snr);
       Display_DrawTextRowCol(5, 0, wide);
+    } else if (RF_Receiver_IsScanning()) {
+      uint32_t f100 = (uint32_t)(LORA_CHANNEL_FREQ_MHZ(RF_Receiver_GetChannel())
+                                 * 100.0f + 0.5f);
+      snprintf(wide, sizeof(wide), "Scanning CH%u %lu.%02lu",
+               (unsigned)RF_Receiver_GetChannel(),
+               (unsigned long)(f100 / 100), (unsigned long)(f100 % 100));
+      Display_DrawTextRowCol(4, 0, wide);
     } else {
       Display_DrawTextRowCol(4, 0, "No RF Data");
     }
