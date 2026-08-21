@@ -290,7 +290,8 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
      * position age just grows. A raised noise floor overrides both: it
      * threatens the link itself, which trumps freshness bookkeeping. */
     uint32_t hb_age_ms = 0;
-    uint8_t  hb_heard = RF_Receiver_GetLastHeartbeat(NULL, &hb_age_ms);
+    HeartbeatPacket_t hb;
+    uint8_t  hb_heard = RF_Receiver_GetLastHeartbeat(&hb, &hb_age_ms);
     if (RF_Receiver_NoiseAlert()) {
       int16_t nf = 0;
       (void)RF_Receiver_GetNoiseFloor(&nf);
@@ -307,6 +308,13 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
       } else {
         snprintf(wide, sizeof(wide), "Last: %lus", (unsigned long)age_s);
       }
+    } else if (hb_heard) {
+      /* Position is SD-restored but the beacon is ALIVE, sending no-fix
+       * heartbeats. Without this the screen reads "No signal"/"Pkts:0"
+       * while heartbeats stream in - looks like a dead link on the pad. */
+      uint32_t hb_s = hb_age_ms / 1000u;
+      if (hb_s > 999u) hb_s = 999u;
+      snprintf(wide, sizeof(wide), "Last: SD HB:%lus", (unsigned long)hb_s);
     } else {
       snprintf(wide, sizeof(wide), "Last: SD");
     }
@@ -344,6 +352,9 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
       if (speed_ms > 999.9f) speed_ms = 999.9f;
       snprintf(narrow, sizeof(narrow), "S:%-2d %4.1fm/s",
                (int)remote_gps_data->satellites, (double)speed_ms);
+    } else if (hb_heard) {
+      /* Sat-acquisition progress straight from the heartbeat */
+      snprintf(narrow, sizeof(narrow), "S:%-2u no fix", (unsigned)hb.satellites);
     } else {
       snprintf(narrow, sizeof(narrow), "S:-- ---.-m/s");
     }
@@ -354,9 +365,12 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
      * a new one lands between draws. */
     int16_t rssi = 0;
     int8_t  snr  = 0;
-    if (last_rf_packet_time > 0) {
+    uint8_t have_rf = (last_rf_packet_time > 0) || hb_heard;
+    if (have_rf) {
+      /* Heartbeats update the same RSSI/SNR trackers as position packets */
       RF_Receiver_GetSignalQuality(&rssi, &snr);
-
+    }
+    if (last_rf_packet_time > 0) {
       /* Row 4: single-word quality label. "Excellent" (9) is the longest. */
       snprintf(narrow, sizeof(narrow), "%s", LoRa_QualityLabel(rssi, snr));
       Display_DrawTextRowCol(4, 0, narrow);
@@ -414,13 +428,20 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
         }
       }
       Display_DrawTextRowCol(5, 0, narrow);
+    } else if (hb_heard) {
+      /* Link is live (heartbeats), just no position yet */
+      snprintf(narrow, sizeof(narrow), "%s", LoRa_QualityLabel(rssi, snr));
+      Display_DrawTextRowCol(4, 0, narrow);
+      snprintf(narrow, sizeof(narrow), "HB R%u CH%u",
+               (unsigned)hb.rocket_id, (unsigned)hb.channel);
+      Display_DrawTextRowCol(5, 0, narrow);
     } else {
       Display_DrawTextRowCol(4, 0, "No signal");
       Display_DrawTextRowCol(5, 0, "");
     }
 
     /* Row 6: raw RSSI/SNR (below the arrow, full width available). */
-    if (last_rf_packet_time > 0) {
+    if (have_rf) {
       snprintf(wide, sizeof(wide), "RSSI %d SNR %+d",
                (int)rssi, (int)snr);
     } else {
