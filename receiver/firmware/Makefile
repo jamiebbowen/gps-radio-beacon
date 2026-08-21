@@ -82,6 +82,11 @@ CFLAGS += -DUSE_HAL_DRIVER -DSTM32F401xC
 #   LFS_NO_WARN    - skip warn printfs
 CFLAGS += -DLFS_NO_MALLOC -DLFS_NO_ASSERT -DLFS_NO_DEBUG -DLFS_NO_WARN
 CFLAGS += $(INCLUDES)
+# Auto header dependencies: without these, editing a header (e.g. the
+# LORA_CHANNEL_COUNT bump in lora.h) silently leaves stale objects with the
+# old constants baked in. -MMD writes a .d file next to each object; -MP
+# adds phony targets so deleted headers don't break the build.
+CFLAGS += -MMD -MP
 
 # Linker script
 LDSCRIPT = STM32F401CCUx_FLASH.ld
@@ -105,6 +110,9 @@ HEX = $(BIN_DIR)/$(PROJECT).hex
 OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
 OBJECTS += $(BUILD_DIR)/startup_stm32f401xc.o
 vpath %.c $(sort $(dir $(C_SOURCES)))
+
+# Pull in the gcc-generated header dependency files (absent on first build)
+-include $(wildcard $(BUILD_DIR)/*.d)
 
 # Default target
 all: $(BUILD_DIR) $(BIN_DIR) $(ELF) $(BIN) $(HEX) flash
