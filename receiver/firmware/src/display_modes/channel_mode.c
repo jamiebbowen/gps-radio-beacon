@@ -16,15 +16,15 @@
  * @brief Display the rocket channel list with the active channel highlighted
  * @retval None
  *
- * Layout (8 rows x 21 cols):
- *   ROCKET SELECT
- *   Ch  Freq
- *   >0  433.0 MHz
- *    1  433.5 MHz
- *    2  434.0 MHz
- *    3  434.5 MHz
+ * Layout (8 rows x 21 cols), channels in two columns of 4:
+ *   ROCKET SELECT  SCAN
+ *   >0 433.00  4 434.00
+ *    1 433.25  5 434.25
+ *    2 433.50 >6 434.50
+ *    3 433.75  7 434.75
+ *
  *   Pkts:123  Age:12s
- *   Hold btn: next ch
+ *   B2/hold B1: next ch
  */
 void DisplayMode_ChannelSelect(void)
 {
@@ -34,17 +34,19 @@ void DisplayMode_ChannelSelect(void)
     Display_DrawTextRowCol(0, 0, RF_Receiver_IsScanning()
                                      ? "ROCKET SELECT  SCAN"
                                      : "ROCKET SELECT");
-    Display_DrawTextRowCol(1, 0, "Ch  Freq");
 
+    /* Two columns of LORA_CHANNEL_COUNT/2 channels each. Frequencies are
+     * fixed-point hundredths of MHz to avoid float printf formatting. */
+    const uint8_t rows = (LORA_CHANNEL_COUNT + 1) / 2;
     for (uint8_t ch = 0; ch < LORA_CHANNEL_COUNT; ch++) {
-        /* Format frequency as fixed-point tenths of MHz to avoid pulling in
-         * float printf formatting. */
-        uint16_t f10 = (uint16_t)(LORA_CHANNEL_FREQ_MHZ(ch) * 10.0f + 0.5f);
-        snprintf(buffer, sizeof(buffer), "%c%u  %u.%u MHz",
+        uint32_t f100 = (uint32_t)(LORA_CHANNEL_FREQ_MHZ(ch) * 100.0f + 0.5f);
+        snprintf(buffer, sizeof(buffer), "%c%u %lu.%02lu",
                  (ch == current) ? '>' : ' ',
                  (unsigned)ch,
-                 (unsigned)(f10 / 10), (unsigned)(f10 % 10));
-        Display_DrawTextRowCol((uint8_t)(2 + ch), 0, buffer);
+                 (unsigned long)(f100 / 100), (unsigned long)(f100 % 100));
+        uint8_t row = (uint8_t)(1 + (ch % rows));
+        uint8_t col = (uint8_t)((ch / rows) * 11);
+        Display_DrawTextRowCol(row, col, buffer);
     }
 
     /* Activity on the current channel */

@@ -48,11 +48,11 @@ void DisplayMode_RFStats(void)
     uint32_t attempts = 0, successes = 0, failures = 0;
     RF_Parser_GetDiagnostics(&attempts, &successes, &failures);
 
-    /* Row 0: title, channel, frequency */
+    /* Row 0: title, channel, frequency (hundredths - 250 kHz channel grid) */
     uint8_t ch = RF_Receiver_GetChannel();
-    uint16_t f10 = (uint16_t)(LORA_CHANNEL_FREQ_MHZ(ch) * 10.0f + 0.5f);
-    snprintf(buffer, sizeof(buffer), "RF STATS   CH%u %u.%u",
-             (unsigned)ch, (unsigned)(f10 / 10), (unsigned)(f10 % 10));
+    uint32_t f100 = (uint32_t)(LORA_CHANNEL_FREQ_MHZ(ch) * 100.0f + 0.5f);
+    snprintf(buffer, sizeof(buffer), "RF STATS  CH%u %lu.%02lu",
+             (unsigned)ch, (unsigned long)(f100 / 100), (unsigned long)(f100 % 100));
     Display_DrawTextRowCol(0, 0, buffer);
 
     /* Row 1: modem configuration */

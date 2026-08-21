@@ -16,14 +16,20 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
-/* Multi-rocket channel plan. Each transmitter is flashed with one channel
- * (LORA_CHANNEL in transmitter mpu_config.h); the receiver retunes at runtime
- * via LoRa_SetChannel(). 500 kHz spacing gives clean separation at 125 kHz
- * bandwidth, and all channels sit in the same SX1268 image-calibration band
- * (430-440 MHz), so no recalibration is needed when hopping. */
-#define LORA_CHANNEL_COUNT      4
+/* Multi-rocket channel plan: 8 channels at 250 kHz spacing, 433.00-434.75
+ * MHz. Sits in the 70cm auxiliary/link segment (433-435 MHz): full
+ * Technician privileges, clear of the 432-433 weak-signal/EME segment and
+ * the 435-438 amateur-satellite segment. 250 kHz spacing leaves one full
+ * signal bandwidth (125 kHz) of guard between adjacent channels, and all
+ * channels sit in the same SX1268 image-calibration band (430-440 MHz), so
+ * no recalibration is needed when hopping.
+ * Each transmitter is flashed with one channel (LORA_CHANNEL, independent
+ * of ROCKET_ID - any airframe can fly on any channel); the receiver retunes
+ * at runtime via LoRa_SetChannel(). Must match the transmitter's plan in
+ * transmitter/firmware/include/mpu_config.h. */
+#define LORA_CHANNEL_COUNT      8
 #define LORA_CHANNEL_BASE_MHZ   433.0f
-#define LORA_CHANNEL_STEP_MHZ   0.5f
+#define LORA_CHANNEL_STEP_MHZ   0.25f
 #define LORA_CHANNEL_FREQ_MHZ(ch) \
     (LORA_CHANNEL_BASE_MHZ + (float)(ch) * LORA_CHANNEL_STEP_MHZ)
 

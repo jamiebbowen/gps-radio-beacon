@@ -313,7 +313,7 @@ int main(void)
     if (rf_initialized) {
       char rf_msg[48];
       uint8_t boot_ch = RF_Receiver_GetChannel();
-      snprintf(rf_msg, sizeof(rf_msg), "RF scan start CH%u %.1fMHz",
+      snprintf(rf_msg, sizeof(rf_msg), "RF scan start CH%u %.2fMHz",
                (unsigned)boot_ch, LORA_CHANNEL_FREQ_MHZ(boot_ch));
       SD_Card_LogEvent(rf_msg);
     }
@@ -508,7 +508,7 @@ int main(void)
         last_rf_packet_time = 0;
         if (sd_card_ok) {
           char ch_msg[48];
-          snprintf(ch_msg, sizeof(ch_msg), "RF manual CH%u %.1fMHz",
+          snprintf(ch_msg, sizeof(ch_msg), "RF manual CH%u %.2fMHz",
                    (unsigned)after, LORA_CHANNEL_FREQ_MHZ(after));
           SD_Card_LogEvent(ch_msg);
         }
@@ -522,7 +522,7 @@ int main(void)
       if (sd_card_ok) {
         char ch_msg[48];
         uint8_t locked_ch = RF_Receiver_GetChannel();
-        snprintf(ch_msg, sizeof(ch_msg), "RF scan locked CH%u %.1fMHz",
+        snprintf(ch_msg, sizeof(ch_msg), "RF scan locked CH%u %.2fMHz",
                  (unsigned)locked_ch, LORA_CHANNEL_FREQ_MHZ(locked_ch));
         /* A lock proves a beacon is on the air; the lazily-created log file
          * may not exist yet (no NAV row before the first position packet) */
@@ -567,7 +567,7 @@ int main(void)
           (void)RF_Receiver_GetNoiseFloor(&nf);
           char nf_msg[48];
           uint8_t ch = RF_Receiver_GetChannel();
-          snprintf(nf_msg, sizeof(nf_msg), "RF NOISE %s CH%u %.1fMHz nf=%ddBm",
+          snprintf(nf_msg, sizeof(nf_msg), "RF NOISE %s CH%u %.2fMHz nf=%ddBm",
                    noise_alert ? "HIGH" : "clear",
                    (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)nf);
           SD_Card_LogEvent(nf_msg);

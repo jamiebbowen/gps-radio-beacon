@@ -38,23 +38,35 @@
 #define BEACON_CALLSIGN "KE0MZS"
 
 // LoRa Configuration for E22-400M33S (SX1268)
-// Multi-rocket support: flash each rocket with a unique LORA_CHANNEL (0-3).
-// The receiver selects the matching channel at runtime on its Rocket Select
-// page. Channel plan (must match receiver inc/lora.h):
-//   CH0 = 433.0 MHz, CH1 = 433.5 MHz, CH2 = 434.0 MHz, CH3 = 434.5 MHz
-// LORA_CHANNEL and ROCKET_ID can be set per rocket from the build command
-// without editing this file:  make flash ROCKET=2  (see Makefile).
+// Multi-rocket channel plan: 8 channels at 250 kHz spacing, 433.00-434.75 MHz.
+//   CH0=433.00 CH1=433.25 CH2=433.50 CH3=433.75
+//   CH4=434.00 CH5=434.25 CH6=434.50 CH7=434.75
+// The plan sits in the 70cm auxiliary/link segment (433-435 MHz): full
+// Technician privileges, clear of the 432-433 weak-signal/EME segment and
+// the 435-438 amateur-satellite segment. 250 kHz spacing leaves one full
+// signal bandwidth (125 kHz) of guard between adjacent channels, and every
+// channel is inside one SX1268 image-calibration band (430-440 MHz).
+// Must match the receiver's plan in receiver/firmware/inc/lora.h.
+//
+// Rocket ID and channel are INDEPENDENT: any airframe can fly on any
+// channel. Set either or both from the build command without editing this
+// file:  make flash ID=3 CHANNEL=5   (see Makefile).
+#define LORA_CHANNEL_COUNT  8
 #ifndef LORA_CHANNEL
-#define LORA_CHANNEL        0           // 0-3, unique per rocket
+#define LORA_CHANNEL        0           // 0-7, frequency slot for this flight
 #endif
-#define LORA_CHANNEL_FREQ(ch) (433.0f + 0.5f * (float)(ch))  // Channel -> MHz
+#define LORA_CHANNEL_FREQ(ch) (433.0f + 0.25f * (float)(ch))  // Channel -> MHz
 
-// Rocket ID, transmitted with the callsign as "CALLSIGN-<id> CH<n>" so the
-// receiver operator can confirm which airframe they are tracking. Stays
-// fixed for the airframe even if the backup-channel jumper moves it to a
-// different frequency (the CH<n> suffix shows the actual active channel).
+#if LORA_CHANNEL < 0 || LORA_CHANNEL >= LORA_CHANNEL_COUNT
+#error "LORA_CHANNEL must be 0..7"
+#endif
+
+// Rocket ID, transmitted with the callsign as "CALLSIGN-<id> CH<n>" and in
+// heartbeats, so the receiver operator can confirm which airframe they are
+// tracking. Identifies the AIRFRAME and never changes with frequency: the
+// CH<n> suffix (and the heartbeat channel field) show the active channel.
 #ifndef ROCKET_ID
-#define ROCKET_ID           LORA_CHANNEL
+#define ROCKET_ID           0
 #endif
 
 // Backup channel jumper: short CHANNEL_JUMPER_PIN to GND before power-on to
@@ -62,8 +74,10 @@
 // rocket off a channel that is occupied at the pad without reflashing.
 // The pin is read once in radio_init() with the internal pull-up enabled:
 // open = primary channel, jumpered to GND = backup channel.
+// Default backup = +4 channels (1 MHz away, wraps), far enough that a noisy
+// primary won't also cover the backup.
 #define CHANNEL_JUMPER_PIN  2                           // Free GPIO on ItsyBitsy M4
-#define LORA_CHANNEL_BACKUP ((LORA_CHANNEL + 2) % 4)    // Override per rocket if desired
+#define LORA_CHANNEL_BACKUP ((LORA_CHANNEL + 4) % LORA_CHANNEL_COUNT)
 
 // Primary-channel frequency, for reference only: radio.cpp resolves the
 // active channel (primary vs backup jumper) at boot.

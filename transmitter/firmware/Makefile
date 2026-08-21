@@ -11,13 +11,28 @@ ARDUINO_CLI = arduino-cli
 # Build directory
 BUILD_DIR = build
 
-# Per-rocket build: `make flash ROCKET=2` compiles with LORA_CHANNEL=2 and
-# ROCKET_ID=2 (see include/mpu_config.h) without editing any source. Each
-# rocket gets its own build dir so objects from one channel never leak into
-# another rocket's binary. Omit ROCKET to build with the source defaults.
+# Per-airframe build: rocket ID and channel are independent (any ID can fly
+# on any channel). Set either or both without editing any source:
+#   make flash ID=3 CHANNEL=5   -> -DROCKET_ID=3 -DLORA_CHANNEL=5
+#   make flash CHANNEL=5        -> only the channel, ID keeps its default
+# Channels are 0-7 (433.00-434.75 MHz, 250 kHz spacing; see mpu_config.h).
+# ROCKET=n is kept as shorthand for ID=n CHANNEL=n.
+# Each ID/channel combo gets its own build dir so objects from one build
+# never leak into another airframe's binary.
 ifdef ROCKET
-BUILD_DIR = build/rocket$(ROCKET)
-BUILD_PROPS = --build-property "compiler.cpp.extra_flags=-DLORA_CHANNEL=$(ROCKET) -DROCKET_ID=$(ROCKET)"
+ID ?= $(ROCKET)
+CHANNEL ?= $(ROCKET)
+endif
+TX_DEFS =
+ifdef ID
+TX_DEFS += -DROCKET_ID=$(ID)
+endif
+ifdef CHANNEL
+TX_DEFS += -DLORA_CHANNEL=$(CHANNEL)
+endif
+ifneq ($(strip $(TX_DEFS)),)
+BUILD_DIR = build/id$(if $(ID),$(ID),d)-ch$(if $(CHANNEL),$(CHANNEL),d)
+BUILD_PROPS = --build-property "compiler.cpp.extra_flags=$(strip $(TX_DEFS))"
 endif
 
 # The sketch is firmware.ino (arduino-cli compiles every .cpp/.c in this
@@ -105,7 +120,9 @@ help:
 	@echo "  make flash-direct       - Build and upload (recommended)"
 	@echo "  make monitor            - View serial output"
 	@echo "  make PORT=/dev/ttyACM1 flash-direct  - Upload to specific port"
-	@echo "  make flash ROCKET=2     - Build/flash rocket 2 (channel 2, ID 2)"
+	@echo "  make flash ID=3 CHANNEL=5  - Rocket ID 3 transmitting on CH5 (434.25)"
+	@echo "  make flash CHANNEL=2       - Default ID, CH2 (433.50)"
+	@echo "  make flash ROCKET=2        - Shorthand for ID=2 CHANNEL=2"
 	@echo ""
 	@echo "Note: ItsyBitsy M4 uses native USB, no external programmer needed"
 
