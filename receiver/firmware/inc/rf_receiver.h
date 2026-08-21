@@ -58,6 +58,12 @@ uint8_t RF_Receiver_SetChannel(uint8_t channel);
 uint8_t RF_Receiver_GetChannel(void);
 uint8_t RF_Receiver_NextChannel(void);  /* Cycle to next channel; returns the now-active channel */
 
+/* Boot-time channel scan: hop channels until a CRC-valid packet is heard */
+void    RF_Receiver_StartScan(void);
+void    RF_Receiver_StopScan(void);     /* Cancel (e.g. manual channel pick) */
+uint8_t RF_Receiver_IsScanning(void);
+uint8_t RF_Receiver_ScanUpdate(void);   /* Poll from main loop; 1 = just locked */
+
 /* Timing calibration functions */
 void RF_Receiver_SetBaudFudgeFactor(uint16_t fudge_factor);
 uint16_t RF_Receiver_GetBaudFudgeFactor(void);

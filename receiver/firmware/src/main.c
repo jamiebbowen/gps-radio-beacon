@@ -54,6 +54,8 @@
 #include "button.h"
 #include "sd_card.h"
 #include "sd_diskio.h"
+#include "lora.h"      /* LORA_CHANNEL_FREQ_MHZ for log entries */
+#include "rf_parser.h" /* RF_PARSER_MAX_CALLSIGN_LEN for callsign logging */
 #include "display_modes/sd_card_mode.h"
 
 /* Note: distance/bearing math lives in math_utils.c and button debouncing
@@ -256,6 +258,10 @@ int main(void)
     Display_DrawTextRowCol(5, 1, "LoRa 433MHz");
     Display_Update();
     HAL_Delay(1000);
+    
+    /* Scan all rocket channels until the first beacon is heard. Cancelled
+     * automatically by a manual channel pick on the Rocket Select page. */
+    RF_Receiver_StartScan();
   }
   
   /* Initialize button */
@@ -302,6 +308,15 @@ int main(void)
 
     /* Log file is created lazily on the first RF packet (see
      * SD_Card_LogNavigation in sd_card.c) so no-RF boots leave no artifact. */
+
+    /* Record the RF starting point (boot scan begins at this channel) */
+    if (rf_initialized) {
+      char rf_msg[48];
+      uint8_t boot_ch = RF_Receiver_GetChannel();
+      snprintf(rf_msg, sizeof(rf_msg), "RF scan start CH%u %.1fMHz",
+               (unsigned)boot_ch, LORA_CHANNEL_FREQ_MHZ(boot_ch));
+      SD_Card_LogEvent(rf_msg);
+    }
 
     /* Load last known beacon location so navigation works immediately on boot */
     float saved_lat = 0.0f, saved_lon = 0.0f, saved_alt = 0.0f;
@@ -482,6 +497,8 @@ int main(void)
       }
     }
     if (cycle_channel) {
+      /* A manual pick overrides the boot scan */
+      RF_Receiver_StopScan();
       uint8_t before = RF_Receiver_GetChannel();
       uint8_t after = RF_Receiver_NextChannel();
       if (after != before) {
@@ -489,8 +506,26 @@ int main(void)
         has_valid_remote_gps = 0;
         has_last_good_remote_gps = 0;
         last_rf_packet_time = 0;
+        if (sd_card_ok) {
+          char ch_msg[48];
+          snprintf(ch_msg, sizeof(ch_msg), "RF manual CH%u %.1fMHz",
+                   (unsigned)after, LORA_CHANNEL_FREQ_MHZ(after));
+          SD_Card_LogEvent(ch_msg);
+        }
       }
       mode_change_time = HAL_GetTick();
+      force_display_update = 1;
+    }
+
+    /* Drive the boot channel scan; returns 1 the moment a packet locks it */
+    if (rf_initialized && RF_Receiver_ScanUpdate()) {
+      if (sd_card_ok) {
+        char ch_msg[48];
+        uint8_t locked_ch = RF_Receiver_GetChannel();
+        snprintf(ch_msg, sizeof(ch_msg), "RF scan locked CH%u %.1fMHz",
+                 (unsigned)locked_ch, LORA_CHANNEL_FREQ_MHZ(locked_ch));
+        SD_Card_LogEvent(ch_msg);
+      }
       force_display_update = 1;
     }
 
@@ -613,6 +648,28 @@ int main(void)
           last_rf_packet_time = HAL_GetTick();
           rf_packet_count++;
           /* LED pulse handled at top of loop from last_rf_packet_time */
+          
+          /* Log the transmitting rocket's ID once per change: the beacon's
+           * periodic callsign packet is "CALL-<id> CH<n>" and the parser
+           * retains the last one heard across packets. */
+          if (sd_card_ok) {
+            static char last_logged_callsign[RF_PARSER_MAX_CALLSIGN_LEN] = "";
+            char heard_callsign[RF_PARSER_MAX_CALLSIGN_LEN] = "";
+            GPS_Data cs_scratch;
+            if (RF_Receiver_GetParsedData(&cs_scratch, heard_callsign,
+                                          sizeof(heard_callsign), NULL) &&
+                heard_callsign[0] != '\0' &&
+                strcmp(heard_callsign, last_logged_callsign) != 0) {
+              char cs_msg[48];
+              snprintf(cs_msg, sizeof(cs_msg), "CALLSIGN %s rx-ch CH%u",
+                       heard_callsign, (unsigned)RF_Receiver_GetChannel());
+              if (SD_Card_LogEvent(cs_msg) == SD_CARD_OK) {
+                strncpy(last_logged_callsign, heard_callsign,
+                        sizeof(last_logged_callsign) - 1);
+                last_logged_callsign[sizeof(last_logged_callsign) - 1] = '\0';
+              }
+            }
+          }
         }
       } else {
         /* No more packets waiting - break early */

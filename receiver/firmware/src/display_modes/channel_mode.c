@@ -31,7 +31,9 @@ void DisplayMode_ChannelSelect(void)
     char buffer[32];
     uint8_t current = RF_Receiver_GetChannel();
 
-    Display_DrawTextRowCol(0, 0, "ROCKET SELECT");
+    Display_DrawTextRowCol(0, 0, RF_Receiver_IsScanning()
+                                     ? "ROCKET SELECT  SCAN"
+                                     : "ROCKET SELECT");
     Display_DrawTextRowCol(1, 0, "Ch  Freq");
 
     for (uint8_t ch = 0; ch < LORA_CHANNEL_COUNT; ch++) {

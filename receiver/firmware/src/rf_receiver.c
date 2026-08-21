@@ -15,6 +15,13 @@
 /* Private defines */
 #define RF_ASCII_BUFFER_SIZE       128
 
+/* Channel-scan dwell time. Must exceed the transmitter's slowest pad-state
+ * packet interval (PRE_LAUNCH_INTERVAL_SEC = 5 s) so a beacon with GPS lock
+ * cannot slip between hops. A beacon with NO fix only sends its callsign
+ * every 5 min, so the scan may cycle for a while - that is expected; it
+ * locks on the first CRC-valid packet from any channel. */
+#define RF_SCAN_DWELL_MS           6500U
+
 /* Private variables */
 static SPI_HandleTypeDef hspi_lora;
 /* DMA handles are attached to hspi_lora so lora.c can issue HAL_SPI_Receive_DMA
@@ -37,6 +44,11 @@ static LoRa_Packet_t last_packet;
 static int16_t last_rssi = 0;
 static int8_t last_snr = 0;
 static uint32_t last_packet_time = 0;  /* Timestamp of last valid packet */
+
+/* Channel-scan state */
+static uint8_t scan_active = 0;
+static uint32_t scan_dwell_start = 0;
+static uint32_t scan_dwell_pkt_count = 0;
 
 /* Private function prototypes */
 static void RF_SPI_Init(void);
@@ -532,6 +544,64 @@ uint8_t RF_Receiver_NextChannel(void)
   uint8_t next = (uint8_t)((LoRa_GetChannel() + 1) % LORA_CHANNEL_COUNT);
   (void)RF_Receiver_SetChannel(next);
   return LoRa_GetChannel();
+}
+
+/**
+ * @brief Start scanning across all rocket channels
+ * @note The scan dwells RF_SCAN_DWELL_MS per channel starting from the
+ *       current one, hopping until any CRC-valid LoRa packet is received.
+ *       Poll RF_Receiver_ScanUpdate() from the main loop to drive it.
+ */
+void RF_Receiver_StartScan(void)
+{
+  scan_active = 1;
+  scan_dwell_start = HAL_GetTick();
+  scan_dwell_pkt_count = rf_lora_packets_received;
+}
+
+/**
+ * @brief Stop the channel scan (e.g. when the user picks a channel manually)
+ */
+void RF_Receiver_StopScan(void)
+{
+  scan_active = 0;
+}
+
+/**
+ * @brief Check whether a channel scan is in progress
+ */
+uint8_t RF_Receiver_IsScanning(void)
+{
+  return scan_active;
+}
+
+/**
+ * @brief Drive the channel scan; call once per main-loop iteration
+ * @retval 1 the moment the scan locks onto a channel (a packet arrived),
+ *         0 while still scanning or when no scan is active
+ */
+uint8_t RF_Receiver_ScanUpdate(void)
+{
+  if (!scan_active) {
+    return 0;
+  }
+  
+  /* Any CRC-valid packet on the current channel ends the scan. Uses the
+   * raw LoRa packet counter (not the parser) so binary GPS, fused and
+   * callsign packets all count. */
+  if (rf_lora_packets_received > scan_dwell_pkt_count) {
+    scan_active = 0;
+    return 1;
+  }
+  
+  /* Dwell expired with nothing heard: hop to the next channel */
+  if (HAL_GetTick() - scan_dwell_start >= RF_SCAN_DWELL_MS) {
+    (void)RF_Receiver_NextChannel();
+    scan_dwell_start = HAL_GetTick();
+    scan_dwell_pkt_count = rf_lora_packets_received;
+  }
+  
+  return 0;
 }
 
 /**
