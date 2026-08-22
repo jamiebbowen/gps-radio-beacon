@@ -23,10 +23,12 @@ typedef struct __attribute__((packed)) {
 #define PACKET_TYPE_FUSED       0x04  // EKF-fused position + velocity (TX nav module)
 #define PACKET_TYPE_HEARTBEAT   0x05  // No-fix keepalive (see HeartbeatPacket_t)
 
-/* Heartbeat: 7 bytes. The transmitter sends this instead of a GPS packet
+/* Heartbeat: 8 bytes. The transmitter sends this instead of a GPS packet
  * when it has no transmittable fix (no fix / <4 sats), so the channel scan
  * can lock and the operator can see the beacon is alive on the pad. Must
- * stay in sync with the transmitter's copy of this header. */
+ * stay in sync with the transmitter's copy of this header. The receiver
+ * also accepts the older 7-byte layout (no gps_health) from beacons on
+ * previous firmware; gps_health then decodes as HB_GPS_UNKNOWN. */
 typedef struct __attribute__((packed)) {
     uint8_t  packet_type;   // PACKET_TYPE_HEARTBEAT
     uint8_t  rocket_id;     // ROCKET_ID of the airframe
@@ -34,8 +36,22 @@ typedef struct __attribute__((packed)) {
     uint8_t  satellites;    // Satellites currently tracked
     uint8_t  fix_quality;   // GGA fix quality (0 = none)
     uint16_t uptime_s;      // Seconds since beacon boot (saturates at 65535)
+    uint8_t  gps_health;    // GPS receiver health, see HB_GPS_* below
 } HeartbeatPacket_t;
-#define HEARTBEAT_PACKET_SIZE   7
+#define HEARTBEAT_PACKET_SIZE     8
+#define HEARTBEAT_PACKET_SIZE_V1  7   // legacy layout without gps_health
+
+/* gps_health encoding: low nibble = state, high nibble = watchdog recovery
+ * attempts (0-3). Answers the pad question "is the GPS still ACQUIRING, or
+ * is the wiring/module dead?" - satellites=0 alone can't tell those apart. */
+#define HB_GPS_UNKNOWN     0   // old TX firmware (byte absent, decoded as 0)
+#define HB_GPS_NO_DATA     1   // GPS UART silent: wiring/power/module fault
+#define HB_GPS_NO_NMEA     2   // bytes arriving but no parseable NMEA (baud?)
+#define HB_GPS_ACQUIRING   3   // NMEA flowing, waiting for a fix - normal
+#define HB_GPS_STATE(h)    ((uint8_t)((h) & 0x0F))
+#define HB_GPS_RESETS(h)   ((uint8_t)(((h) >> 4) & 0x0F))
+#define HB_GPS_HEALTH(state, resets) \
+    ((uint8_t)((((resets) & 0x0F) << 4) | ((state) & 0x0F)))
 
 // Flags byte bit definitions
 #define FLAG_LAUNCH_DETECTED    0x80  // Bit 7: 1 = launched, 0 = on ground

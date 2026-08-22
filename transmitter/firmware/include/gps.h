@@ -47,6 +47,10 @@ void gps_init(void);
 uint8_t gps_poll_rx(void);
 const GPSCoordinates_t* gps_get_current_coordinates(void);
 
+// GPS receiver health for the heartbeat (HB_GPS_* in packet_format.h):
+// distinguishes "still acquiring" from "UART silent" / "data garbled".
+uint8_t gps_get_health(void);
+
 // Convert NMEA coordinate to decimal degrees
 float gps_nmea_to_decimal(const char* nmea_coord, char direction);
 

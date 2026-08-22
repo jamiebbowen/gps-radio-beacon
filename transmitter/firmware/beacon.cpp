@@ -282,6 +282,10 @@ uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t syste
     hb.fix_quality = coords ? coords->fix_quality : 0;
     hb.uptime_s    = (system_time_seconds > 65535UL) ? 65535U
                                                      : (uint16_t)system_time_seconds;
+    /* Tells the receiver WHY there is no fix: still acquiring (normal) vs
+     * GPS UART silent / garbled (wiring, power, baud - go check the rocket
+     * before it flies). Sats=0 alone cannot distinguish those. */
+    hb.gps_health  = gps_get_health();
     
     if (!transmit_fast) {
         radio_enable();

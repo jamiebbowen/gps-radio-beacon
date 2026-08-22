@@ -550,12 +550,18 @@ int main(void)
         int16_t hb_rssi;
         int8_t  hb_snr;
         RF_Receiver_GetSignalQuality(&hb_rssi, &hb_snr);
-        char hb_msg[64];
+        /* gps= verdict: acq (acquiring, normal) / SILENT (UART dead - wiring)
+         * / GARBLED (bytes but no NMEA) / unk (pre-health TX firmware) */
+        static const char *hb_gps_names[] = {"unk", "SILENT", "GARBLED", "acq"};
+        uint8_t hb_gps = HB_GPS_STATE(hb.gps_health);
+        char hb_msg[80];
         snprintf(hb_msg, sizeof(hb_msg),
-                 "HEARTBEAT id=%u CH%u sats=%u fix=%u up=%us rssi=%d",
+                 "HEARTBEAT id=%u CH%u sats=%u fix=%u up=%us rssi=%d gps=%s rst=%u",
                  (unsigned)hb.rocket_id, (unsigned)hb.channel,
                  (unsigned)hb.satellites, (unsigned)hb.fix_quality,
-                 (unsigned)hb.uptime_s, (int)hb_rssi);
+                 (unsigned)hb.uptime_s, (int)hb_rssi,
+                 (hb_gps <= HB_GPS_ACQUIRING) ? hb_gps_names[hb_gps] : "?",
+                 (unsigned)HB_GPS_RESETS(hb.gps_health));
         SD_Card_EnsureLogFile();
         SD_Card_LogEvent(hb_msg);
       }

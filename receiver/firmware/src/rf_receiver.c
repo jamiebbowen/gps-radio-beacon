@@ -257,13 +257,17 @@ uint8_t RF_Receiver_DataAvailable(void)
           rf_header_matches++;
           last_packet_time = HAL_GetTick();
         }
-      } else if (last_packet.length == HEARTBEAT_PACKET_SIZE
+      } else if ((last_packet.length == HEARTBEAT_PACKET_SIZE
+               || last_packet.length == HEARTBEAT_PACKET_SIZE_V1)
               && last_packet.data[0] == PACKET_TYPE_HEARTBEAT) {
         /* No-fix keepalive. Deliberately does NOT set rf_packet_ready or
          * last_packet_time: a heartbeat proves the link is alive, not that
          * position data is fresh. It still counts toward
-         * rf_lora_packets_received, which is what locks the channel scan. */
-        memcpy(&last_heartbeat, last_packet.data, sizeof(last_heartbeat));
+         * rf_lora_packets_received, which is what locks the channel scan.
+         * V1 (7-byte) heartbeats from older beacons lack the trailing
+         * gps_health byte; zero-fill decodes it as HB_GPS_UNKNOWN. */
+        memset(&last_heartbeat, 0, sizeof(last_heartbeat));
+        memcpy(&last_heartbeat, last_packet.data, last_packet.length);
         heartbeat_pending = 1;
         last_heartbeat_time = HAL_GetTick();
       }

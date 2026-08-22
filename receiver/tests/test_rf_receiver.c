@@ -125,6 +125,7 @@ static void inject_heartbeat(uint8_t rocket_id, uint8_t channel,
         .satellites  = sats,
         .fix_quality = 0,
         .uptime_s    = uptime_s,
+        .gps_health  = HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0),
     };
     memset(&fake_pkt, 0, sizeof(fake_pkt));
     memcpy(fake_pkt.data, &hb, sizeof(hb));
@@ -132,6 +133,16 @@ static void inject_heartbeat(uint8_t rocket_id, uint8_t channel,
     fake_pkt.rssi = -87;
     fake_pkt.snr = 6;
     fake_pkt_pending = 1;
+}
+
+/* Legacy 7-byte heartbeat (pre-gps_health TX firmware) */
+static void inject_heartbeat_v1(uint8_t rocket_id, uint8_t channel)
+{
+    inject_heartbeat(rocket_id, channel, 2, 99);
+    /* Poison the byte beyond the V1 length: the receiver must never read
+     * it (zero-fill), or a stale radio buffer would decode as a verdict. */
+    fake_pkt.data[HEARTBEAT_PACKET_SIZE_V1] = 0xAB;
+    fake_pkt.length = HEARTBEAT_PACKET_SIZE_V1;
 }
 
 static void put_i32_le(uint8_t *buf, int32_t v)
@@ -200,6 +211,8 @@ TEST(test_heartbeat_lifecycle)
     CHECK(RF_Receiver_GetHeartbeat(&hb) == 1);
     CHECK(hb.rocket_id == 3 && hb.channel == 5 && hb.satellites == 7);
     CHECK(hb.uptime_s == 42);
+    CHECK(HB_GPS_STATE(hb.gps_health) == HB_GPS_ACQUIRING);
+    CHECK(HB_GPS_RESETS(hb.gps_health) == 0);
     CHECK(RF_Receiver_GetHeartbeat(&hb) == 0);
 
     /* Non-consuming getter keeps returning it, with a growing age */
@@ -217,6 +230,17 @@ TEST(test_heartbeat_lifecycle)
     /* Channel switch discards the old rocket's heartbeat */
     CHECK(RF_Receiver_NextChannel() == 1);
     CHECK(RF_Receiver_GetLastHeartbeat(&hb, &age_ms) == 0);
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+
+    /* Legacy 7-byte heartbeat (old TX firmware): still accepted, and the
+     * absent gps_health byte decodes as UNKNOWN - never as leftover bytes
+     * from whatever the radio buffer held before. */
+    inject_heartbeat_v1(4, 6);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&hb) == 1);
+    CHECK(hb.rocket_id == 4 && hb.channel == 6);
+    CHECK(hb.uptime_s == 99);
+    CHECK(hb.gps_health == HB_GPS_UNKNOWN);
     CHECK(RF_Receiver_SetChannel(0) == RF_OK);
 }
 

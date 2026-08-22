@@ -432,9 +432,19 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
       /* Link is live (heartbeats), just no position yet */
       snprintf(narrow, sizeof(narrow), "%s", LoRa_QualityLabel(rssi, snr));
       Display_DrawTextRowCol(4, 0, narrow);
-      snprintf(narrow, sizeof(narrow), "HB R%u CH%u",
-               (unsigned)hb.rocket_id, (unsigned)hb.channel);
-      Display_DrawTextRowCol(5, 0, narrow);
+      /* A TX-side GPS fault outranks the rocket/channel id on the one row
+       * available: it's the difference between "wait for sats" and "get
+       * the rocket off the pad and check the GPS wiring". */
+      uint8_t hb_gps = HB_GPS_STATE(hb.gps_health);
+      if (hb_gps == HB_GPS_NO_DATA) {
+        Display_DrawTextRowCol(5, 0, "GPS SILENT!");   /* 13-col row cap */
+      } else if (hb_gps == HB_GPS_NO_NMEA) {
+        Display_DrawTextRowCol(5, 0, "GPS GARBLED!");
+      } else {
+        snprintf(narrow, sizeof(narrow), "HB R%u CH%u",
+                 (unsigned)hb.rocket_id, (unsigned)hb.channel);
+        Display_DrawTextRowCol(5, 0, narrow);
+      }
     } else if (RF_Receiver_IsScanning()) {
       /* Boot scan in progress: a full lap over 8 channels takes ~52 s, so
        * without this the screen reads "No signal" for up to a minute while
@@ -517,6 +527,31 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
       snprintf(wide, sizeof(wide), "RSSI %d SNR %+d",
                (int)hb_rssi, (int)hb_snr);
       Display_DrawTextRowCol(5, 0, wide);
+      /* Row 6: TX GPS health verdict - the whole reason to stare at this
+       * screen on the pad. "acquiring" = normal cold start, be patient;
+       * SILENT/garbled = hardware problem the sats will never fix. The
+       * rst:N suffix counts TX watchdog recovery resets. */
+      {
+        uint8_t hb_gps = HB_GPS_STATE(hb.gps_health);
+        uint8_t resets = HB_GPS_RESETS(hb.gps_health);
+        if (hb_gps == HB_GPS_NO_DATA) {
+          snprintf(wide, sizeof(wide), "GPS SILENT-chk wire");
+        } else if (hb_gps == HB_GPS_NO_NMEA) {
+          snprintf(wide, sizeof(wide), "GPS data garbled");
+        } else if (hb_gps == HB_GPS_ACQUIRING) {
+          snprintf(wide, sizeof(wide), "GPS ok, acquiring");
+        } else {
+          wide[0] = '\0';   /* old TX firmware: no verdict to show */
+        }
+        if (wide[0] != '\0') {
+          if (resets > 0) {
+            size_t len = strlen(wide);
+            snprintf(wide + len, sizeof(wide) - len, " rst:%u",
+                     (unsigned)resets);
+          }
+          Display_DrawTextRowCol(6, 0, wide);
+        }
+      }
     } else if (RF_Receiver_IsScanning()) {
       uint32_t f100 = (uint32_t)(LORA_CHANNEL_FREQ_MHZ(RF_Receiver_GetChannel())
                                  * 100.0f + 0.5f);

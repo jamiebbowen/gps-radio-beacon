@@ -1,5 +1,6 @@
 #include "include/gps.h"
 #include "include/nmea_fields.h"
+#include "include/packet_format.h"
 #include <Arduino.h>
 #include <string.h>
 #include <stdio.h>
@@ -24,6 +25,20 @@ static GPSCoordinates_t current_coords = {
     "0",    // satellites
     "0"     // altitude
 };
+
+/* GPS-health bookkeeping for the heartbeat's gps_health byte. Timestamps of
+ * 0 mean "never since boot", which millis()-0 turns into the boot age - so a
+ * GPS that was dead from power-on is reported without any special casing.
+ * gps_recovery_attempts is shared with the watchdog in gps_poll_rx(). */
+static uint32_t gps_last_byte_ms = 0;      // last UART byte received
+static uint32_t gps_last_sentence_ms = 0;  // last recognizable GGA/RMC
+static uint8_t  gps_recovery_attempts = 0; // watchdog resets issued
+
+/* Grace periods before declaring a fault. The module emits NMEA in 1 Hz
+ * bursts, so multi-second silence is already abnormal; kept well below the
+ * 5 s heartbeat interval so the very first heartbeat carries a verdict. */
+#define GPS_HEALTH_SILENT_MS   3000UL   // no bytes at all -> wiring/power
+#define GPS_HEALTH_NO_NMEA_MS  5000UL   // bytes but no GGA/RMC -> baud/noise
 
 // Define states for NMEA parsing state machine
 typedef enum {
@@ -69,6 +84,30 @@ void gps_init(void) {
     delay(10);
 }
 
+/**
+ * Report GPS receiver health for the no-fix heartbeat.
+ *
+ * Distinguishes the three no-fix situations an operator at the pad cannot
+ * tell apart from "sats: 0" alone:
+ *   HB_GPS_NO_DATA   - UART totally silent: broken wire, no power, dead module
+ *   HB_GPS_NO_NMEA   - bytes arriving but nothing parses: baud mismatch/noise
+ *   HB_GPS_ACQUIRING - sentences flowing, just no fix yet: be patient
+ * The high nibble carries the watchdog's recovery-reset count (0-3).
+ */
+uint8_t gps_get_health(void) {
+    uint32_t now = millis();
+    uint8_t state;
+    if (now - gps_last_byte_ms > GPS_HEALTH_SILENT_MS) {
+        state = HB_GPS_NO_DATA;
+    } else if (now - gps_last_sentence_ms > GPS_HEALTH_NO_NMEA_MS) {
+        state = HB_GPS_NO_NMEA;
+    } else {
+        state = HB_GPS_ACQUIRING;
+    }
+    uint8_t resets = (gps_recovery_attempts > 15) ? 15 : gps_recovery_attempts;
+    return HB_GPS_HEALTH(state, resets);
+}
+
 // Poll for GPS data and extract lat/lon using buffer-based approach
 // Returns number of bytes processed, 0 if none
 uint8_t gps_poll_rx(void) {
@@ -84,7 +123,6 @@ uint8_t gps_poll_rx(void) {
     static uint32_t last_byte_count = 0;
     static uint32_t last_valid_time = 0;
     static uint32_t last_byte_time = 0;
-    static uint8_t gps_recovery_attempts = 0;
     static uint8_t watchdog_initialized = 0;
 
     flush_uart_buffer();
@@ -103,6 +141,7 @@ uint8_t gps_poll_rx(void) {
     if (byte_count != last_byte_count) {
         last_byte_time = current_time;
         last_byte_count = byte_count;
+        gps_last_byte_ms = current_time;   // health: UART is alive
     }
     
     // Track when we last had valid GPS
@@ -243,6 +282,11 @@ uint8_t gps_poll_rx(void) {
                  strncmp(nmea_buffer, "$GNRMC", 6) == 0 ||
                  strncmp(nmea_buffer, "$GPGGA", 6) == 0 || 
                  strncmp(nmea_buffer, "$GPRMC", 6) == 0) {
+            /* Health: a recognizable NMEA sentence arrived, fix or not.
+             * Recorded BEFORE any validity checks - "the GPS is talking
+             * sense" is exactly what distinguishes a cold module still
+             * acquiring from a broken wire or a baud-rate mismatch. */
+            gps_last_sentence_ms = millis();
             uint8_t is_rmc = (nmea_buffer[3] == 'R'); // Check if RMC
 
             /* Extract fields by ABSOLUTE position (see nmea_fields.h).
