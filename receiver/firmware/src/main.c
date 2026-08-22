@@ -241,14 +241,24 @@ int main(void)
     }
   }
   
-  /* Initialize RF receiver */
-  uint8_t rf_result = RF_Receiver_Init();
+  /* Initialize RF receiver. Retry before giving up: the SX1268 bring-up
+   * (reset timing, BUSY, TCXO settle) can fail transiently at power-on,
+   * and a single failed attempt used to leave the unit deaf for the whole
+   * session - "No signal" with the beacon transmitting a metre away -
+   * until a power cycle. Same rationale as the SD mount's 3 attempts. */
+  uint8_t rf_result = RF_ERROR;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) HAL_Delay(250);  /* let the radio settle */
+    rf_result = RF_Receiver_Init();
+    if (rf_result == RF_OK) break;
+  }
   rf_initialized = (rf_result == RF_OK) ? 1 : 0;
   if (!rf_initialized) {
     Display_Clear();
     char err_msg[32];
     snprintf(err_msg, sizeof(err_msg), "RF Init Err: 0x%02X", rf_result);
     Display_DrawTextRowCol(3, 1, err_msg);
+    Display_DrawTextRowCol(4, 1, "retrying in bg...");
     Display_Update();
     HAL_Delay(3000);
   } else {
@@ -524,6 +534,25 @@ int main(void)
       }
       mode_change_time = HAL_GetTick();
       force_display_update = 1;
+    }
+
+    /* Radio dead since boot: keep retrying init every 10 s instead of
+     * demanding a power cycle. A recovery mid-session behaves like a fresh
+     * boot: start the channel scan and leave a durable note on the card. */
+    if (!rf_initialized) {
+      static uint32_t last_rf_reinit_ms = 0;
+      if (HAL_GetTick() - last_rf_reinit_ms >= 10000u) {
+        last_rf_reinit_ms = HAL_GetTick();
+        if (RF_Receiver_Init() == RF_OK) {
+          rf_initialized = 1;
+          RF_Receiver_StartScan();
+          if (sd_card_ok) {
+            SD_Card_EnsureLogFile();
+            SD_Card_LogError("RF radio recovered by runtime re-init");
+          }
+          force_display_update = 1;
+        }
+      }
     }
 
     /* Drive the boot channel scan; returns 1 the moment a packet locks it */

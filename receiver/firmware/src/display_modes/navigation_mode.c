@@ -20,6 +20,7 @@
 #include "compass.h"
 #include "rf_receiver.h"
 #include "lora.h"  /* LORA_FREQUENCY_MHZ, LORA_TX_POWER_DBM - for theoretical max range */
+#include "globals.h"  /* rf_initialized - to show "RF DEAD" over "No signal" */
 
 extern Compass_Data compass_data;
 
@@ -456,6 +457,11 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
                (unsigned)RF_Receiver_GetChannel(),
                (unsigned long)(f100 / 100), (unsigned long)(f100 % 100));
       Display_DrawTextRowCol(5, 0, narrow);
+    } else if (!rf_initialized) {
+      /* "No signal" would be a lie: the radio never came up, nothing can
+       * be heard. Main retries init every 10 s; this clears on success. */
+      Display_DrawTextRowCol(4, 0, "RF DEAD");
+      Display_DrawTextRowCol(5, 0, "reinit...");
     } else {
       Display_DrawTextRowCol(4, 0, "No signal");
       Display_DrawTextRowCol(5, 0, "");
@@ -559,6 +565,8 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
                (unsigned)RF_Receiver_GetChannel(),
                (unsigned long)(f100 / 100), (unsigned long)(f100 % 100));
       Display_DrawTextRowCol(4, 0, wide);
+    } else if (!rf_initialized) {
+      Display_DrawTextRowCol(4, 0, "RF DEAD - reinit...");
     } else {
       Display_DrawTextRowCol(4, 0, "No RF Data");
     }
