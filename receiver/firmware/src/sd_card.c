@@ -380,13 +380,25 @@ SD_Card_Status SD_Card_LogCompass(float heading, int16_t x, int16_t y, int16_t z
     return SD_Card_WriteLogEntry(log_buffer);
 }
 
+/* EVENT/ERROR entries sync immediately, like nav rows. Only nav rows used
+ * to sync, so a no-fix pad session (scan lock + heartbeats, never a nav
+ * row) kept every event in the littlefs cache and power-off reverted the
+ * file to its last-synced state: a header and nothing else. Field cards
+ * showed exactly that - header-only L000N.TXT files from sessions where
+ * the beacon was demonstrably heard (the log file is only created on
+ * proof of beacon). Events are rare (<=1 per 5 s heartbeat), so the
+ * ~50 ms commit is trivial. */
 SD_Card_Status SD_Card_LogEvent(const char *msg)
 {
     if (msg == NULL || !sd_initialized) return SD_CARD_ERROR;
     char ts[32];
     SD_Card_GetTimestamp(ts, sizeof(ts));
     snprintf(log_buffer, sizeof(log_buffer), "%s,EVENT,%s\n", ts, msg);
-    return SD_Card_WriteLogEntry(log_buffer);
+    SD_Card_Status status = SD_Card_WriteLogEntry(log_buffer);
+    if (status == SD_CARD_OK && log_file_open) {
+        lfs_file_sync(&lfs, &log_file);
+    }
+    return status;
 }
 
 SD_Card_Status SD_Card_LogError(const char *msg)
@@ -395,7 +407,11 @@ SD_Card_Status SD_Card_LogError(const char *msg)
     char ts[32];
     SD_Card_GetTimestamp(ts, sizeof(ts));
     snprintf(log_buffer, sizeof(log_buffer), "%s,ERROR,%s\n", ts, msg);
-    return SD_Card_WriteLogEntry(log_buffer);
+    SD_Card_Status status = SD_Card_WriteLogEntry(log_buffer);
+    if (status == SD_CARD_OK && log_file_open) {
+        lfs_file_sync(&lfs, &log_file);
+    }
+    return status;
 }
 
 SD_Card_Status SD_Card_Flush(void)
