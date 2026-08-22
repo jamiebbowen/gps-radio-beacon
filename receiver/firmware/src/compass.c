@@ -915,10 +915,20 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
    *   mag_cal=3 → fully calibrated, most accurate
    * Wave the device in a figure-8 pattern after power-up to calibrate. */
   uint8_t mag_cal = compass_debug.calib_status & 0x03;
-  /* Trust heading if either (a) the BNO055's live calibration status has
-   * reached mag_cal >= 1, or (b) we've previously loaded known-good offsets
-   * from SD. See compass_cal_restored notes above. */
-  compass_data_ptr->heading_valid = (mag_cal >= 1 || compass_cal_restored) ? 1 : 0;
+  /* Latch calibration once PROVEN this session. CALIB_STAT is a live
+   * confidence score, not a validity flag: the fusion decays it back to 0
+   * when the device sits motionless, and the calibration save path's
+   * CONFIG<->NDOF round-trip (Compass_GetCalibrationData) resets it
+   * outright - while the offsets stay loaded and the heading stays good.
+   * Without the latch, "CAL" reappears whenever the unit is set down
+   * right after a successful figure-8, prompting pointless re-calibration.
+   * The live level remains visible via compass_data.mag_cal. */
+  static uint8_t compass_cal_proven = 0;
+  if (mag_cal >= 1) compass_cal_proven = 1;
+  /* Trust heading if (a) calibration reached mag_cal >= 1 at any point this
+   * boot, or (b) known-good offsets were restored from SD. */
+  compass_data_ptr->heading_valid =
+      (compass_cal_proven || compass_cal_restored) ? 1 : 0;
   compass_data_ptr->mag_cal = mag_cal;
 
   /* Store heading in compass data structure */
