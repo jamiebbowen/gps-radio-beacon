@@ -1141,8 +1141,12 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* hspi)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
+  /* Reset immediately rather than spinning until the IWDG fires (~32 s):
+   * HAL errors land here with the system in an unknown state, and every
+   * second spent hung is a second of beacon packets missed. The IWDG
+   * remains the backstop if the reset itself fails. */
   __disable_irq();
+  NVIC_SystemReset();
   while (1)
   {
   }
@@ -1161,6 +1165,8 @@ void SysTick_Handler(void)
 
 void HardFault_Handler(void)
 {
+  /* Corrupt CPU state: reboot now, not after the 32 s IWDG timeout. */
+  NVIC_SystemReset();
   while (1) {}
 }
 

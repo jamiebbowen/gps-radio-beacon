@@ -401,6 +401,13 @@ void Display_ShowBootScreen(void)
   Display_Update();
 }
 
+/* Set when I2C1 fails to initialize. The receiver keeps running headless:
+ * RF reception, SD logging and the packet-activity LED all work without
+ * the display, and hanging here would turn a broken OLED into a dead
+ * ground station. All I2C traffic is skipped so a dead bus doesn't cost
+ * a 25 ms HAL timeout per chunk in the main loop. */
+static uint8_t display_i2c_failed = 0;
+
 /**
  * @brief Initialize I2C for display communication
  * @retval None
@@ -439,8 +446,7 @@ static void Display_I2C_Init(void)
   hi2c_display.Init.NoStretchMode = I2C_NOSTRETCH_DISABLED;
   
   if (HAL_I2C_Init(&hi2c_display) != HAL_OK) {
-    /* Error handling */
-    while(1);
+    display_i2c_failed = 1;  /* run headless - never hang the receiver */
   }
 }
 
@@ -451,6 +457,9 @@ static void Display_I2C_Init(void)
  */
 static void Display_SendCommand(uint8_t command)
 {
+  if (display_i2c_failed) {
+    return;
+  }
   uint8_t buffer[2] = {SSD1309_COMMAND, command};
   HAL_I2C_Master_Transmit(&hi2c_display, SSD1309_I2C_ADDR << 1, buffer, 2, SSD1309_I2C_TIMEOUT);
 }
@@ -463,6 +472,9 @@ static void Display_SendCommand(uint8_t command)
  */
 static void Display_SendData(uint8_t* data, uint16_t size)
 {
+  if (display_i2c_failed) {
+    return;
+  }
   /* We need to send the data in chunks due to I2C buffer limitations */
   uint8_t buffer[17]; /* 1 byte for data/command flag + 16 bytes of data */
   buffer[0] = SSD1309_DATA;
