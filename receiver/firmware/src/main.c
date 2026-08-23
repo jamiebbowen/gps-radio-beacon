@@ -228,17 +228,19 @@ int main(void)
   Display_Update();
   HAL_Delay(2000);
   
-  /* Initialize GPS */
-  if (GPS_Init() != GPS_OK) {
+  /* Initialize GPS. A failure here must NOT brick the receiver: local GPS
+   * only provides the operator's own position for distance/bearing - the
+   * core job (hearing the beacon, showing its coordinates) works without
+   * it. This used to blink-loop forever, turning a broken local GPS into
+   * a completely dead ground station on launch day. */
+  uint8_t local_gps_ok = (GPS_Init() == GPS_OK);
+  if (!local_gps_ok) {
     Display_Clear();
     Display_DrawTextRowCol(1, 1, "GPS Init Error");
+    Display_DrawTextRowCol(3, 1, "No dist/bearing;");
+    Display_DrawTextRowCol(4, 1, "RX still works");
     Display_Update();
-    
-    /* Blink LED to indicate error but don't halt */
-    while(1) {
-      HAL_GPIO_TogglePin(LED_GPIO_PORT, LED_PIN);
-      HAL_Delay(250);
-    }
+    HAL_Delay(3000);
   }
   
   /* Initialize RF receiver. Retry before giving up: the SX1268 bring-up
@@ -315,6 +317,15 @@ int main(void)
     }
     Display_Update();
     HAL_Delay(3000);
+
+    /* A watchdog-forced reboot must never pass for a normal boot: it means
+     * the firmware hung for 32 s. Leave durable evidence, then clear the
+     * reset flags so the next boot reads clean. */
+    if (sd_card_ok && (RCC->CSR & RCC_CSR_IWDGRSTF)) {
+      SD_Card_EnsureLogFile();
+      SD_Card_LogError("Boot after IWDG watchdog reset (firmware hang)");
+    }
+    RCC->CSR |= RCC_CSR_RMVF;
 
     /* Log file is created lazily on the first RF packet (see
      * SD_Card_LogNavigation in sd_card.c) so no-RF boots leave no artifact. */
@@ -471,11 +482,24 @@ int main(void)
     RF_Receiver_StartScan();
   }
 
+  /* Arm the independent watchdog (LSI/256, full reload: ~32 s timeout).
+   * Any hang - HardFault, Error_Handler, a wedged I2C/SPI transaction -
+   * now costs a reset instead of a dead ground station. Armed here, after
+   * all one-time init (SD format can be slow), and refreshed once per main
+   * loop iteration; no single iteration legitimately approaches 32 s.
+   * Direct register access because the HAL IWDG module isn't in the build.
+   * Note: once started, the IWDG cannot be stopped except by reset. */
+  IWDG->KR  = 0x5555;   /* unlock PR/RLR */
+  IWDG->PR  = 6;        /* prescaler /256 -> 32 kHz LSI / 256 = 125 Hz */
+  IWDG->RLR = 0x0FFF;   /* max reload: 4096 / 125 Hz = ~32.8 s */
+  IWDG->KR  = 0xCCCC;   /* start */
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
     /* USER CODE END WHILE */
+    IWDG->KR = 0xAAAA;  /* feed the watchdog */
 
     /* USER CODE BEGIN 3 */
     /* LED = RF activity indicator: pulse for 100 ms after each packet
@@ -626,8 +650,8 @@ int main(void)
       current_display_mode = DISPLAY_MODE_NAVIGATION;
     }
     
-    /* Update GPS data */
-    uint8_t gps_update_result = GPS_Update(&gps_data);
+    /* Update GPS data (skip if init failed - its UART was never set up) */
+    uint8_t gps_update_result = local_gps_ok ? GPS_Update(&gps_data) : GPS_ERROR;
     
     /* Validate GPS data before marking as valid */
     if ((gps_update_result == GPS_OK && gps_data.fix) || GPS_IsFixed()) {

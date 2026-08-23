@@ -36,14 +36,24 @@ static int16_t       fake_rssi_inst = -120;  /* Ambient level "measured"   */
 static LoRa_Packet_t fake_pkt;
 static uint8_t       fake_pkt_pending = 0;
 
-uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) { (void)hspi; return LORA_OK; }
+/* Failure knobs: init/error paths under test */
+static uint8_t       fake_lora_init_result   = LORA_OK;
+static uint8_t       fake_device_status_fail = 0;
+static uint16_t      fake_irq_value          = 0;
+
+uint8_t LoRa_Init(SPI_HandleTypeDef *hspi)
+{
+    (void)hspi;
+    return fake_lora_init_result;
+}
 uint8_t LoRa_SetReceiveMode(void) { return LORA_OK; }
 uint8_t LoRa_GetDeviceStatus(uint8_t *status)
 {
+    if (fake_device_status_fail) { *status = 0; return LORA_ERROR; }
     *status = (uint8_t)((fake_mode << 5) | 0x02);
     return LORA_OK;
 }
-uint8_t LoRa_GetIRQStatus(uint16_t *irq) { *irq = 0; return LORA_OK; }
+uint8_t LoRa_GetIRQStatus(uint16_t *irq) { *irq = fake_irq_value; return LORA_OK; }
 uint8_t LoRa_GetRssiInst(int16_t *rssi) { *rssi = fake_rssi_inst; return LORA_OK; }
 uint8_t LoRa_PacketAvailable(void) { return fake_pkt_pending; }
 uint8_t LoRa_ReadPacket(LoRa_Packet_t *pkt)
@@ -76,6 +86,11 @@ uint8_t LoRa_StartCad(void)
 }
 uint8_t LoRa_CadResult(void) { return fake_cad_result; }
 
+/* Include the module under test directly (not linked - see tests/Makefile)
+ * so tests can reach static state (rf_spi_test_result, last_rssi, ...) to
+ * exercise one-shot diagnostics and error paths without hardware. */
+#include "../firmware/src/rf_receiver.c"
+
 /* HAL fakes (declared in the stub headers) */
 void HAL_GPIO_Init(GPIO_TypeDef *p, GPIO_InitTypeDef *i) { (void)p; (void)i; }
 GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *p, uint16_t pin)
@@ -86,8 +101,23 @@ void HAL_GPIO_WritePin(GPIO_TypeDef *p, uint16_t pin, GPIO_PinState s)
 {
     (void)p; (void)pin; (void)s;
 }
-HAL_StatusTypeDef HAL_SPI_Init(SPI_HandleTypeDef *h) { (void)h; return HAL_OK; }
-HAL_StatusTypeDef HAL_DMA_Init(DMA_HandleTypeDef *h) { (void)h; return HAL_OK; }
+/* MCU peripheral init knobs. fake_dma_fail_at: 0=never, 1=first HAL_DMA_Init
+ * call fails (SPI2 TX stream), 2=second fails (RX stream). */
+static uint8_t fake_spi_init_fail = 0;
+static uint8_t fake_dma_fail_at   = 0;
+static uint8_t fake_dma_calls     = 0;
+HAL_StatusTypeDef HAL_SPI_Init(SPI_HandleTypeDef *h)
+{
+    (void)h;
+    return fake_spi_init_fail ? HAL_ERROR : HAL_OK;
+}
+HAL_StatusTypeDef HAL_DMA_Init(DMA_HandleTypeDef *h)
+{
+    (void)h;
+    fake_dma_calls++;
+    return (fake_dma_fail_at && fake_dma_calls == fake_dma_fail_at)
+               ? HAL_ERROR : HAL_OK;
+}
 void HAL_DMA_IRQHandler(DMA_HandleTypeDef *h) { (void)h; }
 void HAL_NVIC_SetPriority(IRQn_Type irq, uint32_t p, uint32_t s)
 {
@@ -439,17 +469,253 @@ TEST(test_noise_floor_estimation_and_alert)
 
 /* ------------------------------------------------------------------ */
 
+TEST(test_init_failure_paths)
+{
+    /* Regression: these paths were while(1) hangs - a blank screen
+     * indistinguishable from a dead battery. Each failure must surface
+     * as a distinct error code so the boot screen can name the culprit
+     * and main's 10 s retry loop gets a chance to recover. */
+    fake_spi_init_fail = 1;
+    CHECK(RF_Receiver_Init() == RF_ERR_SPI_INIT);
+    fake_spi_init_fail = 0;
+
+    fake_dma_calls = 0; fake_dma_fail_at = 1;
+    CHECK(RF_Receiver_Init() == RF_ERR_DMA_TX_INIT);
+
+    fake_dma_calls = 0; fake_dma_fail_at = 2;
+    CHECK(RF_Receiver_Init() == RF_ERR_DMA_RX_INIT);
+    fake_dma_fail_at = 0;
+
+    /* LoRa chip errors pass through untranslated (0xB* identifies the
+     * exact bring-up step on the boot screen) */
+    fake_lora_init_result = 0xB1;
+    CHECK(RF_Receiver_Init() == 0xB1);
+    fake_lora_init_result = LORA_OK;
+
+    /* Device status unreadable after an otherwise good init: init still
+     * succeeds (the radio may just be busy) but the SPI self-test result
+     * must read "fail" on the diagnostics screen, not "pass". */
+    fake_device_status_fail = 1;
+    CHECK(RF_Receiver_Init() == RF_OK);
+    uint8_t spi_test = 0xFF;
+    RF_Receiver_GetIRQDiagnostics(NULL, NULL, NULL, &spi_test, NULL);
+    CHECK(spi_test == 0);
+    fake_device_status_fail = 0;
+}
+
+TEST(test_spi_selftest_oneshot_in_poll)
+{
+    /* If init never ran the self-test (result still 0xFF), the first
+     * DataAvailable() poll runs it once. Exercise both verdicts. */
+    rf_spi_test_result = 0xFF;
+    fake_device_status_fail = 1;
+    now_ms += 251; Test_SetTick(now_ms);
+    (void)RF_Receiver_DataAvailable();
+    uint8_t spi_test = 0xFF;
+    RF_Receiver_GetIRQDiagnostics(NULL, NULL, NULL, &spi_test, NULL);
+    CHECK(spi_test == 0);
+    fake_device_status_fail = 0;
+
+    rf_spi_test_result = 0xFF;
+    now_ms += 251; Test_SetTick(now_ms);
+    (void)RF_Receiver_DataAvailable();
+    RF_Receiver_GetIRQDiagnostics(NULL, NULL, NULL, &spi_test, NULL);
+    CHECK(spi_test == 1);
+}
+
+TEST(test_nonzero_irq_status_latched)
+{
+    fake_irq_value = 0x0002;   /* RX_DONE */
+    now_ms += 251; Test_SetTick(now_ms);
+    (void)RF_Receiver_DataAvailable();
+    fake_irq_value = 0;
+
+    uint16_t last_irq = 0;
+    uint32_t checks = 0;
+    RF_Receiver_GetIRQDiagnostics(&checks, &last_irq, NULL, NULL, NULL);
+    CHECK(last_irq == 0x0002);
+    CHECK(checks > 0);
+}
+
+static void put_i16_le(uint8_t *buf, int16_t v)
+{
+    buf[0] = (uint8_t)(v & 0xFF);
+    buf[1] = (uint8_t)((v >> 8) & 0xFF);
+}
+
+TEST(test_fused_packet_flow)
+{
+    /* EKF-fused packet: parsed, flagged ready, and delivered like GPS */
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    fake_pkt.data[0] = PACKET_TYPE_FUSED;
+    put_i32_le(&fake_pkt.data[1], (int32_t)(39.89 * 10000000.0));
+    put_i32_le(&fake_pkt.data[5], (int32_t)(-105.11 * 10000000.0));
+    put_i32_le(&fake_pkt.data[9], 123400);          /* alt cm */
+    put_i16_le(&fake_pkt.data[13], 500);            /* vN cm/s */
+    put_i16_le(&fake_pkt.data[15], -200);           /* vE cm/s */
+    put_i16_le(&fake_pkt.data[17], 100);            /* vD cm/s */
+    fake_pkt.data[19] = 3;                          /* age ds */
+    fake_pkt.data[20] = 0x01;                       /* flags */
+    fake_pkt.length = FUSED_PACKET_SIZE;
+    fake_pkt.rssi = -90; fake_pkt.snr = 5;
+    fake_pkt_pending = 1;
+
+    now_ms += 10; Test_SetTick(now_ms);
+    CHECK(RF_Receiver_DataAvailable() == 1);
+
+    GPS_Data gps;
+    memset(&gps, 0, sizeof(gps));
+    CHECK(RF_Receiver_GetGPSData(&gps) == RF_OK);
+    CHECK(gps.is_fused == 1);
+}
+
+TEST(test_get_gps_data_without_packet)
+{
+    RF_Parser_Reset();
+    GPS_Data gps;
+    CHECK(RF_Receiver_GetGPSData(&gps) == RF_ERROR);
+}
+
+TEST(test_data_staleness_tracking)
+{
+    /* Channel switch discards the previous rocket's freshness */
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    CHECK(RF_Receiver_GetLastPacketTime() == 0);
+    CHECK(RF_Receiver_IsDataStale(now_ms) == 1);    /* nothing yet */
+
+    inject_gps_packet(39.89, -105.11);
+    now_ms += 10; Test_SetTick(now_ms);
+    CHECK(RF_Receiver_DataAvailable() == 1);
+    GPS_Data gps;
+    (void)RF_Receiver_GetGPSData(&gps);
+
+    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);
+    CHECK(RF_Receiver_IsDataStale(now_ms + RF_DATA_STALE_TIMEOUT_MS + 1) == 1);
+    CHECK(RF_Receiver_GetLastPacketTime() != 0);
+}
+
+TEST(test_signal_quality_thresholds)
+{
+    last_rssi = -125; last_snr = 5;      /* below RSSI floor */
+    CHECK(RF_Receiver_IsSignalQualityGood() == 0);
+
+    last_rssi = -90; last_snr = -12;     /* below SNR floor */
+    CHECK(RF_Receiver_IsSignalQualityGood() == 0);
+
+    last_rssi = -90; last_snr = 5;
+    CHECK(RF_Receiver_IsSignalQualityGood() == 1);
+
+    int16_t rssi = 0; int8_t snr = 0;
+    RF_Receiver_GetSignalQuality(&rssi, &snr);
+    CHECK(rssi == -90 && snr == 5);
+}
+
+TEST(test_cad_result_failure_falls_back_to_dwell)
+{
+    /* SPI fault while reading the CAD result: CAD can't be trusted */
+    fake_cad_available = 1;
+    fake_cad_result = LORA_CAD_FAIL;
+    RF_Receiver_StartScan();
+
+    now_ms += 10; Test_SetTick(now_ms);
+    CHECK(RF_Receiver_ScanUpdate() == 0);   /* IDLE -> CAD started */
+    now_ms += 10; Test_SetTick(now_ms);
+    CHECK(RF_Receiver_ScanUpdate() == 0);   /* result FAIL -> fallback */
+
+    CHECK(RF_Receiver_IsScanning() == 1);
+    CHECK(scan_cad_phase == 0);             /* dwell phase now */
+    RF_Receiver_StopScan();
+    fake_cad_available = 0;
+}
+
+TEST(test_cad_timeout_strikes_then_fallback)
+{
+    /* CAD never completes (e.g. aborted by a mode change): retry
+     * RF_SCAN_CAD_MAX_STRIKES times, then degrade to the dwell scan. */
+    fake_cad_available = 1;
+    fake_cad_result = LORA_CAD_PENDING;
+    RF_Receiver_StartScan();
+
+    for (uint8_t strike = 1; strike <= 3; strike++) {
+        now_ms += 10; Test_SetTick(now_ms);
+        CHECK(RF_Receiver_ScanUpdate() == 0);          /* start CAD */
+        CHECK(scan_cad_state == RF_CAD_RUNNING);
+        now_ms += 200; Test_SetTick(now_ms);           /* > 150 ms deadline */
+        CHECK(RF_Receiver_ScanUpdate() == 0);          /* timed out */
+        if (strike < 3) {
+            CHECK(scan_cad_state == RF_CAD_IDLE);      /* retry */
+            CHECK(scan_cad_phase == 1);
+        }
+    }
+    CHECK(scan_cad_phase == 0);   /* third strike: dwell fallback */
+    CHECK(RF_Receiver_IsScanning() == 1);
+    RF_Receiver_StopScan();
+    fake_cad_available = 0;
+    fake_cad_result = LORA_CAD_NONE;
+}
+
+TEST(test_diagnostics_getters)
+{
+    uint32_t bytes = 0; uint8_t matches = 0; uint8_t last4[4] = {0};
+    RF_Receiver_GetDiagnostics(&bytes, &matches, last4);
+    CHECK(bytes > 0);                       /* packets flowed in earlier tests */
+    RF_Receiver_GetDiagnostics(NULL, NULL, NULL);  /* must not crash */
+
+    uint16_t csum = 0xFFFF;
+    RF_Receiver_GetExtendedDiagnostics(&csum);
+    CHECK(csum == 0);                       /* dead counter with LoRa CRC */
+    RF_Receiver_GetExtendedDiagnostics(NULL);
+
+    char ascii[64];
+    RF_Receiver_GetAsciiBuffer(ascii, sizeof(ascii));
+    CHECK(ascii[sizeof(ascii) - 1] == '\0');
+    RF_Receiver_GetAsciiBuffer(NULL, 0);           /* must not crash */
+    (void)RF_Receiver_GetLastPacketASCII(ascii, sizeof(ascii));
+
+    GPS_Data gps; char cs[16]; uint8_t ck;
+    (void)RF_Receiver_GetParsedData(&gps, cs, sizeof(cs), &ck);
+
+    CHECK(RF_Receiver_GetLoRaPacketCount() > 0);
+
+    /* Deprecated UART-era shims: fixed answers, no side effects */
+    RF_Receiver_SetBaudFudgeFactor(1234);
+    CHECK(RF_Receiver_GetBaudFudgeFactor() == RF_BAUD_FUDGE_FACTOR_DEFAULT);
+    RF_Receiver_OutputCalibrationSignal(10);
+
+    uint32_t irqs = 1; uint32_t pkts = 0; uint32_t dups = 1;
+    RF_Receiver_GetPacketLossDiagnostics(&irqs, &pkts, &dups);
+    CHECK(dups == 0);
+    CHECK(pkts == RF_Receiver_GetLoRaPacketCount());
+
+    /* DMA IRQ trampolines: just route to the HAL */
+    DMA1_Stream3_IRQHandler();
+    DMA1_Stream4_IRQHandler();
+}
+
 int main(void)
 {
     Test_SetTick(now_ms);
+
+    /* Failure paths first: they re-init repeatedly and must end with a
+     * clean, successful init for the rest of the suite. */
+    run_test_init_failure_paths();
     CHECK(RF_Receiver_Init() == RF_OK);
 
+    run_test_spi_selftest_oneshot_in_poll();
+    run_test_nonzero_irq_status_latched();
     run_test_channel_cycling_covers_all_channels();
     run_test_heartbeat_lifecycle();
     run_test_position_packet_flow();
+    run_test_fused_packet_flow();
+    run_test_get_gps_data_without_packet();
+    run_test_data_staleness_tracking();
+    run_test_signal_quality_thresholds();
     run_test_channel_scan_locks_on_packet();
     run_test_channel_scan_cad_fast_phase();
+    run_test_cad_result_failure_falls_back_to_dwell();
+    run_test_cad_timeout_strikes_then_fallback();
     run_test_noise_floor_estimation_and_alert();
+    run_test_diagnostics_getters();
 
     return TEST_SUMMARY();
 }

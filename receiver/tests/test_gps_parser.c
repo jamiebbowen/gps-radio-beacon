@@ -19,6 +19,10 @@
 #include "gps_parser.h"
 #include "test_harness.h"
 
+/* Include the module under test directly (not linked - see tests/Makefile)
+ * so tests can reach static helpers and exercise their defensive guards. */
+#include "../firmware/src/gps_parser.c"
+
 /* ------------------------------------------------------------------ */
 /* Sentence builder                                                    */
 /* ------------------------------------------------------------------ */
@@ -346,6 +350,28 @@ TEST(test_origin_coordinates_rejected) {
     CHECK(gps_invalid_coordinate_errors >= errors_before + 2);
 }
 
+TEST(test_coordinate_helper_defensive_guards) {
+    uint32_t before = gps_invalid_coordinate_errors;
+
+    /* Too short to be ddmm ("12"): rejected with the error counter bumped.
+     * Unreachable through ParseNMEA - the token-length >= 4 guards in both
+     * sub-parsers filter shorter fields first - but kept as insurance. */
+    CHECK(GPS_NMEAStringToDecimalDegrees("12") == 0.0f);
+    CHECK(gps_invalid_coordinate_errors == before + 1);
+
+    /* NULL / empty input: the else-branch guard */
+    CHECK(GPS_NMEAStringToDecimalDegrees("") == 0.0f);
+    CHECK(GPS_NMEAStringToDecimalDegrees(NULL) == 0.0f);
+    CHECK(gps_invalid_coordinate_errors == before + 3);
+}
+
+TEST(test_checksum_helper_defensive_guards) {
+    /* ParseNMEA verifies '$' framing before calling the validator, so
+     * these can only arrive via a future direct caller. */
+    CHECK(GPS_ValidateChecksum(NULL) == 0);
+    CHECK(GPS_ValidateChecksum("GPGGA,123,x*44") == 0);  /* no '$' */
+}
+
 TEST(test_truncated_checksum_rejected) {
     GPS_Data gps;
     char s[128];
@@ -382,6 +408,8 @@ int main(void) {
     run_test_subdegree_longitude_rejected();
     run_test_origin_coordinates_rejected();
     run_test_truncated_checksum_rejected();
+    run_test_coordinate_helper_defensive_guards();
+    run_test_checksum_helper_defensive_guards();
 
     return TEST_SUMMARY();
 }

@@ -92,7 +92,7 @@ static uint8_t  noise_sample_count = 0;
 static uint8_t  noise_alert_active = 0;
 
 /* Private function prototypes */
-static void RF_SPI_Init(void);
+static uint8_t RF_SPI_Init(void);
 
 /**
  * @brief Initialize RF receiver
@@ -100,8 +100,13 @@ static void RF_SPI_Init(void);
  */
 uint8_t RF_Receiver_Init(void)
 {
-  /* Initialize SPI for LoRa communication */
-  RF_SPI_Init();
+  /* Initialize SPI for LoRa communication. A failure here used to hang in
+   * while(1) with a blank screen - indistinguishable from a dead battery.
+   * Report it instead: main shows the code and retries every 10 s. */
+  uint8_t spi_result = RF_SPI_Init();
+  if (spi_result != RF_OK) {
+    return spi_result;
+  }
   
   /* Initialize LoRa module */
   uint8_t lora_result = LoRa_Init(&hspi_lora);
@@ -310,9 +315,9 @@ uint8_t RF_Receiver_GetGPSData(GPS_Data *gps_data)
 
 /**
  * @brief Initialize SPI for LoRa communication
- * @retval None
+ * @retval RF_OK or an RF_ERR_* code identifying the failed peripheral
  */
-static void RF_SPI_Init(void)
+static uint8_t RF_SPI_Init(void)
 {
   /* Enable DMA1 clock */
   __HAL_RCC_DMA1_CLK_ENABLE();
@@ -351,8 +356,7 @@ static void RF_SPI_Init(void)
   hspi_lora.Init.CRCPolynomial = 10;
   
   if (HAL_SPI_Init(&hspi_lora) != HAL_OK) {
-    /* Error handling */
-    while(1);
+    return RF_ERR_SPI_INIT;
   }
   
   /* Configure DMA for SPI2 TX (DMA1 Stream 4, Channel 0) */
@@ -368,7 +372,7 @@ static void RF_SPI_Init(void)
   hdma_spi2_tx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
   
   if (HAL_DMA_Init(&hdma_spi2_tx) != HAL_OK) {
-    while(1);
+    return RF_ERR_DMA_TX_INIT;
   }
   __HAL_LINKDMA(&hspi_lora, hdmatx, hdma_spi2_tx);
   
@@ -385,7 +389,7 @@ static void RF_SPI_Init(void)
   hdma_spi2_rx.Init.FIFOMode = DMA_FIFOMODE_DISABLE;
   
   if (HAL_DMA_Init(&hdma_spi2_rx) != HAL_OK) {
-    while(1);
+    return RF_ERR_DMA_RX_INIT;
   }
   __HAL_LINKDMA(&hspi_lora, hdmarx, hdma_spi2_rx);
   
@@ -394,6 +398,8 @@ static void RF_SPI_Init(void)
   HAL_NVIC_EnableIRQ(DMA1_Stream3_IRQn);
   HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 1, 0);
   HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
+  
+  return RF_OK;
 }
 
 

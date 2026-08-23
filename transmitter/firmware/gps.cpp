@@ -190,9 +190,28 @@ uint8_t gps_poll_rx(void) {
         last_valid_time = current_time;
     }
     
-    // Give up after 3 recovery attempts
-    if (gps_recovery_attempts >= 3 && current_time - last_debug > 30000) {
-        Serial.println(F("[GPS] ✗ Recovery failed after 3 attempts - power cycle required"));
+    // After 3 failed recovery attempts, cool down instead of giving up
+    // forever: "power cycle required" is not an option on a rocket in a
+    // tree. A 10-minute pause avoids a cold-restart loop that would keep
+    // discarding the almanac, then recovery re-arms for another round.
+    // (Re-arming zeroes the HB_GPS_RESETS nibble in the heartbeat; the
+    // receiver just sees the count restart, which is fine.)
+    static uint32_t recovery_exhausted_ms = 0;
+    if (gps_recovery_attempts >= 3) {
+        if (recovery_exhausted_ms == 0) {
+            recovery_exhausted_ms = current_time;
+        } else if (current_time - recovery_exhausted_ms > 600000UL) {
+            Serial.println(F("[GPS] Watchdog: cooldown over, re-arming recovery"));
+            gps_recovery_attempts = 0;
+            recovery_exhausted_ms = 0;
+            last_byte_time = current_time;   // full grace period before retry
+            last_valid_time = current_time;
+        }
+        if (current_time - last_debug > 30000) {
+            Serial.println(F("[GPS] ✗ Recovery failed after 3 attempts - cooling down before retry"));
+        }
+    } else {
+        recovery_exhausted_ms = 0;
     }
     
     // Basic GPS debug every 5 seconds

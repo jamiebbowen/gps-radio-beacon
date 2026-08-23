@@ -147,16 +147,13 @@ uint8_t RF_Parser_ParseAsciiPacket(const char *packet) {
   
   /* Check if this is a callsign packet (no commas) */
   if (strchr(packet_copy, ',') == NULL) {
-    /* This is a callsign packet - extract callsign and return */
-    if (strlen(packet_copy) > 0) {
-      strncpy(parsed_callsign, packet_copy, RF_PARSER_MAX_CALLSIGN_LEN - 1);
-      parsed_callsign[RF_PARSER_MAX_CALLSIGN_LEN - 1] = '\0';
-      parsed_data_ready = 1;
-      parse_successes++;
-      return RF_PARSER_OK;
-    }
-    parse_failures++;
-    return RF_PARSER_ERROR;
+    /* Callsign packet - extract callsign and return. Cannot be empty:
+     * NULL/empty packets were rejected at function entry above. */
+    strncpy(parsed_callsign, packet_copy, RF_PARSER_MAX_CALLSIGN_LEN - 1);
+    parsed_callsign[RF_PARSER_MAX_CALLSIGN_LEN - 1] = '\0';
+    parsed_data_ready = 1;
+    parse_successes++;
+    return RF_PARSER_OK;
   }
   
   /* Reset parsed_data_ready flag when starting new packet parsing */

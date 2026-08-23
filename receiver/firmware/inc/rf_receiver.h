@@ -21,6 +21,12 @@ extern "C" {
 #define RF_TIMEOUT  2
 #define RF_BUSY     3
 
+/* MCU-side peripheral init failures (distinct from the LoRa chip's 0xB*
+ * codes so the boot screen identifies which side of the SPI bus is dead) */
+#define RF_ERR_SPI_INIT     0xE1
+#define RF_ERR_DMA_TX_INIT  0xE2
+#define RF_ERR_DMA_RX_INIT  0xE3
+
 /* RF data quality thresholds */
 #define RF_DATA_STALE_TIMEOUT_MS  30000  /* 30 seconds - mark data as stale */
 #define RF_MIN_RSSI_DBM          -120    /* Minimum acceptable RSSI in dBm */

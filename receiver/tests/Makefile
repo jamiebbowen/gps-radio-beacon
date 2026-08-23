@@ -10,7 +10,9 @@
 # modules compile unmodified with the host compiler.
 #
 # Adding a new test: create test_<module>.c, add "<module>" to MODULES below.
-# The test binary is linked against ../firmware/src/<module>.c.
+# Each test #includes ../firmware/src/<module>.c directly (rather than
+# linking it) so tests can reach static functions and state - required to
+# exercise defensive guards on internal helpers and reach 100% coverage.
 
 CC       ?= gcc
 CFLAGS   := -std=gnu11 -Wall -Wextra -g -O0 \
@@ -28,7 +30,7 @@ BINS     := $(addprefix $(BUILD)/test_,$(MODULES))
 # too (the LoRa driver + HAL are faked inside test_rf_receiver.c).
 $(BUILD)/test_rf_receiver: test_rf_receiver.c $(SRC_DIR)/rf_receiver.c \
                            $(SRC_DIR)/rf_parser.c test_harness.h | $(BUILD)
-	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< $(SRC_DIR)/rf_receiver.c $(SRC_DIR)/rf_parser.c $(LDFLAGS)
+	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< $(SRC_DIR)/rf_parser.c $(LDFLAGS)
 
 .PHONY: all test coverage clean
 
@@ -38,7 +40,7 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 $(BUILD)/test_%: test_%.c $(SRC_DIR)/%.c test_harness.h | $(BUILD)
-	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< $(SRC_DIR)/$*.c $(LDFLAGS)
+	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< $(LDFLAGS)
 
 test: $(BINS)
 	@rc=0; for b in $(BINS); do \
@@ -49,7 +51,7 @@ coverage: COVFLAGS := --coverage
 coverage: clean $(BINS)
 	@for b in $(BINS); do ./$$b > /dev/null || exit 1; done
 	@for m in $(MODULES); do \
-	    gcov -o $(BUILD) $(BUILD)/test_$$m-$$m.gcno 2>/dev/null \
+	    gcov -o $(BUILD) $(BUILD)/test_$$m*.gcno 2>/dev/null \
 	        | grep -A1 "File.*src/$$m.c"; \
 	done
 	@mv -f *.gcov $(BUILD)/ 2>/dev/null || true

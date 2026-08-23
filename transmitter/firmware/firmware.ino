@@ -130,6 +130,36 @@ void timer_isr_handler(void) {
     }
 }
 
+/* ------------------------------------------------------------------------
+ * Hardware watchdog (SAMD51 WDT, ~16 s period).
+ *
+ * The beacon flies on a rocket: a firmware hang - wedged I2C to the IMU,
+ * a stuck UART wait, any unforeseen lockup - with no watchdog means the
+ * beacon goes silent exactly when it is unreachable, and the rocket is
+ * lost. A 16 s reset costs one missed transmission; a hang costs the
+ * airframe. The WDT runs from the internal 1.024 kHz ultra-low-power
+ * oscillator, independent of the CPU clock.
+ *
+ * Fed once per loop() pass. The longest legitimate blocking stretch is
+ * ~2 s (IMU settle in launch_detect_init, which runs before the WDT is
+ * armed), so 16 s only fires on a genuine lockup.
+ * ---------------------------------------------------------------------- */
+static void watchdog_init(void) {
+    WDT->CTRLA.bit.ENABLE = 0;
+    while (WDT->SYNCBUSY.bit.ENABLE);
+    WDT->CONFIG.bit.PER = WDT_CONFIG_PER_CYC16384_Val;  /* 16384/1024Hz = 16 s */
+    WDT->CTRLA.bit.ENABLE = 1;
+    while (WDT->SYNCBUSY.bit.ENABLE);
+}
+
+static void watchdog_feed(void) {
+    /* Skip the feed if the previous CLEAR is still synchronizing: writing
+     * during sync is an error case; the next loop pass feeds instead. */
+    if (!WDT->SYNCBUSY.bit.CLEAR) {
+        WDT->CLEAR.reg = WDT_CLEAR_CLEAR_KEY_Val;
+    }
+}
+
 // Timer setup for 1ms interrupts
 void timer_init(void) {
     // Use Arduino's built-in timer for 1ms interrupts
@@ -140,6 +170,12 @@ void timer_init(void) {
 void setup() {
     // Initialize USB Serial for debugging (optional)
     Serial.begin(115200);
+    
+    /* A WDT-forced reboot must be visible: it means the firmware hung in
+     * the field. RCAUSE survives the reset. */
+    if (RSTC->RCAUSE.reg & RSTC_RCAUSE_WDT) {  /* .bit.WDT collides with the WDT macro */
+        Serial.println(F("[Boot] *** Recovered from WATCHDOG RESET (firmware hang) ***"));
+    }
     
     // Initialize hardware
     // No need to disable watchdog on SAMD51 - not enabled by default
@@ -175,9 +211,14 @@ void setup() {
 
     // Poll GPS for data
     gps_poll_rx();
+
+    /* Armed last: everything above may legitimately block for seconds. */
+    watchdog_init();
 }
 
 void loop() {
+    watchdog_feed();
+
     // Update timer (simulate 1ms interrupt) - catch up if we missed milliseconds
     static uint32_t last_millis = 0;
     uint32_t current_millis = millis();

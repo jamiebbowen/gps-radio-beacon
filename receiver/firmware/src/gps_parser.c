@@ -134,12 +134,9 @@ uint8_t GPS_ParseNMEA(const char* nmea_sentence, GPS_Data *gps_data)
   
   /* Update timestamp */
   if (status == GPS_PARSER_OK) {
-    /* Check if we have a valid GPS fix */
-    if (!gps_data->fix) {
-      /* No valid fix, reject the data */
-      snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "NO FIX");
-      return GPS_PARSER_ERROR;
-    }
+    /* fix is guaranteed non-zero here: both GPS_ParseGPRMC and
+     * GPS_ParseGPGGA return GPS_PARSER_ERROR when the sentence carries
+     * no fix (see their final "return (gps_data->fix) ? ..." lines). */
     
     /* Validate coordinates before accepting them */
     if (!GPS_ValidateCoordinates(gps_data->latitude, gps_data->longitude)) {

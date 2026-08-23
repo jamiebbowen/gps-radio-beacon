@@ -20,6 +20,10 @@
 #include "packet_format.h"
 #include "test_harness.h"
 
+/* Include the module under test directly (not linked - see tests/Makefile)
+ * so tests can reach static helpers and exercise their defensive guards. */
+#include "../firmware/src/rf_parser.c"
+
 /* ------------------------------------------------------------------ */
 /* Packet-building helpers                                             */
 /* ------------------------------------------------------------------ */
@@ -396,6 +400,48 @@ TEST(test_checksum_errors_always_zero_with_lora) {
     RF_Parser_GetChecksumErrors(NULL); /* must not crash */
 }
 
+TEST(test_nmea_helper_defensive_guards) {
+    /* Direct calls: strtok_r never hands the helper NULL or "" (empty
+     * fields are skipped), but the guard stays as insurance against
+     * future callers. */
+    CHECK(nmea_to_decimal_degrees(NULL) == 0.0f);
+    CHECK(nmea_to_decimal_degrees("") == 0.0f);
+}
+
+TEST(test_ascii_extra_fields_ignored) {
+    RF_Parser_Reset();
+    /* 6 fields: trailing ones beyond sats must be ignored, not rejected */
+    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,1234.5,8,99,77")
+          == RF_PARSER_OK);
+
+    GPS_Data gps;
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.satellites == 8);
+}
+
+TEST(test_raw_packet_truncated_to_buffer) {
+    RF_Parser_Reset();
+    (void)RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,1234.5,8");
+
+    /* Undersized destination: must truncate and NUL-terminate, not overrun */
+    char small[8];
+    uint16_t len = RF_Parser_GetLastRawPacket(small, sizeof(small));
+    CHECK(len == sizeof(small) - 1);
+    CHECK(small[sizeof(small) - 1] == '\0');
+    CHECK(strncmp(small, "3953.40", 7) == 0);
+}
+
+TEST(test_detailed_failures_deprecated_counters_zero) {
+    RF_Parser_Reset();
+    uint32_t nulls = 9, insufficient = 9, csum = 9, marker = 9, callsign = 9;
+    RF_Parser_GetDetailedFailures(&nulls, &insufficient,
+                                  &csum, &marker, &callsign);
+    /* The last three are dead with LoRa framing - pinned at zero */
+    CHECK(csum == 0);
+    CHECK(marker == 0);
+    CHECK(callsign == 0);
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void) {
@@ -418,6 +464,10 @@ int main(void) {
     run_test_fused_does_not_clobber_gps_fix();
     run_test_gps_does_not_clobber_fused_velocity();
     run_test_reset_clears_state();
+    run_test_nmea_helper_defensive_guards();
+    run_test_ascii_extra_fields_ignored();
+    run_test_raw_packet_truncated_to_buffer();
+    run_test_detailed_failures_deprecated_counters_zero();
 
     return TEST_SUMMARY();
 }

@@ -13,6 +13,9 @@
 #include "math_utils.h"
 #include "test_harness.h"
 
+/* Include the module under test directly (not linked - see tests/Makefile) */
+#include "../firmware/src/math_utils.c"
+
 /* ------------------------------------------------------------------ */
 /* normalize_angle                                                     */
 /* ------------------------------------------------------------------ */
