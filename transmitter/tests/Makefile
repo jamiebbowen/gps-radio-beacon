@@ -18,7 +18,8 @@ CXXFLAGS := -std=c++11 -Wall -Wextra -g -O0 -I../firmware -I../../receiver/tests
 LDFLAGS  := -lm
 
 BUILD    := build
-BINS     := $(BUILD)/test_ekf $(BUILD)/test_nmea_fields
+BINS     := $(BUILD)/test_ekf $(BUILD)/test_nmea_fields $(BUILD)/test_beacon \
+            $(BUILD)/test_nav $(BUILD)/test_gps
 
 .PHONY: all test coverage clean
 
@@ -33,6 +34,21 @@ $(BUILD)/test_ekf: test_ekf.cpp ../firmware/ekf.cpp | $(BUILD)
 $(BUILD)/test_nmea_fields: test_nmea_fields.c ../firmware/nmea_fields.c | $(BUILD)
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $^ $(LDFLAGS)
 
+# beacon.cpp is #included by the test (static access + Arduino stub);
+# stubs/Arduino.h shadows the real core.
+$(BUILD)/test_beacon: test_beacon.cpp ../firmware/beacon.cpp stubs/Arduino.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
+
+# nav.cpp is #included by the test; the real EKF is linked in.
+$(BUILD)/test_nav: test_nav.cpp ../firmware/nav.cpp ../firmware/ekf.cpp \
+                   stubs/Arduino.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< ../firmware/ekf.cpp $(LDFLAGS)
+
+# gps.cpp is #included by the test; real nmea_fields.c is linked in.
+$(BUILD)/test_gps: test_gps.cpp ../firmware/gps.cpp ../firmware/nmea_fields.c \
+                   stubs/Arduino.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< ../firmware/nmea_fields.c $(LDFLAGS)
+
 test: $(BINS)
 	@rc=0; for b in $(BINS); do \
 	    echo "== $$b =="; ./$$b || rc=1; \
@@ -45,6 +61,12 @@ coverage: clean $(BINS)
 	    | grep -A1 "File.*ekf.cpp"
 	@gcov -o $(BUILD) $(BUILD)/test_nmea_fields-nmea_fields.gcno 2>/dev/null \
 	    | grep -A1 "File.*nmea_fields.c"
+	@gcov -o $(BUILD) $(BUILD)/test_beacon*.gcno 2>/dev/null \
+	    | grep -A1 "File.*firmware/beacon.cpp"
+	@gcov -o $(BUILD) $(BUILD)/test_nav-test_nav.gcno 2>/dev/null \
+	    | grep -A1 "File.*firmware/nav.cpp"
+	@gcov -o $(BUILD) $(BUILD)/test_gps-test_gps.gcno 2>/dev/null \
+	    | grep -A1 "File.*firmware/gps.cpp"
 	@mv -f *.gcov $(BUILD)/ 2>/dev/null || true
 
 clean:
