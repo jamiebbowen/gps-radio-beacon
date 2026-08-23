@@ -50,6 +50,7 @@ typedef struct {
 #define GPIO_NOPULL                0u
 #define GPIO_PULLUP                0u
 #define GPIO_SPEED_FREQ_LOW        0u
+#define GPIO_SPEED_FREQ_HIGH       0u
 #define GPIO_SPEED_FREQ_VERY_HIGH  0u
 #define GPIO_AF4_I2C1              0u
 #define GPIO_AF5_SPI2              0u
@@ -170,6 +171,7 @@ HAL_StatusTypeDef HAL_I2C_IsDeviceReady(I2C_HandleTypeDef *hi2c, uint16_t addr,
 typedef int IRQn_Type;
 #define DMA1_Stream3_IRQn 59
 #define DMA1_Stream4_IRQn 60
+#define EXTI1_IRQn        7
 #define EXTI2_IRQn        8
 #define EXTI15_10_IRQn    40
 #define USART2_IRQn       38
@@ -187,6 +189,7 @@ void HAL_Delay(uint32_t ms);
 #define __HAL_RCC_USART2_CLK_ENABLE() do {} while (0)
 #define __HAL_LINKDMA(handle, field, dma) ((handle)->field = &(dma))
 #define __enable_irq()                do {} while (0)
+#define __disable_irq()               do {} while (0)
 #define SET_BIT(reg, bit)             ((reg) |= (bit))
 
 #endif /* __STM32F4xx_HAL_EXT_H */

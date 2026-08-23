@@ -23,7 +23,7 @@ BUILD    := build
 SRC_DIR  := ../firmware/src
 
 # Modules with a matching test_<module>.c and $(SRC_DIR)/<module>.c
-MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card
+MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass
 BINS     := $(addprefix $(BUILD)/test_,$(MODULES))
 
 # rf_receiver.c calls into the real parser, so its test links rf_parser.c
