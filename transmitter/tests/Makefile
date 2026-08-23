@@ -19,7 +19,8 @@ LDFLAGS  := -lm
 
 BUILD    := build
 BINS     := $(BUILD)/test_ekf $(BUILD)/test_nmea_fields $(BUILD)/test_beacon \
-            $(BUILD)/test_nav $(BUILD)/test_gps
+            $(BUILD)/test_nav $(BUILD)/test_gps $(BUILD)/test_radio \
+            $(BUILD)/test_launch_detect $(BUILD)/test_uart
 
 .PHONY: all test coverage clean
 
@@ -49,6 +50,19 @@ $(BUILD)/test_gps: test_gps.cpp ../firmware/gps.cpp ../firmware/nmea_fields.c \
                    stubs/Arduino.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< ../firmware/nmea_fields.c $(LDFLAGS)
 
+# radio.cpp / launch_detect.cpp are #included by their tests; RadioLib,
+# Wire and the Adafruit BNO08x library are stubbed in stubs/.
+$(BUILD)/test_radio: test_radio.cpp ../firmware/radio.cpp stubs/Arduino.h \
+                     stubs/RadioLib.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
+
+$(BUILD)/test_launch_detect: test_launch_detect.cpp ../firmware/launch_detect.cpp \
+                             stubs/Arduino.h stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
+
+$(BUILD)/test_uart: test_uart.cpp ../firmware/uart.cpp stubs/Arduino.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
+
 test: $(BINS)
 	@rc=0; for b in $(BINS); do \
 	    echo "== $$b =="; ./$$b || rc=1; \
@@ -67,6 +81,12 @@ coverage: clean $(BINS)
 	    | grep -A1 "File.*firmware/nav.cpp"
 	@gcov -o $(BUILD) $(BUILD)/test_gps-test_gps.gcno 2>/dev/null \
 	    | grep -A1 "File.*firmware/gps.cpp"
+	@gcov -o $(BUILD) $(BUILD)/test_radio.gcno 2>/dev/null \
+	    | grep -A1 "File.*firmware/radio.cpp"
+	@gcov -o $(BUILD) $(BUILD)/test_launch_detect.gcno 2>/dev/null \
+	    | grep -A1 "File.*firmware/launch_detect.cpp"
+	@gcov -o $(BUILD) $(BUILD)/test_uart.gcno 2>/dev/null \
+	    | grep -A1 "File.*firmware/uart.cpp"
 	@mv -f *.gcov $(BUILD)/ 2>/dev/null || true
 
 clean:
