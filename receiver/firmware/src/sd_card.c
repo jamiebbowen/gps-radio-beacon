@@ -344,7 +344,8 @@ void SD_Card_GetTimestamp(char *timestamp_str, uint32_t max_len)
 {
     if (timestamp_str == NULL) return;
     uint32_t tick = HAL_GetTick();
-    snprintf(timestamp_str, max_len, "%lu.%03lu", tick / 1000, tick % 1000);
+    snprintf(timestamp_str, max_len, "%lu.%03lu",
+             (unsigned long)(tick / 1000), (unsigned long)(tick % 1000));
 }
 
 SD_Card_Status SD_Card_LogGPS(GPS_Data *gps_data, Log_Entry_Type log_type)

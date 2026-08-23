@@ -18,8 +18,6 @@
 #define NMEA_END_CHAR1              '\r'
 #define NMEA_END_CHAR2              '\n'
 
-/* Function declarations */
-void Error_Handler(void);
 
 /* Private variables */
 static UART_HandleTypeDef huart_gps;
@@ -47,7 +45,7 @@ static uint8_t raw_capture_index = 0;
 static uint8_t raw_capture_filled = 0;
 
 /* Private function prototypes */
-static void GPS_UART_Init(void);
+static uint8_t GPS_UART_Init(void);
 
 /**
  * @brief Initialize GPS module
@@ -55,8 +53,14 @@ static void GPS_UART_Init(void);
  */
 uint8_t GPS_Init(void)
 {
-  /* Initialize UART for GPS communication */
-  GPS_UART_Init();
+  /* Initialize UART for GPS communication. Failure is reported, not
+   * escalated: local GPS is optional (distance/bearing only) and main
+   * degrades gracefully when GPS_Init returns GPS_ERROR. Calling
+   * Error_Handler here would reset the whole receiver over a peripheral
+   * the mission can live without. */
+  if (GPS_UART_Init() != GPS_OK) {
+    return GPS_ERROR;
+  }
   
   /* Set a non-zero value in last_bytes for debugging */
   last_bytes[0] = 0xA1;
@@ -106,8 +110,8 @@ uint8_t GPS_Update(GPS_Data *gps_data)
   switch (debug_mode) {
     case 0:
       /* Display UART and NMEA counters */
-      snprintf(gps_data->debug_lat, GPS_DEBUG_BUFFER_SIZE, "UR:%lu", uart_byte_counter);
-      snprintf(gps_data->debug_lon, GPS_DEBUG_BUFFER_SIZE, "NM:%lu", nmea_sentence_counter);
+      snprintf(gps_data->debug_lat, GPS_DEBUG_BUFFER_SIZE, "UR:%lu", (unsigned long)uart_byte_counter);
+      snprintf(gps_data->debug_lon, GPS_DEBUG_BUFFER_SIZE, "NM:%lu", (unsigned long)nmea_sentence_counter);
       snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "ST:%02X ER:%02X", last_bytes[2], last_bytes[3]);
       break;
       
@@ -356,9 +360,9 @@ void GPS_GetRawBytes(uint8_t *bytes)
 
 /**
  * @brief Initialize UART for GPS communication
- * @retval None
+ * @retval GPS_OK or GPS_ERROR
  */
-static void GPS_UART_Init(void)
+static uint8_t GPS_UART_Init(void)
 {
   /* Enable USART2 clock */
   __HAL_RCC_USART2_CLK_ENABLE();
@@ -395,8 +399,7 @@ static void GPS_UART_Init(void)
   HAL_NVIC_DisableIRQ(USART2_IRQn);
   
   if (HAL_UART_Init(&huart_gps) != HAL_OK) {
-    /* Error handling */
-    Error_Handler();
+    return GPS_ERROR;
   }
   
   /* Clear any pending interrupts */
@@ -411,4 +414,6 @@ static void GPS_UART_Init(void)
   
   /* Ensure global interrupts are enabled */
   __enable_irq();
+
+  return GPS_OK;
 }

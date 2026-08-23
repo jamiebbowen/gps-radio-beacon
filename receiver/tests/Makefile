@@ -23,7 +23,7 @@ BUILD    := build
 SRC_DIR  := ../firmware/src
 
 # Modules with a matching test_<module>.c and $(SRC_DIR)/<module>.c
-MODULES  := rf_parser gps_parser math_utils rf_receiver
+MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card
 BINS     := $(addprefix $(BUILD)/test_,$(MODULES))
 
 # rf_receiver.c calls into the real parser, so its test links rf_parser.c
@@ -31,6 +31,18 @@ BINS     := $(addprefix $(BUILD)/test_,$(MODULES))
 $(BUILD)/test_rf_receiver: test_rf_receiver.c $(SRC_DIR)/rf_receiver.c \
                            $(SRC_DIR)/rf_parser.c test_harness.h | $(BUILD)
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< $(SRC_DIR)/rf_parser.c $(LDFLAGS)
+
+# gps.c calls into the real NMEA parser, so its test links gps_parser.c too
+$(BUILD)/test_gps: test_gps.c $(SRC_DIR)/gps.c \
+                   $(SRC_DIR)/gps_parser.c test_harness.h | $(BUILD)
+	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< $(SRC_DIR)/gps_parser.c $(LDFLAGS)
+
+# sd_card.c runs on the REAL LittleFS over a RAM block device in the test
+LFS_DIR  := ../firmware/lib/littlefs
+$(BUILD)/test_sd_card: test_sd_card.c $(SRC_DIR)/sd_card.c \
+                       $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c test_harness.h | $(BUILD)
+	$(CC) $(CFLAGS) $(COVFLAGS) -I$(LFS_DIR) -DLFS_NO_MALLOC -DLFS_NO_DEBUG -DLFS_NO_WARN \
+	    -o $@ $< $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(LDFLAGS)
 
 .PHONY: all test coverage clean
 
