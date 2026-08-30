@@ -56,7 +56,9 @@ When a problem is detected:
 
 **Step 1: Send Reset Commands**
 - u-blox PUBX poll request
-- u-blox reset to factory defaults OR cold start
+- u-blox controlled software reset (cold start) - deliberately NEVER the
+  factory-defaults variant: that reverts UART1 to 9600 baud and we talk
+  at 115200, permanently deafening the link the recovery meant to restore
 - Wait for GPS to restart
 
 **Step 2: Reinitialize GPS**
@@ -72,13 +74,18 @@ When a problem is detected:
 
 ### Safety Features
 
-#### Attempt Limiting
-- **Maximum 3 recovery attempts** per session
-- Prevents infinite recovery loops
-- After 3 failures: Give up and report
+#### Attempt Limiting with Cooldown
+- **3 recovery attempts**, then a **10-minute cooldown**, then re-arm for
+  another round - "power cycle required" is not an option on a rocket in
+  a tree, but a continuous cold-restart loop would keep discarding the
+  almanac
+- The cooldown/re-arm cycle runs indefinitely until a fix returns
+- The heartbeat's `rst` nibble reports the attempt count (0-15) so the
+  receiver display shows recovery activity (0 = GPS healthy)
 
 ```
-[GPS] ✗ Recovery failed after 3 attempts - power cycle required
+[GPS] ✗ Recovery failed after 3 attempts - cooling down before retry
+[GPS] Watchdog: cooldown over, re-arming recovery
 ```
 
 #### Success Reset
@@ -110,14 +117,16 @@ T+122s: [GPS] Recovery attempt complete
 T+150s: [GPS] Bytes rcvd: 5800 | Valid: 1    ✅ Fixed!
 ```
 
-### Scenario 3: Recovery Failed
+### Scenario 3: Persistent Failure (Cooldown)
 
 ```
-T+0s:   [GPS] Bytes rcvd: 0 | Valid: 0      (GPS dead)
-T+30s:  [GPS] ⚠️  Watchdog: No UART data for 30s, attempting recovery... (Attempt 1)
-T+60s:  [GPS] ⚠️  Watchdog: No UART data for 30s, attempting recovery... (Attempt 2)
-T+90s:  [GPS] ⚠️  Watchdog: No UART data for 30s, attempting recovery... (Attempt 3)
-T+120s: [GPS] ✗ Recovery failed after 3 attempts - power cycle required
+T+0s:    [GPS] Bytes rcvd: 0 | Valid: 0      (GPS dead)
+T+30s:   [GPS] ⚠️  Watchdog: No UART data for 30s, attempting recovery... (Attempt 1)
+T+60s:   [GPS] ⚠️  Watchdog: No UART data for 30s, attempting recovery... (Attempt 2)
+T+90s:   [GPS] ⚠️  Watchdog: No UART data for 30s, attempting recovery... (Attempt 3)
+T+120s:  [GPS] ✗ Recovery failed after 3 attempts - cooling down before retry
+T+10min: [GPS] Watchdog: cooldown over, re-arming recovery
+T+10.5m: [GPS] ⚠️  Watchdog: No UART data for 30s, attempting recovery... (Attempt 1, round 2)
 ```
 
 ## U-blox Commands Used

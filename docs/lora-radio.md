@@ -15,7 +15,7 @@ Successfully converted the GPS radio beacon receiver from UART-based RF (RXM-433
 
 ### 2. Updated RF Receiver (`rf_receiver.c`)
 - Replaced UART initialization with SPI initialization
-- Changed from interrupt-driven UART to polled LoRa packet reception
+- Changed from interrupt-driven UART to DIO1-interrupt-driven LoRa packet reception (EXTI on DIO1 sets a flag; the main loop drains the packet over SPI)
 - Packet format remains the same: `$$data$$CHKSUM`
 - Maintains compatibility with existing parser
 
@@ -38,8 +38,9 @@ Successfully converted the GPS radio beacon receiver from UART-based RF (RXM-433
 | PB15        | SPI2_MOSI| MOSI            | SPI Data In |
 | PB12        | GPIO     | NSS/CS          | Chip Select |
 | PA8         | GPIO     | NRST            | Reset (active low) |
-| PA7         | GPIO     | BUSY            | Busy status |
-| PA6         | GPIO_INT | DIO1            | Interrupt (RX/TX done) |
+| PB0         | GPIO     | BUSY            | Busy status (moved from PA7: SD conflict) |
+| PB1         | GPIO_INT | DIO1            | Interrupt (RX/TX done) (moved from PA6: SD conflict) |
+| PA9         | GPIO     | RXEN            | RF switch RX enable |
 | 3.3V        | Power    | VCC             | Power supply |
 | GND         | Ground   | GND             | Ground |
 
@@ -54,9 +55,9 @@ Both transmitter and receiver use identical settings:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Frequency | 433.0 MHz | ISM band |
+| Frequency | 433.0 MHz | ISM band (8-channel plan, 433.00-434.75 MHz) |
 | Bandwidth | 125 kHz | Standard LoRa BW |
-| Spreading Factor | 9 | SF9 (good range/speed balance) |
+| Spreading Factor | 7 | SF7 (fast over-the-air time for 10 Hz fused packets) |
 | Coding Rate | 4/7 | Forward error correction |
 | Sync Word | 0x12 | Private network |
 | TX Power | 22 dBm | Maximum for E22-400M33S |
@@ -95,16 +96,17 @@ Before deploying, verify:
 
 ### Range Improvements
 - **Previous (300 baud UART):** ~500m line-of-sight
-- **LoRa SF9 @ 433MHz:** ~2-5km line-of-sight, ~10-15km with good antennas
+- **LoRa SF7 @ 433MHz:** ~2-5km line-of-sight, ~10-15km with good antennas
 
 ### Link Budget
 - TX Power: +22 dBm
-- RX Sensitivity (SF9): ~-123 dBm
+- RX Sensitivity (SF7): ~-123 dBm
 - Link Budget: ~145 dB (excellent for rocketry applications)
 
 ### Data Rate
-- SF9 @ 125kHz: ~1.76 kbps effective
-- Typical packet (60 bytes): ~270ms transmission time
+- SF7 @ 125kHz: ~5.5 kbps effective (GPS packet ~56 ms airtime)
+- Binary packets (13-16 bytes): ~40-56 ms airtime; the 10 Hz fused
+  telemetry stream fits comfortably on one channel
 - Much faster than previous 300 baud implementation
 
 ## Benefits of LoRa
