@@ -14,6 +14,15 @@ static uint8_t active_channel = LORA_CHANNEL;
 static uint8_t init_retry_count = 0;
 static const uint8_t MAX_INIT_RETRIES = 3;
 
+/* Mid-flight wedge recovery: transmit failures were previously logged and
+ * dropped, so a chip that wedges (BUSY stuck, EMI/SPI glitch from the
+ * 33 dBm PA) would leave the beacon permanently silent while the main loop
+ * runs on - the 16 s WDT never sees it. Count consecutive failures; past
+ * the limit force a full radio_init() (NRST pulse + begin()), the only
+ * reset the SX1268 honours once wedged. */
+static uint8_t tx_fail_streak = 0;
+#define TX_FAIL_STREAK_LIMIT 8
+
 /**
  * Initialize the E22-400M33S LoRa module (SX1268)
  */
@@ -80,6 +89,8 @@ void radio_init(void) {
     if (state == RADIOLIB_ERR_NONE) {
         Serial.println("[Radio] ✓ Initialized successfully");
         radio_initialized = true;
+        init_retry_count = 0;   /* re-arm the radio_enable() retry ladder */
+        tx_fail_streak = 0;
         
         // Set to standby mode initially
         radio.standby();
@@ -176,6 +187,13 @@ void radio_disable(void) {
 int transmit_packet(const uint8_t* data, size_t length) {
     if (!radio_initialized) {
         Serial.println("[Radio] Error: Not initialized");
+        /* Dead chip: keep attempting a full re-init every STREAK_LIMIT
+         * calls so a transient radio brownout self-heals. */
+        if (++tx_fail_streak >= TX_FAIL_STREAK_LIMIT) {
+            Serial.println(F("[Radio] Not-initialized streak - forcing full re-init"));
+            tx_fail_streak = 0;
+            radio_init();
+        }
         return RADIOLIB_ERR_CHIP_NOT_FOUND;
     }
     
@@ -190,9 +208,16 @@ int transmit_packet(const uint8_t* data, size_t length) {
         Serial.print("[Radio] ✓ Transmitted ");
         Serial.print(length);
         Serial.println(" bytes");
+        tx_fail_streak = 0;
     } else {
         Serial.print("[Radio] ✗ Transmission failed, code: ");
         Serial.println(state);
+        if (++tx_fail_streak >= TX_FAIL_STREAK_LIMIT) {
+            Serial.println(F("[Radio] TX failure streak - forcing full re-init"));
+            tx_fail_streak = 0;
+            radio_initialized = false;
+            radio_init();
+        }
     }
     
     return state;

@@ -210,6 +210,63 @@ TEST(test_disable)
 
 /* ------------------------------------------------------------------ */
 
+TEST(test_tx_failure_streak_forces_reinit)
+{
+    reset_knobs();
+    radio_init();                            /* healthy */
+    radio_enabled = true;
+    const uint8_t pkt[1] = {0x42};
+
+    /* 7 consecutive TX failures: tolerated (one bad packet is noise) */
+    radiolib_transmit_result = -4;
+    for (int i = 0; i < 7; i++) transmit_packet(pkt, 1);
+    CHECK(radiolib_begin_calls == 1);
+
+    /* 8th consecutive: wedged chip gets a full NRST + begin() */
+    transmit_packet(pkt, 1);
+    CHECK(radiolib_begin_calls == 2);
+    CHECK(radio_initialized == true);
+    CHECK(tx_fail_streak == 0);
+
+    /* A success mid-streak resets the counter */
+    radiolib_transmit_result = -4;
+    for (int i = 0; i < 7; i++) transmit_packet(pkt, 1);
+    radiolib_transmit_result = RADIOLIB_ERR_NONE;
+    transmit_packet(pkt, 1);
+    radiolib_transmit_result = -4;
+    for (int i = 0; i < 7; i++) transmit_packet(pkt, 1);
+    CHECK(radiolib_begin_calls == 2);        /* still no re-init */
+    transmit_packet(pkt, 1);                 /* 8th consecutive */
+    CHECK(radiolib_begin_calls == 3);
+}
+
+TEST(test_dead_radio_keeps_retrying_reinit)
+{
+    reset_knobs();
+    radiolib_begin_result = RADIOLIB_ERR_CHIP_NOT_FOUND;
+    radio_init();                            /* chip absent */
+    CHECK(radio_initialized == false);
+    const uint8_t pkt[1] = {1};
+
+    /* Every 8 transmit attempts buys one full re-init: a transient
+     * radio brownout can self-heal without a beacon reboot. */
+    for (int round = 0; round < 3; round++) {
+        int calls = radiolib_begin_calls;
+        for (int i = 0; i < 8; i++) {
+            CHECK(transmit_packet(pkt, 1) == RADIOLIB_ERR_CHIP_NOT_FOUND);
+        }
+        CHECK(radiolib_begin_calls == calls + 1);
+    }
+
+    /* Chip comes back: picked up automatically, ladder re-armed */
+    radiolib_begin_result = RADIOLIB_ERR_NONE;
+    for (int i = 0; i < 8; i++) transmit_packet(pkt, 1);
+    CHECK(radio_initialized == true);
+    CHECK(init_retry_count == 0);
+    radio_enabled = true;                    /* leave a healthy radio */
+    radiolib_transmit_result = RADIOLIB_ERR_NONE;
+}
+
 int main(void)
 {
     run_test_init_primary_channel();
@@ -219,6 +276,8 @@ int main(void)
     run_test_enable_recovers_on_retry();
     run_test_transmit_paths();
     run_test_disable();
+    run_test_tx_failure_streak_forces_reinit();
+    run_test_dead_radio_keeps_retrying_reinit();
 
     return TEST_SUMMARY();
 }
