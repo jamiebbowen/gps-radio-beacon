@@ -49,13 +49,13 @@
 | - | - | - | ANT (21) | **433MHz Antenna (REQUIRED)** |
 
 **LoRa Configuration:**
-- Frequency: **433.0 MHz** (ISM band)
+- Frequency: **433.0 MHz** (ISM band; 8-channel plan 433.00-434.75 MHz)
 - Bandwidth: **125 kHz**
-- Spreading Factor: **9** (SF9)
+- Spreading Factor: **7** (SF7 - fast airtime for the 10 Hz fused stream)
 - Coding Rate: **4/7**
 - Sync Word: **0x12** (private network)
 - TX Power: **22 dBm** (~158mW at 3.3V, ~2W at 5V)
-- Preamble: **8 symbols**
+- Preamble: **16 symbols** (TX) / 8 (RX is tolerant: longer only overlaps more)
 
 **Notes:**
 - Hardware SPI uses default ItsyBitsy M4 pins (MOSI, MISO, SCK)
@@ -239,7 +239,7 @@ Match these with receiver:
 ```cpp
 #define LORA_FREQUENCY      433.0       // MHz
 #define LORA_BANDWIDTH      125.0       // kHz
-#define LORA_SPREADING      9           // SF9
+#define LORA_SPREADING      7           // SF7
 #define LORA_CODING_RATE    7           // 4/7
 #define LORA_SYNC_WORD      0x12        // Private
 #define LORA_TX_POWER       22          // dBm (158mW)
@@ -429,10 +429,10 @@ Transmitted every 5 minutes for FCC compliance.
 |-----------|-------|------------|
 | Frequency | 433.0 MHz | ✅ YES |
 | Bandwidth | 125 kHz | ✅ YES |
-| Spreading Factor | 9 | ✅ YES |
+| Spreading Factor | 7 | ✅ YES |
 | Coding Rate | 4/7 | ✅ YES |
 | Sync Word | 0x12 | ✅ YES |
-| Packet Format | $$data$$CHKSUM | ✅ YES |
+| Packet Format | Binary typed packets (GPS 13 B / fused 16 B / heartbeat 8 B) | ✅ YES |
 
 **TX Power does NOT need to match** (transmitter can use higher power)
 
