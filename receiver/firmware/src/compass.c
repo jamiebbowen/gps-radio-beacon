@@ -257,17 +257,17 @@ static uint8_t Compass_ScanI2C(uint8_t *detected_addrs, uint8_t max_addrs)
       devices_found++;
       
       /* Debug output for each found device */
-      snprintf(debug_msg, sizeof(debug_msg), "I2C device found at address 0x%02X, stored at index %d", 
+      snprintf(debug_msg, sizeof(debug_msg), "I2C device found at address 0x%02X, stored at index %d",
                addr, devices_found-1);
-      Compass_SetError(0, debug_msg, 0);
+      Compass_SetDebug(6, debug_msg);
     }
   }
   
   /* Debug output for all detected addresses */
   if (devices_found > 0) {
-    snprintf(debug_msg, sizeof(debug_msg), "Detected addrs: 0x%02X 0x%02X", 
+    snprintf(debug_msg, sizeof(debug_msg), "Detected addrs: 0x%02X 0x%02X",
              detected_addrs[0], (devices_found > 1) ? detected_addrs[1] : 0);
-    Compass_SetError(0, debug_msg, 0);
+    Compass_SetDebug(7, debug_msg);
   }
   
   /* Store count in debug structure */
@@ -278,7 +278,7 @@ static uint8_t Compass_ScanI2C(uint8_t *detected_addrs, uint8_t max_addrs)
     return 0;
   } else {
     snprintf(debug_msg, sizeof(debug_msg), "Found %d I2C device(s)", devices_found);
-    Compass_SetError(0, debug_msg, 0);
+    Compass_SetDebug(6, debug_msg);
     return devices_found;
   }
 }
@@ -1501,12 +1501,13 @@ uint8_t Compass_DisplayI2CScan(void)
         strcat(line3, addr_str);
       }
       
-      /* Debug - print detected addresses */
-      snprintf(debug_msg, sizeof(debug_msg), "Addresses: %02X %02X %02X %02X", 
-               detected_addrs[0], detected_addrs[1], 
-               (count > 2) ? detected_addrs[2] : 0, 
+      /* Debug - print detected addresses (debug slot, not the error
+       * channel: this is informational, not a fault) */
+      snprintf(debug_msg, sizeof(debug_msg), "Addresses: %02X %02X %02X %02X",
+               detected_addrs[0], detected_addrs[1],
+               (count > 2) ? detected_addrs[2] : 0,
                (count > 3) ? detected_addrs[3] : 0);
-      Compass_SetError(0, debug_msg, 0);
+      Compass_SetDebug(5, debug_msg);
       
       Display_DrawText(0, 30, line2);
       if (count > 4) {
