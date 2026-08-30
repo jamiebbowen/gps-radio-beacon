@@ -32,6 +32,17 @@ static volatile bool  rot_valid = false;
 static volatile uint32_t last_accel_ms = 0;
 static volatile uint32_t last_rotvec_ms = 0;
 
+/* GPS-altitude launch fallback state (see launch_detect_gps_fallback_update) */
+static bool     gf_baseline_set = false;
+static float    gf_baseline_alt = 0.0f;
+static uint8_t  gf_climb_samples = 0;
+
+/* Landing detection state (see landing_detect_update) */
+static bool     landed = false;
+static uint32_t land_window_start_s = 0;
+static float    land_window_min = 0.0f;
+static float    land_window_max = 0.0f;
+
 /**
  * Initialize BNO085 IMU for launch detection
  */
@@ -89,6 +100,10 @@ void launch_detect_init(void) {
     launch_time_seconds = 0;
     detection_start_time_ms = 0;
     launch_detected = false;
+    gf_baseline_set = false;
+    gf_climb_samples = 0;
+    landed = false;
+    land_window_start_s = 0;
     imu_initialized = true;
     
     Serial.println("[Launch] ✓ Launch detection ready");
@@ -207,6 +222,86 @@ bool imu_has_quaternion(void) {
 
 uint32_t imu_last_accel_ms(void)  { return last_accel_ms; }
 uint32_t imu_last_rotvec_ms(void) { return last_rotvec_ms; }
+
+/* ---------- GPS-altitude launch fallback (IMU-independent) --------------- */
+
+/**
+ * Feed each valid GPS altitude fix (call at the 1 Hz GPS rate). If the
+ * altitude climbs >= LAUNCH_GPS_ALT_CLIMB_M above the pad baseline for
+ * LAUNCH_GPS_ALT_CLIMB_SAMPLES consecutive samples, confirm launch exactly
+ * as the IMU path would (same state + one-shot edge), so a dead IMU no
+ * longer pins the beacon at pad cadence for the whole flight.
+ * Returns true on the sample that confirms launch.
+ */
+bool launch_detect_gps_fallback_update(float alt_m, uint32_t system_time_seconds) {
+    if (current_state == LAUNCH_STATE_CONFIRMED) return false;  /* already flying */
+
+    if (!gf_baseline_set) {
+        gf_baseline_alt = alt_m;   /* pad altitude baseline */
+        gf_baseline_set = true;
+        gf_climb_samples = 0;
+        return false;
+    }
+
+    if (alt_m >= gf_baseline_alt + LAUNCH_GPS_ALT_CLIMB_M) {
+        if (++gf_climb_samples >= LAUNCH_GPS_ALT_CLIMB_SAMPLES) {
+            Serial.print(F("[Launch] GPS-alt fallback: climb of "));
+            Serial.print(alt_m - gf_baseline_alt);
+            Serial.println(F(" m sustained - LAUNCH CONFIRMED"));
+            current_state = LAUNCH_STATE_CONFIRMED;
+            launch_time_seconds = system_time_seconds;
+            launch_detected = true;
+            return true;
+        }
+    } else {
+        gf_climb_samples = 0;
+    }
+    return false;
+}
+
+/* ---------- Landing detection (post-launch) ------------------------------ */
+
+/**
+ * Feed once per second with the current state. Landing = linear accel quiet
+ * AND GPS altitude stable, sustained for LAND_QUIET_S, after a confirmed
+ * launch. Steady parachute descent passes the accel test but never the
+ * altitude-stability test, so it cannot false-trigger. Latches once true.
+ */
+bool landing_detect_update(float alt_m, bool gps_valid, uint32_t system_time_seconds) {
+    if (landed) return true;
+    if (current_state != LAUNCH_STATE_CONFIRMED) return false;
+    if (!imu_initialized) return false;   /* need the accel-quiet evidence */
+
+    bool quiet = (total_accel < LAND_ACCEL_QUIET_MS2);
+
+    if (!quiet || !gps_valid) {
+        land_window_start_s = 0;   /* window broken; restart next second */
+        return false;
+    }
+
+    if (land_window_start_s == 0) {
+        land_window_start_s = system_time_seconds;
+        land_window_min = land_window_max = alt_m;
+        return false;
+    }
+
+    if (alt_m < land_window_min) land_window_min = alt_m;
+    if (alt_m > land_window_max) land_window_max = alt_m;
+
+    if ((land_window_max - land_window_min) > LAND_ALT_WINDOW_M) {
+        land_window_start_s = 0;   /* still moving vertically */
+        return false;
+    }
+
+    if ((system_time_seconds - land_window_start_s) >= LAND_QUIET_S) {
+        landed = true;
+        Serial.println(F("[Launch] LANDING DETECTED (quiet + stable alt)"));
+        return true;
+    }
+    return false;
+}
+
+bool launch_detect_has_landed(void) { return landed; }
 
 /**
  * Check if launch has been detected and confirmed (and clear flag)

@@ -142,7 +142,10 @@ typedef struct {
         uint32_t ClockSpeed, DutyCycle, OwnAddress1, AddressingMode,
                  DualAddressMode, OwnAddress2, GeneralCallMode, NoStretchMode;
     } Init;
+    uint32_t State;    /* HAL_I2C_STATE_* */
 } I2C_HandleTypeDef;
+
+#define HAL_I2C_STATE_READY        0x20u
 
 #define I2C_DUTYCYCLE_2            0u
 #define I2C_ADDRESSINGMODE_7BIT    0u
@@ -152,6 +155,7 @@ typedef struct {
 #define I2C_MEMADD_SIZE_8BIT       1u
 
 HAL_StatusTypeDef HAL_I2C_Init(I2C_HandleTypeDef *hi2c);
+HAL_StatusTypeDef HAL_I2C_DeInit(I2C_HandleTypeDef *hi2c);
 HAL_StatusTypeDef HAL_I2C_Master_Transmit(I2C_HandleTypeDef *hi2c, uint16_t addr,
                                           uint8_t *data, uint16_t size,
                                           uint32_t timeout);

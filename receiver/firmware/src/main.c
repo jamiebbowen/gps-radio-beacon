@@ -75,6 +75,7 @@ typedef enum {
   DISPLAY_MODE_SD_CARD = 5,
   DISPLAY_MODE_CHANNEL = 6,     /* Rocket select: long press cycles channel */
   DISPLAY_MODE_RF_STATS = 7,    /* Full radio statistics */
+  DISPLAY_MODE_PREFLIGHT = 8,   /* Pad-side go/no-go checklist */
   DISPLAY_MODE_COUNT            /* Keep last - used for button cycling */
 } DisplayMode_t;
 /* USER CODE END PTD */
@@ -909,6 +910,20 @@ int main(void)
     last_compass_update = current_time;
   }
   
+  /* SD session marker: log the moment contact is lost (once per loss), so
+   * post-flight log review can tell "signal lost at T" from "operator
+   * stopped logging". Re-arms when contact resumes. 5 min matches the
+   * auto re-scan threshold: far beyond the slowest beacon cadence (60 s). */
+  static uint8_t lost_logged = 0;
+  if (last_rf_packet_time > 0 && current_time - last_rf_packet_time > 300000) {
+    if (!lost_logged) {
+      lost_logged = 1;
+      SD_Card_LogEvent("RF LOST (>5min silence)");
+    }
+  } else if (last_rf_packet_time > 0) {
+    lost_logged = 0;
+  }
+
   /* Check if RF data is stale (no updates for more than 180 seconds) */
   if (last_rf_packet_time > 0 && current_time - last_rf_packet_time > 180000) {
     has_valid_remote_gps = 0; /* Mark remote GPS as invalid if too old */
@@ -967,6 +982,37 @@ int main(void)
     case DISPLAY_MODE_RF_STATS:
       DisplayMode_RFStats();
       break;
+
+    case DISPLAY_MODE_PREFLIGHT: {
+      /* Link freshness: a beacon at its slowest cadence (60 s battery save
+       * pre-launch is 5 s) should be heard within 15 s. */
+      uint8_t pf_link_ok = 0;
+      uint32_t pf_link_age_s = 0;
+      if (last_rf_packet_time > 0) {
+        pf_link_age_s = (current_time - last_rf_packet_time) / 1000;
+        pf_link_ok = (pf_link_age_s <= 15);
+      }
+      int16_t pf_rssi = 0;
+      int8_t pf_snr = 0;
+      RF_Receiver_GetSignalQuality(&pf_rssi, &pf_snr);
+
+      /* Heartbeat health is only meaningful when the heartbeat is fresh;
+       * once position packets flow it goes quiet by design. */
+      HeartbeatPacket_t pf_hb;
+      uint32_t pf_hb_age = 0;
+      uint8_t pf_hb_state = 0xFF;
+      if (RF_Receiver_GetLastHeartbeat(&pf_hb, &pf_hb_age) && pf_hb_age < 15000) {
+        pf_hb_state = HB_GPS_STATE(pf_hb.gps_health);
+      }
+
+      DisplayMode_Preflight(pf_link_ok, pf_link_age_s, pf_rssi,
+                            remote_gps_data.fix, (uint8_t)remote_gps_data.satellites,
+                            pf_hb_state,
+                            has_valid_local_gps, (uint8_t)local_gps_data.satellites,
+                            compass_data.heading_valid && !compass_data.heading_stale,
+                            sd_card_ok);
+      break;
+    }
       
     default:
       /* Unknown mode, reset to GPS */

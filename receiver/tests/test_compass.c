@@ -108,6 +108,12 @@ HAL_StatusTypeDef HAL_I2C_Mem_Write(I2C_HandleTypeDef *hi2c, uint16_t addr,
     return HAL_OK;
 }
 
+HAL_StatusTypeDef HAL_I2C_DeInit(I2C_HandleTypeDef *hi2c)
+{
+    (void)hi2c;
+    return HAL_OK;
+}
+
 HAL_StatusTypeDef HAL_I2C_Master_Transmit(I2C_HandleTypeDef *hi2c, uint16_t addr,
                                           uint8_t *data, uint16_t size, uint32_t timeout)
 {

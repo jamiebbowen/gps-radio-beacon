@@ -34,6 +34,24 @@
 #define LAUNCH_ACCEL_DURATION   100     // Minimum duration above threshold (ms)
 #define LAUNCH_SETTLE_TIME      2000    // Wait time after power-on for IMU to settle (ms)
 
+/* GPS-altitude launch fallback: if the IMU is dead the accel detector never
+ * fires, which would pin the beacon at PRE_LAUNCH cadence for the whole
+ * flight. A sustained GPS altitude climb above the pad baseline confirms
+ * launch anyway. 50 m is far above stationary GPS alt noise (±10-30 m) and
+ * reached within the first ~2 s of any real boost; 3 consecutive 1 Hz
+ * samples kills single-sample noise spikes. */
+#define LAUNCH_GPS_ALT_CLIMB_M      50.0f   // climb above pad baseline (m)
+#define LAUNCH_GPS_ALT_CLIMB_SAMPLES 3      // consecutive 1 Hz samples above
+
+/* Landing detection (post-launch only): gravity-removed accel near zero AND
+ * GPS altitude stable for LAND_QUIET_S means the rocket is on the ground -
+ * steady parachute descent shows quiet accel too, but its altitude is never
+ * stable, so both conditions are required. On landing the beacon drops to
+ * BATTERY_SAVE cadence early (longer recovery window on the same battery). */
+#define LAND_ACCEL_QUIET_MS2        1.5f    // |linear accel| below this = quiet
+#define LAND_ALT_WINDOW_M           10.0f   // alt min/max spread allowed (m)
+#define LAND_QUIET_S                60      // sustained quiet+stable time (s)
+
 // Callsign - Update this with your ham radio callsign
 #define BEACON_CALLSIGN "KE0MZS"
 

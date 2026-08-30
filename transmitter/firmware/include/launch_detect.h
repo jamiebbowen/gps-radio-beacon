@@ -30,6 +30,16 @@ bool launch_detect_is_launched(void);
 /** Level query: current launch detection state (never auto-clears). */
 launch_state_t launch_detect_get_state(void);
 
+/* GPS-altitude launch fallback: feed each valid 1 Hz GPS altitude fix.
+ * Confirms launch (same state/edge as the IMU path) on a sustained climb
+ * above the pad baseline - covers a dead IMU. Returns true on confirmation. */
+bool launch_detect_gps_fallback_update(float alt_m, uint32_t system_time_seconds);
+
+/* Landing detection: feed once per second. Latches true when post-launch
+ * linear accel is quiet AND GPS altitude stays stable for LAND_QUIET_S. */
+bool landing_detect_update(float alt_m, bool gps_valid, uint32_t system_time_seconds);
+bool launch_detect_has_landed(void);
+
 /** Seconds since launch confirmation, or 0 if not launched yet. */
 uint32_t launch_detect_get_time_since_launch(uint32_t system_time_seconds);
 

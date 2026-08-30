@@ -40,8 +40,21 @@ void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *init)
 
 HAL_StatusTypeDef HAL_I2C_Init(I2C_HandleTypeDef *hi2c)
 {
-    (void)hi2c;
+    hi2c->State = HAL_I2C_STATE_READY;
     return fake_i2c_init_fail ? HAL_ERROR : HAL_OK;
+}
+
+HAL_StatusTypeDef HAL_I2C_DeInit(I2C_HandleTypeDef *hi2c)
+{
+    (void)hi2c;
+    return HAL_OK;
+}
+
+HAL_StatusTypeDef HAL_I2C_IsDeviceReady(I2C_HandleTypeDef *hi2c, uint16_t addr,
+                                        uint32_t trials, uint32_t timeout)
+{
+    (void)hi2c; (void)addr; (void)trials; (void)timeout;
+    return HAL_OK;
 }
 
 HAL_StatusTypeDef HAL_I2C_Master_Transmit(I2C_HandleTypeDef *hi2c, uint16_t addr,

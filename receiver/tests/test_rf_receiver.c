@@ -727,6 +727,42 @@ TEST(test_radio_wedge_rx_recovery)
     CHECK(RF_Receiver_GetWedgesRecovered() == rf_wedges_recovered);
 }
 
+TEST(test_auto_rescan_after_prolonged_silence)
+{
+    fake_mode = 5;  /* keep the wedge-recovery ladder quiet */
+
+    /* Never heard anything: prolonged silence must NOT kick off a scan
+     * (a manual channel pick with a quiet band is a deliberate choice). */
+    RF_Receiver_StopScan();
+    last_any_packet_ms = 0;
+    run_for(400000, 250);
+    (void)RF_Receiver_ScanUpdate();
+    CHECK(RF_Receiver_IsScanning() == 0);
+
+    /* Beacon heard, then brief silence (battery-save cadence is 60 s):
+     * no re-scan. GetGPSData consumes the packet so rf_packet_ready clears
+     * and later injections aren't gated. */
+    GPS_Data gps;
+    inject_gps_packet(39.89, -105.11);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetGPSData(&gps) == RF_OK);
+    run_for(60000, 250);
+    (void)RF_Receiver_ScanUpdate();
+    CHECK(RF_Receiver_IsScanning() == 0);
+
+    /* Silence past 5 minutes after contact: the beacon likely rebooted
+     * onto its boot channel - re-enter the channel scan. */
+    run_for(241000, 250);
+    (void)RF_Receiver_ScanUpdate();
+    CHECK(RF_Receiver_IsScanning() == 1);
+
+    /* A new packet locks the scan again */
+    inject_gps_packet(39.89, -105.11);
+    run_for(250, 250);
+    CHECK(RF_Receiver_ScanUpdate() == 1);
+    CHECK(RF_Receiver_IsScanning() == 0);
+}
+
 int main(void)
 {
     Test_SetTick(now_ms);
@@ -752,6 +788,7 @@ int main(void)
     run_test_cad_timeout_strikes_then_fallback();
     run_test_noise_floor_estimation_and_alert();
     run_test_diagnostics_getters();
+    run_test_auto_rescan_after_prolonged_silence();
 
     return TEST_SUMMARY();
 }

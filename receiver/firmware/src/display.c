@@ -83,12 +83,64 @@ void Display_Clear(void)
   memset(display_buffer, 0, SSD1309_BUFFER_SIZE);
 }
 
+/* Set when I2C1 fails to initialize. The receiver keeps running headless:
+ * RF reception, SD logging and the packet-activity LED all work without
+ * the display, and hanging here would turn a broken OLED into a dead
+ * ground station. All I2C traffic is skipped so a dead bus doesn't cost
+ * a 25 ms HAL timeout per chunk in the main loop. */
+static uint8_t display_i2c_failed = 0;
+
+/* Runtime wedge handling: the boot-time flag above only covers init. If the
+ * bus wedges mid-session (SDA held low by a crashed device, a loose wire
+ * shorting), every HAL call would cost its timeout in the main loop. Count
+ * consecutive failures; past the streak limit go headless, then probe the
+ * bus every 10 s and come back automatically when it recovers. */
+static uint32_t display_i2c_error_streak = 0;
+static uint32_t display_last_probe_ms = 0;
+#define DISPLAY_I2C_STREAK_LIMIT   32
+#define DISPLAY_I2C_PROBE_MS       10000
+
+static void Display_NoteI2CResult(HAL_StatusTypeDef st)
+{
+  if (st == HAL_OK) {
+    display_i2c_error_streak = 0;
+  } else if (++display_i2c_error_streak >= DISPLAY_I2C_STREAK_LIMIT) {
+    display_i2c_failed = 1;
+  }
+}
+
+/* Called from Display_Update while headless. Rate-limited so a permanently
+ * wedged bus costs at most one 50 ms probe per 10 s. Re-inits the HAL
+ * peripheral first: a wedge often leaves hi2c->State stuck at BUSY, which
+ * would make the probe return HAL_BUSY instantly and never recover. */
+static void Display_TryBusRecovery(void)
+{
+  uint32_t now = HAL_GetTick();
+  if (now - display_last_probe_ms < DISPLAY_I2C_PROBE_MS) return;
+  display_last_probe_ms = now;
+
+  if (hi2c_display.State != HAL_I2C_STATE_READY) {
+    HAL_I2C_DeInit(&hi2c_display);
+    HAL_I2C_Init(&hi2c_display);
+  }
+  if (HAL_I2C_IsDeviceReady(&hi2c_display, SSD1309_I2C_ADDR << 1, 1, 50) == HAL_OK) {
+    display_i2c_failed = 0;
+    display_i2c_error_streak = 0;
+    /* Next Display_Update repaints the full framebuffer. */
+  }
+}
+
 /**
  * @brief Update display with buffer contents
  * @retval None
  */
 void Display_Update(void)
 {
+  if (display_i2c_failed) {
+    Display_TryBusRecovery();
+    return;
+  }
+
   /* Always rotate buffer for fixed 90° orientation */
   // Display_RotateBuffer(display_buffer, rotated_buffer);
   
@@ -401,13 +453,6 @@ void Display_ShowBootScreen(void)
   Display_Update();
 }
 
-/* Set when I2C1 fails to initialize. The receiver keeps running headless:
- * RF reception, SD logging and the packet-activity LED all work without
- * the display, and hanging here would turn a broken OLED into a dead
- * ground station. All I2C traffic is skipped so a dead bus doesn't cost
- * a 25 ms HAL timeout per chunk in the main loop. */
-static uint8_t display_i2c_failed = 0;
-
 /**
  * @brief Initialize I2C for display communication
  * @retval None
@@ -461,7 +506,7 @@ static void Display_SendCommand(uint8_t command)
     return;
   }
   uint8_t buffer[2] = {SSD1309_COMMAND, command};
-  HAL_I2C_Master_Transmit(&hi2c_display, SSD1309_I2C_ADDR << 1, buffer, 2, SSD1309_I2C_TIMEOUT);
+  Display_NoteI2CResult(HAL_I2C_Master_Transmit(&hi2c_display, SSD1309_I2C_ADDR << 1, buffer, 2, SSD1309_I2C_TIMEOUT));
 }
 
 /**
@@ -488,8 +533,10 @@ static void Display_SendData(uint8_t* data, uint16_t size)
       /* Bail out early: if the bus is stuck/stretching, retrying the remaining
        * chunks just wastes time that the LoRa RX path needs. The next
        * Display_Update will retry the whole frame. */
+      Display_NoteI2CResult(HAL_ERROR);
       return;
     }
+    Display_NoteI2CResult(HAL_OK);
   }
 }
 

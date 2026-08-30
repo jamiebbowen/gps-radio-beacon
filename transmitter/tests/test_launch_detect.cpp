@@ -249,6 +249,106 @@ TEST(test_sensor_reset_reenables_reports)
     CHECK(strstr(Serial.log, "Sensor was reset") != NULL);
 }
 
+TEST(test_gps_fallback_confirms_on_sustained_climb)
+{
+    reset_all();
+    launch_detect_init();
+
+    CHECK(launch_detect_gps_fallback_update(1667.0f, 10) == false);  /* baseline */
+    CHECK(launch_detect_gps_fallback_update(1668.0f, 11) == false);  /* noise */
+    CHECK(launch_detect_gps_fallback_update(1717.0f, 12) == false);  /* climb 1 */
+    CHECK(launch_detect_gps_fallback_update(1718.0f, 13) == false);  /* climb 2 */
+    CHECK(launch_detect_gps_fallback_update(1600.0f, 14) == false);  /* dip resets */
+    CHECK(launch_detect_gps_fallback_update(1717.0f, 15) == false);  /* climb 1 */
+    CHECK(launch_detect_gps_fallback_update(1718.0f, 16) == false);  /* climb 2 */
+    CHECK(launch_detect_gps_fallback_update(1719.0f, 17) == true);   /* climb 3 */
+
+    /* Identical outcome to the IMU path: state + one-shot edge + timestamp */
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
+    CHECK(launch_detect_get_time_since_launch(20) == 3);
+    CHECK(launch_detect_is_launched() == true);
+    CHECK(launch_detect_is_launched() == false);
+    CHECK(launch_detect_gps_fallback_update(2000.0f, 18) == false);  /* no refire */
+}
+
+TEST(test_gps_fallback_ignores_pad_drift)
+{
+    reset_all();
+    launch_detect_init();
+
+    launch_detect_gps_fallback_update(1667.0f, 10);  /* baseline */
+    /* Stationary GPS alt wanders tens of metres but must never sustain +50 */
+    for (int i = 1; i <= 20; i++) {
+        float wander = 1667.0f + ((i % 2) ? 25.0f : -25.0f);
+        CHECK(launch_detect_gps_fallback_update(wander, 10 + i) == false);
+    }
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_IDLE);
+}
+
+TEST(test_landing_latches_on_quiet_and_stable)
+{
+    reset_all();
+    launch_detect_init();
+
+    /* Get to CONFIRMED via the fallback path */
+    launch_detect_gps_fallback_update(1000.0f, 1);
+    launch_detect_gps_fallback_update(1100.0f, 2);
+    launch_detect_gps_fallback_update(1100.0f, 3);
+    CHECK(launch_detect_gps_fallback_update(1100.0f, 4) == true);
+
+    /* Quiet accel, altitude stable within +/-3 m for 60 s */
+    total_accel = 0.5f;
+    for (uint32_t t = 100; t < 160; t++) {
+        float alt = 500.0f + (float)((t % 2) ? 3 : -3);
+        CHECK(landing_detect_update(alt, true, t) == false);
+    }
+    CHECK(landing_detect_update(500.0f, true, 160) == true);
+    CHECK(launch_detect_has_landed() == true);
+    CHECK(landing_detect_update(500.0f, true, 161) == true);  /* latched */
+}
+
+TEST(test_landing_never_during_descent)
+{
+    reset_all();
+    launch_detect_init();
+    launch_detect_gps_fallback_update(1000.0f, 1);
+    launch_detect_gps_fallback_update(1100.0f, 2);
+    launch_detect_gps_fallback_update(1100.0f, 3);
+    launch_detect_gps_fallback_update(1100.0f, 4);  /* confirmed */
+
+    /* Parachute descent: quiet accel (gravity removed) but alt falling 6 m/s
+     * - the altitude-stability half of the test must keep it from firing. */
+    total_accel = 0.5f;
+    float alt = 900.0f;
+    for (uint32_t t = 100; t < 220; t++) {
+        CHECK(landing_detect_update(alt, true, t) == false);
+        alt -= 6.0f;
+    }
+    CHECK(launch_detect_has_landed() == false);
+}
+
+TEST(test_landing_requires_launch_and_valid_gps)
+{
+    reset_all();
+    launch_detect_init();
+    total_accel = 0.5f;
+
+    /* Not launched yet: quiet + stable means nothing */
+    for (uint32_t t = 1; t < 70; t++) {
+        CHECK(landing_detect_update(100.0f, true, t) == false);
+    }
+
+    /* Launched, but GPS invalid: window must not accumulate */
+    launch_detect_gps_fallback_update(1000.0f, 100);
+    launch_detect_gps_fallback_update(1100.0f, 101);
+    launch_detect_gps_fallback_update(1100.0f, 102);
+    launch_detect_gps_fallback_update(1100.0f, 103);  /* confirmed */
+    for (uint32_t t = 200; t < 270; t++) {
+        CHECK(landing_detect_update(0.0f, false, t) == false);
+    }
+    CHECK(launch_detect_has_landed() == false);
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void)
@@ -259,6 +359,11 @@ int main(void)
     run_test_false_alarm_drops_to_idle();
     run_test_sensor_event_draining_and_accessors();
     run_test_sensor_reset_reenables_reports();
+    run_test_gps_fallback_confirms_on_sustained_climb();
+    run_test_gps_fallback_ignores_pad_drift();
+    run_test_landing_latches_on_quiet_and_stable();
+    run_test_landing_never_during_descent();
+    run_test_landing_requires_launch_and_valid_gps();
 
     return TEST_SUMMARY();
 }

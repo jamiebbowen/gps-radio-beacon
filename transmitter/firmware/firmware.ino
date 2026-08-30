@@ -240,6 +240,37 @@ void loop() {
     // Poll GPS for data every loop iteration
     gps_poll_rx();
     
+    /* GPS-altitude launch fallback: covers a dead IMU, which would otherwise
+     * pin the beacon at pad cadence for the whole flight. Fed once per
+     * second with valid-fix altitudes only. */
+    static uint32_t last_fallback_feed_s = 0;
+    if (launch_detect_get_state() != LAUNCH_STATE_CONFIRMED
+        && system_time_seconds != last_fallback_feed_s) {
+        const GPSCoordinates_t* c = gps_get_current_coordinates();
+        if (c->valid && c->fix_quality >= 1) {
+            last_fallback_feed_s = system_time_seconds;
+            launch_detect_gps_fallback_update(atof(c->altitude), system_time_seconds);
+        }
+    }
+
+    /* Landing detection: once post-launch, quiet accel + stable altitude
+     * drops the beacon to BATTERY_SAVE cadence early - more recovery time
+     * on the same battery. */
+    if (beacon_state == BEACON_STATE_LAUNCH || beacon_state == BEACON_STATE_POST_LAUNCH) {
+        static uint32_t last_landing_feed_s = 0;
+        if (system_time_seconds != last_landing_feed_s) {
+            last_landing_feed_s = system_time_seconds;
+            const GPSCoordinates_t* c = gps_get_current_coordinates();
+            bool gps_ok = c->valid && c->fix_quality >= 1;
+            if (landing_detect_update(gps_ok ? atof(c->altitude) : 0.0f,
+                                      gps_ok, system_time_seconds)) {
+                beacon_state = BEACON_STATE_BATTERY_SAVE;
+                transmit_beacon_flag = 1;
+                transmit_fast_flag = 0;
+            }
+        }
+    }
+
     // Handle launch detection state transitions - can trigger from ANY state
     if (launch_detect_is_launched()) {
         // Launch detected - transition to launch state from any state

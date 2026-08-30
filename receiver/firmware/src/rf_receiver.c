@@ -65,6 +65,14 @@ static uint32_t last_packet_time = 0;  /* Timestamp of last valid packet */
 
 /* Channel-scan state */
 static uint8_t scan_active = 0;
+
+/* Last time ANY CRC-valid LoRa packet was received (any type, any channel).
+ * Drives the auto re-scan below: a beacon that has been heard but then goes
+ * silent far longer than its slowest cadence (battery-save = 60 s) has most
+ * likely rebooted onto a different channel or been replaced by a different
+ * airframe - re-enter the scan instead of sitting deaf on a dead channel. */
+static uint32_t last_any_packet_ms = 0;
+#define RF_AUTO_RESCAN_SILENCE_MS  300000UL   /* 5 min = 5x slowest cadence */
 static uint32_t scan_dwell_start = 0;
 static uint32_t scan_dwell_pkt_count = 0;
 static uint8_t scan_cad_phase = 0;       /* 1 = CAD fast phase, 0 = dwell */
@@ -262,6 +270,7 @@ uint8_t RF_Receiver_DataAvailable(void)
     /* Read the packet */
     if (LoRa_ReadPacket(&last_packet) == LORA_OK) {
       rf_lora_packets_received++;  // Count every LoRa packet received
+      last_any_packet_ms = now_ms;
       rf_bytes_received += last_packet.length;
       last_rssi = last_packet.rssi;
       last_snr = last_packet.snr;
@@ -804,6 +813,15 @@ static void RF_Scan_FallbackToDwell(void)
  */
 uint8_t RF_Receiver_ScanUpdate(void)
 {
+  /* Auto re-scan on prolonged silence after contact: only fires once a
+   * beacon has actually been heard (a manual channel pick with nothing on
+   * the air is a deliberate choice - don't override it). */
+  if (!scan_active && last_any_packet_ms != 0 &&
+      (HAL_GetTick() - last_any_packet_ms) > RF_AUTO_RESCAN_SILENCE_MS) {
+    RF_Receiver_StartScan();
+    return 0;
+  }
+
   if (!scan_active) {
     return 0;
   }
