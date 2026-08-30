@@ -47,6 +47,7 @@ static uint8_t bno_regs[256];
 static uint8_t present_28 = 1;
 static uint8_t present_29 = 0;
 static uint8_t nak_mem_read    = 0;   /* HAL_I2C_Mem_Read NAKs        */
+static uint8_t nak_euler_read  = 0;   /* only the Euler burst NAKs    */
 static uint8_t nak_mem_write   = 0;   /* HAL_I2C_Mem_Write NAKs       */
 static uint8_t nak_master_tx   = 0;   /* HAL_I2C_Master_Transmit NAKs */
 static uint8_t nak_master_rx   = 0;   /* HAL_I2C_Master_Receive NAKs  */
@@ -63,6 +64,7 @@ static void bno_reset(void)
     present_28 = 1;
     present_29 = 0;
     nak_mem_read = nak_mem_write = nak_master_tx = nak_master_rx = 0;
+    nak_euler_read = 0;
     corrupt_cal_read = 0;
 }
 
@@ -88,6 +90,7 @@ HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *hi2c, uint16_t addr,
 {
     (void)hi2c; (void)mem_size; (void)timeout;
     if (!addr_present(addr) || nak_mem_read) return HAL_ERROR;
+    if (nak_euler_read && mem_addr == REG_EULER_H && size == 6) return HAL_ERROR;
     if (mem_addr + size > 256) return HAL_ERROR;
     memcpy(data, &bno_regs[mem_addr], size);
     if (corrupt_cal_read && mem_addr == REG_CAL_DATA) data[0] ^= 0xFF;
@@ -173,12 +176,26 @@ static void set_euler(float heading_deg, float roll_deg, float pitch_deg)
     bno_regs[REG_EULER_H + 4] = (uint8_t)p; bno_regs[REG_EULER_H + 5] = (uint8_t)(p >> 8);
 }
 
+#define REG_QUAT_W 0x20
+static void set_quat(float w, float x, float y, float z)
+{
+    const int16_t q[4] = { (int16_t)(w * 16384.0f), (int16_t)(x * 16384.0f),
+                           (int16_t)(y * 16384.0f), (int16_t)(z * 16384.0f) };
+    for (int i = 0; i < 4; i++) {
+        bno_regs[REG_QUAT_W + i * 2]     = (uint8_t)q[i];
+        bno_regs[REG_QUAT_W + i * 2 + 1] = (uint8_t)(q[i] >> 8);
+    }
+}
+
 static void fresh_init(void)
 {
     bno_reset();
     /* Reset cross-test statics via direct access */
     compass_cal_restored = 0;
     heading_offset = 0.0f;
+    quat_conv_locked = 0;
+    compass_i2c_error_streak = 0;
+    compass_last_recover_ms = 0;
     if (Compass_Init() != COMPASS_OK) CHECK(0);
 }
 
@@ -355,6 +372,73 @@ TEST(test_periodic_mode_recovery)
 /* ------------------------------------------------------------------ */
 /* Calibrate / self-test                                               */
 /* ------------------------------------------------------------------ */
+
+TEST(test_vertical_orientation_invalid)
+{
+    fresh_init();
+    compass_cal_restored = 1;              /* calibrated, so cal is NOT why */
+    Compass_Data d = {0};
+
+    /* 90 deg about Y: device +X points straight up - heading undefined */
+    set_quat(0.7071f, 0.0f, 0.7071f, 0.0f);
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+    CHECK(d.orientation_valid == 0);
+    CHECK(d.heading_valid == 0);           /* UI shows VERT, not CAL */
+
+    /* Level again: orientation recovers immediately */
+    set_quat(1.0f, 0.0f, 0.0f, 0.0f);
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+    CHECK(d.orientation_valid == 1);
+    CHECK(d.heading_valid == 1);
+    compass_cal_restored = 0;
+}
+
+TEST(test_quat_lock_and_tilt_robustness)
+{
+    fresh_init();
+    compass_cal_restored = 1;              /* headings meaningful */
+    Compass_Data d = {0};
+
+    /* Level at 100 deg: Euler raw 100, quaternion pure-yaw-100 (conv 1).
+     * One trustworthy sample must lock the convention. */
+    set_euler(100.0f, 0.0f, 0.0f);
+    set_quat(0.6428f, 0.0f, 0.0f, 0.7660f);   /* w=cos50, z=sin50 */
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+    CHECK(quat_conv_locked == 1);
+    CHECK_NEAR(d.heading, 100.0 + 98.5, 0.6);   /* + decl/mount offset */
+
+    /* Now the Euler-glitch case: pitched to 80 deg, the Euler heading
+     * register jumps to garbage (300 deg) while the quaternion still
+     * says 100. The reported heading must stay on the quaternion. */
+    set_euler(300.0f, 0.0f, 80.0f);
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+    CHECK_NEAR(d.heading, 198.5, 0.6);
+    CHECK(d.orientation_valid == 1);
+    compass_cal_restored = 0;
+}
+
+TEST(test_i2c_error_streak_recovers)
+{
+    fresh_init();
+    Compass_Data d = {0};
+
+    /* The Euler burst NAKs (display/compass bus squabble, cable noise) */
+    nak_euler_read = 1;
+    for (int i = 0; i < 12; i++) {
+        Test_SetTick(HAL_GetTick() + 200);    /* the 5 Hz poll cadence */
+        CHECK(Compass_Update(&d) == COMPASS_ERROR);
+        CHECK(d.heading_valid == 0);          /* frozen, not stale-pointing */
+    }
+
+    /* After the streak threshold, the bounded recovery ran and won (the
+     * chip-id probe is not NAKed), re-sending the NDOF config */
+    CHECK(strstr(Compass_GetDebugMessageByIndex(2), "recovered") != NULL);
+    CHECK(bno_regs[REG_OPR_MODE] == BNO055_OPR_MODE_NDOF);
+
+    /* Fault clears: next poll is healthy again */
+    nak_euler_read = 0;
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+}
 
 TEST(test_calibrate_fully_calibrated)
 {
@@ -542,6 +626,9 @@ int main(void)
     run_test_heading_valid_via_restored_cal();
     run_test_heading_valid_latch();
     run_test_periodic_mode_recovery();
+    run_test_vertical_orientation_invalid();
+    run_test_quat_lock_and_tilt_robustness();
+    run_test_i2c_error_streak_recovers();
     run_test_calibrate_fully_calibrated();
     run_test_calibrate_partial_guidance();
     run_test_selftest();

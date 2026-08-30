@@ -69,6 +69,7 @@
 #define BNO055_MAG_DATA_Z_MSB     0x13  /* Magnetometer data Z MSB */
 
 /* BNO055 Euler angle data registers */
+#define BNO055_QUAT_DATA_W_LSB    0x20  /* Quaternion W LSB (X,Y,Z follow) */
 #define BNO055_EULER_H_LSB        0x1A  /* Heading LSB */
 #define BNO055_EULER_H_MSB        0x1B  /* Heading MSB */
 #define BNO055_EULER_R_LSB        0x1C  /* Roll LSB */
@@ -205,6 +206,24 @@ static float heading_offset = 0.0f; /* Optional heading offset for declination *
  * The BNO055 status register will still report mag_cal=0 until fresh motion
  * re-verifies calibration, but the heading is already trustworthy. */
 static uint8_t compass_cal_restored = 0;
+
+/* Runtime I2C recovery: consecutive hard errors and the last recovery
+ * attempt timestamp. Compass_Update uses these to bound how often a
+ * flaky bus triggers the (cheap, scan-less) re-init sequence. */
+static uint8_t  compass_i2c_error_streak = 0;
+static uint32_t compass_last_recover_ms  = 0;
+#define COMPASS_ERROR_STREAK_RECOVER   10      /* ~2 s at the 5 Hz poll rate */
+#define COMPASS_RECOVER_INTERVAL_MS    5000
+
+/* Quaternion->heading convention lock. The BNO055 datasheet is ambiguous
+ * about the earth frame behind its quaternion output (X east vs X north,
+ * yaw sign), and we cannot probe hardware from the build host. So the
+ * driver tries 8 candidate conventions against the (trustworthy at low
+ * tilt) Euler heading and locks the one that matches; until locked, the
+ * Euler heading is used. Once locked, the quaternion heading is immune
+ * to the Euler gimbal glitch region around |pitch| ~ 90 deg, which is
+ * the "compass goes crazy when tilted" field complaint. */
+static int8_t quat_conv_locked = 0;  /* 0 = searching, 1..8 = candidate */
 
 /* Function prototypes */
 static uint8_t Compass_ReadRegister(uint8_t reg, uint8_t *data);
@@ -465,6 +484,84 @@ static uint8_t Compass_WriteRegister(uint8_t reg, uint8_t data)
   }
   
   return 0;
+}
+
+/**
+ * @brief Lightweight runtime recovery for a wedged BNO055/bus segment.
+ *
+ * Unlike Compass_Init this skips the 128-address bus scan (which can
+ * block for seconds on a dead bus) and the long boot retries - it just
+ * re-probes the known address and re-sends the config sequence. Total
+ * worst-case blocking ~150 ms, vs ~1.5 s+ for the full init, so it is
+ * safe to run from Compass_Update on an error streak.
+ * @retval COMPASS_OK if the chip answered and accepted NDOF mode
+ */
+static uint8_t Compass_Recover(void)
+{
+  uint8_t chip_id = 0;
+
+  if (HAL_I2C_IsDeviceReady(&hi2c_display, compass_debug.active_addr << 1,
+                            1, BNO055_I2C_TIMEOUT) != HAL_OK) {
+    return COMPASS_ERROR;
+  }
+  if (HAL_I2C_Mem_Read(&hi2c_display, compass_debug.active_addr << 1,
+                       BNO055_CHIP_ID_ADDR, I2C_MEMADD_SIZE_8BIT,
+                       &chip_id, 1, BNO055_I2C_TIMEOUT) != HAL_OK
+      || chip_id != BNO055_CHIP_ID_VALUE) {
+    return COMPASS_ERROR;
+  }
+
+  Compass_WriteRegister(BNO055_OPR_MODE_ADDR, BNO055_OPR_MODE_CONFIG);
+  HAL_Delay(25);
+  Compass_WriteRegister(BNO055_AXIS_MAP_CONFIG, COMPASS_AXIS_MAP_CONFIG);
+  Compass_WriteRegister(BNO055_AXIS_MAP_SIGN, COMPASS_AXIS_MAP_SIGN);
+  Compass_WriteRegister(BNO055_OPR_MODE_ADDR, BNO055_OPR_MODE_NDOF);
+  HAL_Delay(50);
+  Compass_SetDebug(2, "BNO055 recovered after I2C error streak");
+  return COMPASS_OK;
+}
+
+/**
+ * @brief Normalize degrees to [0, 360)
+ */
+static float Compass_Normalize360(float deg)
+{
+  while (deg < 0.0f)     deg += 360.0f;
+  while (deg >= 360.0f)  deg -= 360.0f;
+  return deg;
+}
+
+/**
+ * @brief Circular distance between two headings in degrees
+ */
+static float Compass_HeadingDelta(float a, float b)
+{
+  float d = fabsf(a - b);
+  return (d > 180.0f) ? (360.0f - d) : d;
+}
+
+/**
+ * @brief Quaternion->heading candidate by index (1..8).
+ *
+ * v = R * xhat is the device +X axis in the earth frame; (vx, vy) are its
+ * horizontal components in any earth frame with Z vertical. The eight
+ * candidates cover the plausible Bosch frame/sign conventions:
+ *   ZYX yaw, its mirror, both + 180, and the four 90-degree-rotated
+ *   (X=north) variants.
+ */
+static float Compass_QuatHeadingCandidate(int idx, float vx, float vy)
+{
+  float yaw = atan2f(vy, vx) * (180.0f / (float)M_PI);
+  switch (idx) {
+    case 1: return Compass_Normalize360(yaw);
+    case 2: return Compass_Normalize360(-yaw);
+    case 3: return Compass_Normalize360(yaw + 180.0f);
+    case 4: return Compass_Normalize360(-yaw + 180.0f);
+    case 5: return Compass_Normalize360(90.0f - yaw);
+    case 6: return Compass_Normalize360(90.0f + yaw);
+    case 7: return Compass_Normalize360(270.0f - yaw);
+    default: return Compass_Normalize360(270.0f + yaw);
+  }
 }
 
 /**
@@ -743,6 +840,10 @@ uint8_t Compass_Init(void)
  */
 uint8_t Compass_Update(Compass_Data *compass_data_ptr)
 {
+  /* Latched once calibration is PROVEN this session (see the long note at
+   * the heading_valid assignment below). Declared at the top because the
+   * quaternion convention lock consults it. */
+  static uint8_t compass_cal_proven = 0;
   HAL_StatusTypeDef hal_status;
   char debug_msg[100];
   uint32_t current_time = HAL_GetTick();
@@ -768,8 +869,23 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
                                data_buffer, 6, BNO055_I2C_TIMEOUT);
   if (hal_status != HAL_OK) {
     Compass_SetError(COMPASS_ERROR_READ_REG, "Failed to read Euler angles", hal_status);
+    /* Transient I2C faults (shared bus with the display, cable noise) are
+     * common; a streak means the sensor itself likely wedged. Recover with
+     * the bounded re-init (no bus scan), rate-limited, then let the next
+     * poll judge. Heading is marked invalid meanwhile so the navigation
+     * arrow freezes instead of pointing at stale data. */
+    compass_data_ptr->heading_valid = 0;
+    if (compass_i2c_error_streak < 250) compass_i2c_error_streak++;
+    if (compass_i2c_error_streak >= COMPASS_ERROR_STREAK_RECOVER &&
+        current_time - compass_last_recover_ms >= COMPASS_RECOVER_INTERVAL_MS) {
+      compass_last_recover_ms = current_time;
+      if (Compass_Recover() == COMPASS_OK) {
+        compass_i2c_error_streak = 0;
+      }
+    }
     return COMPASS_ERROR;
   }
+  compass_i2c_error_streak = 0;
   
   /* Parse Euler angles - BNO055 stores data as little-endian */
   int16_t heading_raw = (int16_t)((data_buffer[1] << 8) | data_buffer[0]);
@@ -782,9 +898,56 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
   compass_debug.pitch = (float)pitch_raw / 16.0f;
   
   /* Convert to degrees (BNO055 Euler angles are in degrees/16) */
-  float heading = (float)heading_raw / 16.0f;
+  const float heading_euler = (float)heading_raw / 16.0f;
   float roll = (float)roll_raw / 16.0f;
   float pitch = (float)pitch_raw / 16.0f;
+  float heading = heading_euler;
+  compass_data_ptr->orientation_valid = 1;
+
+  /* Tilt-robust heading from the quaternion. The Euler heading register
+   * glitches through the gimbal region (|pitch| approaching 90 deg) -
+   * exactly what happens carrying the receiver pointed at the sky. The
+   * quaternion is singularity-free except when the device X axis itself
+   * points near-vertical, which we flag instead of guessing. */
+  uint8_t qbuf[8];
+  if (HAL_I2C_Mem_Read(&hi2c_display, compass_debug.active_addr << 1,
+                       BNO055_QUAT_DATA_W_LSB, I2C_MEMADD_SIZE_8BIT,
+                       qbuf, 8, BNO055_I2C_TIMEOUT) == HAL_OK) {
+    const float qw = (float)(int16_t)((qbuf[1] << 8) | qbuf[0]) / 16384.0f;
+    const float qx = (float)(int16_t)((qbuf[3] << 8) | qbuf[2]) / 16384.0f;
+    const float qy = (float)(int16_t)((qbuf[5] << 8) | qbuf[4]) / 16384.0f;
+    const float qz = (float)(int16_t)((qbuf[7] << 8) | qbuf[6]) / 16384.0f;
+    /* Device +X axis in the earth frame, horizontal components */
+    const float vx = 1.0f - 2.0f * (qy * qy + qz * qz);
+    const float vy = 2.0f * (qx * qy + qw * qz);
+    const float horiz2 = vx * vx + vy * vy;
+
+    if (horiz2 < 0.04f) {
+      /* Device X within ~11 deg of vertical: heading is geometrically
+       * undefined (any value is equally wrong). Flag it so the UI can
+       * say VERT instead of CAL. */
+      compass_data_ptr->orientation_valid = 0;
+    } else if (quat_conv_locked == 0) {
+      /* Convention unknown yet: only trust the Euler reference at low
+       * tilt, and only once calibration makes headings meaningful. */
+      if (fabsf(pitch) <= 45.0f && fabsf(roll) <= 45.0f &&
+          (compass_cal_proven || compass_cal_restored)) {
+        for (int c = 1; c <= 8; c++) {
+          if (Compass_HeadingDelta(Compass_QuatHeadingCandidate(c, vx, vy),
+                                   heading_euler) <= 12.0f) {
+            quat_conv_locked = (int8_t)c;
+            snprintf(debug_msg, sizeof(debug_msg),
+                     "Quat heading locked (conv %d)", c);
+            Compass_SetDebug(2, debug_msg);
+            break;
+          }
+        }
+      }
+    } else {
+      heading = Compass_QuatHeadingCandidate(quat_conv_locked, vx, vy);
+    }
+  }
+  /* Quaternion read failure: keep the Euler heading for this cycle. */
   
   /* Log raw heading value for debugging */
   snprintf(debug_msg, sizeof(debug_msg), "Raw heading: %.1f", heading);
@@ -794,8 +957,7 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
   heading += heading_offset;
   
   /* Normalize heading to 0-360 degrees */
-  while (heading < 0.0f) heading += 360.0f;
-  while (heading >= 360.0f) heading -= 360.0f;
+  heading = Compass_Normalize360(heading);
   
   /* In BNO055, 0 degrees is north, 90 is east, etc. */
   /* This matches the expected behavior for the direction indicator */
@@ -923,12 +1085,13 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
    * Without the latch, "CAL" reappears whenever the unit is set down
    * right after a successful figure-8, prompting pointless re-calibration.
    * The live level remains visible via compass_data.mag_cal. */
-  static uint8_t compass_cal_proven = 0;
   if (mag_cal >= 1) compass_cal_proven = 1;
   /* Trust heading if (a) calibration reached mag_cal >= 1 at any point this
-   * boot, or (b) known-good offsets were restored from SD. */
+   * boot, or (b) known-good offsets were restored from SD, AND (c) the
+   * device is not pointed near-vertical (heading undefined there). */
   compass_data_ptr->heading_valid =
-      (compass_cal_proven || compass_cal_restored) ? 1 : 0;
+      ((compass_cal_proven || compass_cal_restored)
+       && compass_data_ptr->orientation_valid) ? 1 : 0;
   compass_data_ptr->mag_cal = mag_cal;
 
   /* Store heading in compass data structure */

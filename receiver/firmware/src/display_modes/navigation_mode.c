@@ -496,6 +496,9 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
     if (relative_direction >= 0.0f && relative_direction < 360.0f &&
         compass_data.heading_valid) {
       Display_DrawDirectionIndicator(96, 32, relative_direction);
+    } else if (!compass_data.heading_valid && !compass_data.orientation_valid) {
+      Display_DrawCircle(96, 32, 15, 1);
+      Display_DrawText(86, 28, "VERT");   /* hold-tilt issue, not calibration */
     } else if (!compass_data.heading_valid) {
       Display_DrawCircle(96, 32, 15, 1);
       Display_DrawText(89, 28, "CAL");
@@ -544,6 +547,13 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
           snprintf(wide, sizeof(wide), "GPS SILENT-chk wire");
         } else if (hb_gps == HB_GPS_NO_NMEA) {
           snprintf(wide, sizeof(wide), "GPS data garbled");
+        } else if (hb_gps == HB_GPS_ACQUIRING && hb.uptime_s > 90 &&
+                   hb.satellites == 0) {
+          /* A healthy module tracks SOME sats within seconds of seeing sky;
+           * 90+ s at zero means antenna/power/RF-desense on the TX side,
+           * not patience. (The TX watchdog now cold-restarts at 60 s, so
+           * this state implies recovery is failing -> hardware.) */
+          snprintf(wide, sizeof(wide), "0 sats-chk TX ant");
         } else if (hb_gps == HB_GPS_ACQUIRING) {
           snprintf(wide, sizeof(wide), "GPS ok, acquiring");
         } else {

@@ -59,6 +59,8 @@ typedef struct {
   uint32_t last_update;   /* Previous update timestamp for dt calculation */
   uint8_t  heading_valid; /* 1 = mag_cal >= 1 and heading is trustworthy, 0 = calibrating */
   uint8_t  mag_cal;       /* Magnetometer calibration level: 0=uncal, 3=fully cal */
+  uint8_t  orientation_valid; /* 0 = device axis ~vertical; heading geometrically
+                               * undefined regardless of calibration (tilt, not CAL) */
 } Compass_Data;
 
 /* Function prototypes */

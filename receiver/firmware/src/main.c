@@ -875,7 +875,8 @@ int main(void)
   /* Throttle compass updates to prevent I2C blocking during packet reception */
   /* Packets have absolute priority - compass updates are secondary */
   static uint32_t last_compass_update = 0;
-  if (current_time - last_compass_update >= 1000) { /* Update compass every 1000ms (1Hz) */
+  if (current_time - last_compass_update >= 200) { /* 5 Hz: walking-speed heading
+                                                     * feedback; each update is ~1ms of I2C */
     if (Compass_Update(&compass_data) == COMPASS_OK) {
       compass_heading = compass_data.heading;
     }
@@ -958,7 +959,7 @@ int main(void)
    * A button-triggered mode change bypasses the throttle so the new screen
    * appears immediately. */
   static uint32_t last_display_update = 0;
-  if (force_display_update || current_time - last_display_update >= 500) {
+  if (force_display_update || current_time - last_display_update >= 250) {
     Display_Update();
     last_display_update = current_time;
     force_display_update = 0;

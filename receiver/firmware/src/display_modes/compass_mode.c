@@ -102,6 +102,10 @@ void DisplayMode_CompassVisual(Compass_Data *compass_data, float *compass_headin
 
     Display_DrawLine((uint8_t)tail_x, (uint8_t)tail_y,
                      (uint8_t)tip_x,  (uint8_t)tip_y, 1);
+  } else if (!compass_data->orientation_valid) {
+    /* Device axis near-vertical: heading geometrically undefined - this
+     * is a HOLD-TILT problem, not a calibration problem */
+    Display_DrawText((uint8_t)(cx - 9), (uint8_t)(cy - 4), "VERT");
   } else {
     /* Magnetometer not yet calibrated — heading unreliable */
     Display_DrawText((uint8_t)(cx - 6), (uint8_t)(cy - 4), "CAL");
@@ -110,6 +114,8 @@ void DisplayMode_CompassVisual(Compass_Data *compass_data, float *compass_headin
   /* --- Right half: text data (x=66) --- */
   if (compass_data->heading_valid) {
     snprintf(buffer, sizeof(buffer), "Hdg:%3.0fd", heading);
+  } else if (!compass_data->orientation_valid) {
+    snprintf(buffer, sizeof(buffer), "Hdg: VERT");
   } else {
     snprintf(buffer, sizeof(buffer), "Hdg: CAL?");
   }
