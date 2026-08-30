@@ -12,7 +12,7 @@
 
 ## Pin Assignments by Function
 
-### 🛰️ GPS Module (NEO-6M or similar)
+### 🛰️ GPS Module (u-blox MAX-M10S)
 
 **UART Interface (Hardware Serial1)**
 
@@ -113,8 +113,7 @@
 | 3 | 3 | **Available** | ✅ | Digital I/O, PWM |
 | 4 | 4 | **Available** | ✅ | Digital I/O, PWM |
 | 5 | 5 | LoRa CS | ❌ | SPI Chip Select |
-| 6 | 6 | LoRa BUSY | ❌ | LoRa status |
-| 7 | 7 | **Available** | ✅ | Digital I/O, PWM |
+| 7 | 7 | LoRa BUSY | ❌ | LoRa status (pin 6 does not exist on ItsyBitsy M4) |
 | 9 | 9 | LoRa DIO1 | ❌ | LoRa interrupt |
 | 10 | 10 | IMU Reset | ❌ | BNO085 reset (optional) |
 | 11 | 11 | LoRa RESET | ❌ | LoRa reset |
@@ -356,11 +355,11 @@ Transmitted every 5 minutes for FCC compliance.
 │   SAMD51 @ 120MHz              │
 │                                │
 │  RX(0) ◄──── TX        GPS     │
-│  TX(1) ────► RX      NEO-6M    │
+│  TX(1) ────► RX    MAX-M10S    │
 │                                │
 │  Pin 5 ────► NSS              │
 │  Pin 11 ───► NRST             │
-│  Pin 6 ◄──── BUSY   E22-400M33S│
+│  Pin 7 ◄──── BUSY   E22-400M33S│
 │  Pin 9 ◄──── DIO1    LoRa      │
 │  Pin 12 ───► TXEN   (SX1268)   │
 │  SCK ──────► SCK               │
