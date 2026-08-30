@@ -243,9 +243,14 @@ TEST(test_binary_altitude_clamps)
 {
     reset_tx();
     GPSCoordinates_t c = valid_coords();
-    strcpy(c.altitude, "40000");              /* valid (< 50 km) but > int16 */
+    strcpy(c.altitude, "40000");              /* valid (> -50 km bound) but > int16 */
     CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 1);
     CHECK(get_i16_le(&tx_buf[9]) == 32767);   /* clamped, not wrapped */
+
+    reset_tx();
+    c = valid_coords();
+    strcpy(c.altitude, "-40000");             /* below the -500 m sanity floor */
+    CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 0);  /* rejected outright */
 }
 
 TEST(test_binary_launch_flag)

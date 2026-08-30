@@ -162,6 +162,23 @@ TEST(test_rmc_updates_position_only)
     CHECK(nav_updates == 0);                    /* only GGA feeds the EKF */
 }
 
+TEST(test_framing_error_bytes_skipped_pre_and_mid_sentence)
+{
+    /* 0xFE/0xFF UART framing glitches must be dropped both while seeking
+     * '$' and inside a sentence, without stalling or overflowing. */
+    feed("\xFE\xFF");                /* glitches before the '$' */
+    feed_and_poll(GGA_FIX);
+    const GPSCoordinates_t *c = gps_get_current_coordinates();
+    CHECK(strcmp(c->lat, "3953.40284") == 0);
+
+    /* Mid-sentence glitches: dropped before buffering, so the parser sees
+     * the de-glitched text (no checksum layer on TX to reject it). */
+    feed("$GPRMC,1235\xFE\xFF19,A,3954.5,N,10454.5,W,,,230394,,*6A\r\n");
+    (void)gps_poll_rx();
+    (void)gps_poll_rx();
+    CHECK(strcmp(c->lat, "3954.5") == 0);
+}
+
 TEST(test_rmc_void_status_skipped)
 {
     const GPSCoordinates_t *c = gps_get_current_coordinates();
@@ -415,6 +432,7 @@ int main(void)
     run_test_init_sends_ublox_config();
     run_test_gga_full_fix_parsed_and_fed_to_nav();
     run_test_rmc_updates_position_only();
+    run_test_framing_error_bytes_skipped_pre_and_mid_sentence();
     run_test_rmc_void_status_skipped();
     run_test_partial_gga_preserves_last_coordinates();
     run_test_unknown_sentences_ignored();

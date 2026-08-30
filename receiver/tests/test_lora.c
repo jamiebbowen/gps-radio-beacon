@@ -619,6 +619,60 @@ TEST(test_transmit)
     txdone_on_tx = 1;
 }
 
+TEST(test_command_failure_propagation)
+{
+    fresh_init();
+    LoRa_Packet_t p;
+    memset(&p, 0, sizeof(p));
+    const uint8_t pkt[5] = {0x05, 1, 2, 3, 42};
+
+    /* Fully wedged chip: every WaitOnBusy times out */
+    fake_busy_pin = 1;
+    CHECK(LoRa_ReadPacket(&p) == LORA_ERROR);       /* GetIRQStatus fails */
+    CHECK(LoRa_CadResult() == LORA_CAD_FAIL);
+    uint16_t irq = 0;
+    CHECK(LoRa_GetIRQStatus(&irq) == LORA_ERROR);   /* ReadCommand busy ret */
+    CHECK(LoRa_Transmit(pkt, sizeof(pkt)) == LORA_ERROR); /* WriteBuffer busy */
+    fake_busy_pin = 0;
+
+    /* ReadPacket: IRQ read succeeds (RX_DONE), buffer-status read fails */
+    deliver_packet(pkt, sizeof(pkt));
+    fail_after_txns = txn_count + 1;                /* jam after GET_IRQSTATUS */
+    CHECK(LoRa_ReadPacket(&p) == LORA_ERROR);
+    fail_after_txns = -1; fake_busy_pin = 0;
+
+    /* ReadPacket: payload read fails (ReadBuffer busy) -> error-recovery
+     * tail re-enters RX */
+    deliver_packet(pkt, sizeof(pkt));
+    fail_after_txns = txn_count + 2;                /* jam after RXBUFFERSTATUS */
+    CHECK(LoRa_ReadPacket(&p) == LORA_ERROR);
+    fail_after_txns = -1; fake_busy_pin = 0;
+
+    /* SetChannel: standby OK, frequency command fails -> best-effort
+     * retune back to the old channel, then LORA_ERROR */
+    fresh_init();
+    CHECK(LoRa_SetChannel(2) == LORA_OK);           /* known-good baseline */
+    fail_after_txns = txn_count + 2;                /* jam after standby txn */
+    CHECK(LoRa_SetChannel(3) == LORA_ERROR);
+    CHECK(LoRa_GetChannel() == 2);                  /* stayed on old channel */
+    fail_after_txns = -1; fake_busy_pin = 0;
+
+    /* SetChannel: retune OK, RX re-entry fails */
+    fail_after_txns = txn_count + 3;                /* jam after standby+freq */
+    CHECK(LoRa_SetChannel(4) == LORA_ERROR);
+    fail_after_txns = -1; fake_busy_pin = 0;
+
+    /* StartCad: CADPARAMS command fails (standby succeeded) */
+    fail_after_txns = txn_count + 2;
+    CHECK(LoRa_StartCad() == LORA_ERROR);
+    fail_after_txns = -1; fake_busy_pin = 0;
+
+    /* StartCad: CADPARAMS OK, stale-flag clear fails */
+    fail_after_txns = txn_count + 3;
+    CHECK(LoRa_StartCad() == LORA_ERROR);
+    fail_after_txns = -1; fake_busy_pin = 0;
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void)
@@ -638,6 +692,7 @@ int main(void)
     run_test_status_and_accessors();
     run_test_uninitialized_guards();
     run_test_transmit();
+    run_test_command_failure_propagation();
 
     return TEST_SUMMARY();
 }

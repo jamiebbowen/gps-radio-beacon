@@ -163,11 +163,11 @@ uint8_t GPS_Update(GPS_Data *gps_data)
       snprintf(gps_data->debug_lon, GPS_DEBUG_BUFFER_SIZE, "RDY:%d", gps_nmea_ready);
       if (gps_nmea_index > 0 && gps_nmea_index < GPS_BUFFER_SIZE) {
         /* Show first few chars of NMEA buffer if available */
-        snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "%c%c%c%c", 
-                 gps_nmea_buffer[0], 
-                 gps_nmea_index > 1 ? gps_nmea_buffer[1] : ' ',
-                 gps_nmea_index > 2 ? gps_nmea_buffer[2] : ' ',
-                 gps_nmea_index > 3 ? gps_nmea_buffer[3] : ' ');
+        char c0 = gps_nmea_buffer[0];
+        char c1 = (gps_nmea_index > 1) ? gps_nmea_buffer[1] : ' ';
+        char c2 = (gps_nmea_index > 2) ? gps_nmea_buffer[2] : ' ';
+        char c3 = (gps_nmea_index > 3) ? gps_nmea_buffer[3] : ' ';
+        snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "%c%c%c%c", c0, c1, c2, c3);
       } else {
         snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "EMPTY");
       }

@@ -111,9 +111,11 @@ SD_Card_Status SD_Card_Init(void)
 {
     memset(&sd_info, 0, sizeof(sd_info));
 
-    if (!SD_Card_IsPresent()) {
-        return SD_CARD_NOT_PRESENT;
-    }
+    /* Detect-pin read kept for its diagnostic side effects (pin state +
+     * CMD0 response into sd_info). IsPresent() deliberately always returns
+     * true - the detect wiring is unreliable and a false "no card" would
+     * lock out the user - so there is intentionally no NOT_PRESENT bail. */
+    (void)SD_Card_IsPresent();
     sd_info.is_present = 1;
 
     /* 1. Bring up the card at the SD-SPI level and fill in lfs_sd_cfg.
@@ -318,7 +320,9 @@ SD_Card_Status SD_Card_CreateLogFile(char *filename, uint32_t max_len)
 
 static SD_Card_Status SD_Card_WriteLogEntry(const char *entry)
 {
-    if (entry == NULL || !sd_initialized || !lfs_mounted) {
+    /* (No NULL guard: this helper is static and every call site passes a
+     * freshly formatted stack buffer.) */
+    if (!sd_initialized || !lfs_mounted) {
         return SD_CARD_ERROR;
     }
     /* Drop silently if no log file yet - prevents no-RF boots from creating

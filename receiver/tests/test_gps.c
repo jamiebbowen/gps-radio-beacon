@@ -316,6 +316,14 @@ TEST(test_isr_plumbing)
     CHECK(uart_byte_counter == bytes_before);
 
     CHECK(GPS_IsFixed() == 1);                 /* current stub behavior */
+
+    /* Receive_IT failure INSIDE the byte callback marks last_bytes[0]=0xF2
+     * (the 0xE1 path in GPS_Update is covered by test_rearm_when_uart_ready) */
+    fake_receive_it_fail = 1;
+    feed_byte('$');
+    fake_receive_it_fail = 0;
+    GPS_GetRawBytes(raw);
+    CHECK(raw[0] == 0xF2);
 }
 
 TEST(test_first_and_raw_capture_buffers_fill)

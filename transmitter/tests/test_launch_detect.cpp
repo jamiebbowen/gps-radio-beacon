@@ -43,6 +43,7 @@ void digitalWrite(int pin, int value) { (void)pin; (void)value; }
 /* BNO08x knobs + event queue */
 bool bno_begin_result  = true;
 bool bno_enable_result = true;
+int  bno_enable_fail_sensor = 0;
 bool bno_was_reset     = false;
 int  bno_enable_calls  = 0;
 int  bno_begin_calls   = 0;
@@ -62,6 +63,7 @@ static void reset_all(void)
 {
     bno_begin_result = true;
     bno_enable_result = true;
+    bno_enable_fail_sensor = 0;
     bno_was_reset = false;
     bno_enable_calls = 0;
     bno_begin_calls = 0;
@@ -116,6 +118,20 @@ TEST(test_init_success)
     CHECK(bno_enable_calls == 2);
     CHECK(bno_last_report == SH2_ROTATION_VECTOR);
     CHECK(strstr(Serial.log, "Launch detection ready") != NULL);
+}
+
+TEST(test_rotvec_enable_failure_warns_but_init_succeeds)
+{
+    /* Linear accel is mandatory, but the rotation vector is advisory: its
+     * enable failure must warn yet still leave the detector initialized. */
+    reset_all();
+    bno_enable_fail_sensor = SH2_ROTATION_VECTOR;
+    launch_detect_init();
+    CHECK(launch_detect_get_imu_status() == true);
+    CHECK(strstr(Serial.log, "Could not enable rotation vector") != NULL);
+
+    /* No launch yet: time-since-launch is 0 (not garbage) */
+    CHECK(launch_detect_get_time_since_launch(999) == 0);
 }
 
 TEST(test_init_failures)
@@ -354,6 +370,7 @@ TEST(test_landing_requires_launch_and_valid_gps)
 int main(void)
 {
     run_test_init_success();
+    run_test_rotvec_enable_failure_warns_but_init_succeeds();
     run_test_init_failures();
     run_test_launch_detection_happy_path();
     run_test_false_alarm_drops_to_idle();

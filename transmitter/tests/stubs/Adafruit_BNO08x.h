@@ -24,6 +24,7 @@ typedef struct {
 /* Test knobs (defined by the test executable) */
 extern bool     bno_begin_result;
 extern bool     bno_enable_result;
+extern int      bno_enable_fail_sensor; /* sensorId to fail (0 = none) */
 extern bool     bno_was_reset;
 extern int      bno_enable_calls;
 extern int      bno_begin_calls;
@@ -49,6 +50,7 @@ public:
     {
         bno_enable_calls++;
         bno_last_report = sensorId;
+        if (bno_enable_fail_sensor && sensorId == bno_enable_fail_sensor) return false;
         return bno_enable_result;
     }
 

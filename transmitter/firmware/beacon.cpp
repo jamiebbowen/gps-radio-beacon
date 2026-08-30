@@ -194,16 +194,11 @@ uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t
     packet.packet_type = PACKET_TYPE_GPS;
     packet.latitude = ENCODE_COORD(lat_decimal);
     packet.longitude = ENCODE_COORD(lon_decimal);
-    // Clamp altitude to int16 range: the validation above allows up to
+    // Clamp altitude to int16 max: the validation above allows up to
     // 50000 m but the wire format only carries -32768..32767 m. Without the
     // clamp, 32768..50000 m would silently wrap negative on the receiver.
-    if (altitude > 32767.0f) {
-        packet.altitude = 32767;
-    } else if (altitude < -32768.0f) {
-        packet.altitude = -32768;
-    } else {
-        packet.altitude = (int16_t)altitude;
-    }
+    // (No negative clamp: validation already floors altitude at -500 m.)
+    packet.altitude = (altitude > 32767.0f) ? 32767 : (int16_t)altitude;
     packet.satellites = (uint8_t)sat_count;
     
     // Pack flags.

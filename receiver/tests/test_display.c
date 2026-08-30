@@ -29,6 +29,7 @@
 /* ------------------------------------------------------------------ */
 
 static uint8_t  fake_i2c_init_fail = 0;
+static uint8_t  fake_i2c_tx_fail   = 0;   /* Master_Transmit / IsDeviceReady fail */
 static uint32_t i2c_transmits      = 0;   /* number of Master_Transmit calls */
 static uint32_t i2c_bytes          = 0;   /* total payload bytes             */
 static uint8_t  i2c_last_cmd       = 0;   /* last command byte seen          */
@@ -54,7 +55,7 @@ HAL_StatusTypeDef HAL_I2C_IsDeviceReady(I2C_HandleTypeDef *hi2c, uint16_t addr,
                                         uint32_t trials, uint32_t timeout)
 {
     (void)hi2c; (void)addr; (void)trials; (void)timeout;
-    return HAL_OK;
+    return fake_i2c_tx_fail ? HAL_ERROR : HAL_OK;
 }
 
 HAL_StatusTypeDef HAL_I2C_Master_Transmit(I2C_HandleTypeDef *hi2c, uint16_t addr,
@@ -62,6 +63,7 @@ HAL_StatusTypeDef HAL_I2C_Master_Transmit(I2C_HandleTypeDef *hi2c, uint16_t addr
                                           uint32_t timeout)
 {
     (void)hi2c; (void)timeout;
+    if (fake_i2c_tx_fail) { i2c_transmits++; return HAL_ERROR; }
     CHECK(addr == (SSD1309_I2C_ADDR << 1));
     i2c_transmits++;
     i2c_bytes += size;
@@ -309,6 +311,95 @@ TEST(test_set_position_helper)
     CHECK(i2c_last_cmd == (0x25 & 0x0F));
 }
 
+TEST(test_runtime_error_streak_goes_headless_and_recovers)
+{
+    /* Fresh, healthy display */
+    display_i2c_failed = 0;
+    display_i2c_error_streak = 0;
+    display_last_probe_ms = 0;
+    Test_SetTick(0);
+    CHECK(Display_Init() == DISPLAY_OK);
+
+    /* Mid-session bus wedge: every transmit fails. 6 commands + first data
+     * chunk = 7 errors per update -> headless on the 5th frame. */
+    fake_i2c_tx_fail = 1;
+    for (int i = 0; i < 8 && !display_i2c_failed; i++) {
+        Display_Clear();
+        Display_Update();
+    }
+    CHECK(display_i2c_failed == 1);           /* streak limit tripped */
+    CHECK(display_i2c_error_streak >= DISPLAY_I2C_STREAK_LIMIT);
+    uint32_t tx_at_headless = i2c_transmits;
+
+    /* Headless frames cost zero I2C until the probe interval elapses */
+    Test_SetTick(5000);
+    Display_Clear();
+    Display_Update();
+    CHECK(i2c_transmits == tx_at_headless);
+
+    /* Probe at 10 s with the bus still wedged: stays headless */
+    Test_SetTick(10001);
+    Display_Update();
+    CHECK(display_i2c_failed == 1);
+
+    /* A wedge that left the HAL state stuck at non-READY is cleared by the
+     * DeInit/Init pass before the probe */
+    hi2c_display.State = 0x99;                /* e.g. HAL_I2C_STATE_BUSY */
+    Test_SetTick(20001);
+    Display_Update();
+    CHECK(hi2c_display.State == HAL_I2C_STATE_READY);
+    CHECK(display_i2c_failed == 1);           /* bus itself still dead */
+
+    /* Bus recovers: next probe re-enables the display and a full repaint
+     * follows on the subsequent update */
+    fake_i2c_tx_fail = 0;
+    Test_SetTick(30001);
+    Display_Update();
+    CHECK(display_i2c_failed == 0);
+    CHECK(display_i2c_error_streak == 0);
+    Display_Clear();
+    Display_Update();
+    CHECK(i2c_transmits > tx_at_headless);    /* real traffic again */
+}
+
+TEST(test_senddata_guards)
+{
+    uint8_t buf[17] = {0};
+    reset_i2c_counters();
+
+    /* Headless: data path bails without touching the bus */
+    display_i2c_failed = 1;
+    Display_SendData(buf, sizeof(buf));
+    CHECK(i2c_transmits == 0);
+
+    /* Healthy again: chunk transmit failure bails the frame early */
+    display_i2c_failed = 0;
+    display_i2c_error_streak = 0;
+    fake_i2c_tx_fail = 1;
+    Display_SendData(buf, sizeof(buf));
+    CHECK(i2c_transmits == 1);                /* first chunk only */
+    fake_i2c_tx_fail = 0;
+}
+
+TEST(test_draw_line_sweeps_endpoints)
+{
+    /* Sweep slopes both ways: the Bresenham inner breaks fire when one axis
+     * reaches its endpoint before the other (endpoint-exact termination). */
+    for (uint8_t dx = 0; dx <= 10; dx++) {
+        for (uint8_t dy = 0; dy <= 10; dy++) {
+            Display_Clear();
+            Display_DrawLine(0, 0, dx, dy, 1);
+            Display_DrawLine(10, 10, 10 - dx, 10 - dy, 1);
+        }
+    }
+    /* Spot-check: endpoints are always plotted, no out-of-bounds writes */
+    Display_Clear();
+    Display_DrawLine(2, 3, 5, 3, 1);          /* horizontal */
+    CHECK(get_pixel(2, 3) == 1 && get_pixel(5, 3) == 1);
+    Display_DrawLine(7, 1, 7, 6, 1);          /* vertical */
+    CHECK(get_pixel(7, 1) == 1 && get_pixel(7, 6) == 1);
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void)
@@ -324,6 +415,9 @@ int main(void)
     run_test_update_chunking();
     run_test_headless_mode_skips_all_i2c();
     run_test_set_position_helper();
+    run_test_runtime_error_streak_goes_headless_and_recovers();
+    run_test_senddata_guards();
+    run_test_draw_line_sweeps_endpoints();
 
     return TEST_SUMMARY();
 }

@@ -51,6 +51,12 @@ static uint8_t nak_euler_read  = 0;   /* only the Euler burst NAKs    */
 static uint8_t nak_mem_write   = 0;   /* HAL_I2C_Mem_Write NAKs       */
 static uint8_t nak_master_tx   = 0;   /* HAL_I2C_Master_Transmit NAKs */
 static uint8_t nak_master_rx   = 0;   /* HAL_I2C_Master_Receive NAKs  */
+static int     nak_mem_read_reg = -1;   /* NAK Mem_Read of one register   */
+static int     nak_master_rx_reg = -1;  /* NAK Master_Receive of one reg  */
+static uint8_t reset_breaks_chip = 0;   /* SYS_TRIGGER reset kills chip-id */
+static uint8_t present_50 = 0;          /* a non-BNO device on the bus    */
+static uint8_t extra_addrs[4];          /* more non-BNO devices           */
+static uint8_t extra_addr_count = 0;
 static uint8_t corrupt_cal_read = 0;  /* read-back of cal data lies   */
 static uint8_t last_reg_addr    = 0;  /* for Master_Transmit/Receive  */
 
@@ -65,13 +71,23 @@ static void bno_reset(void)
     present_29 = 0;
     nak_mem_read = nak_mem_write = nak_master_tx = nak_master_rx = 0;
     nak_euler_read = 0;
+    nak_mem_read_reg = -1;
+    nak_master_rx_reg = -1;
+    reset_breaks_chip = 0;
+    present_50 = 0;
+    extra_addr_count = 0;
     corrupt_cal_read = 0;
 }
 
 static uint8_t addr_present(uint16_t addr8)
 {
     uint8_t a = (uint8_t)(addr8 >> 1);
-    return (a == 0x28 && present_28) || (a == 0x29 && present_29);
+    if ((a == 0x28 && present_28) || (a == 0x29 && present_29)) return 1;
+    if (a == 0x50 && present_50) return 1;
+    for (uint8_t i = 0; i < extra_addr_count; i++) {
+        if (a == extra_addrs[i]) return 1;
+    }
+    return 0;
 }
 
 /* The driver expects this symbol from the display module's TU */
@@ -90,6 +106,7 @@ HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *hi2c, uint16_t addr,
 {
     (void)hi2c; (void)mem_size; (void)timeout;
     if (!addr_present(addr) || nak_mem_read) return HAL_ERROR;
+    if (nak_mem_read_reg >= 0 && mem_addr == nak_mem_read_reg) return HAL_ERROR;
     if (nak_euler_read && mem_addr == REG_EULER_H && size == 6) return HAL_ERROR;
     if (mem_addr + size > 256) return HAL_ERROR;
     memcpy(data, &bno_regs[mem_addr], size);
@@ -123,6 +140,11 @@ HAL_StatusTypeDef HAL_I2C_Master_Transmit(I2C_HandleTypeDef *hi2c, uint16_t addr
         last_reg_addr = data[0];
     } else if (size >= 2) {                /* register write */
         bno_regs[data[0]] = data[1];
+        /* A real reset pulse reboots the chip: model one that never
+         * comes back (dead after reset) */
+        if (reset_breaks_chip && data[0] == 0x3F && data[1] == 0x20) {
+            bno_regs[REG_CHIP_ID] = 0x00;
+        }
     }
     return HAL_OK;
 }
@@ -132,6 +154,7 @@ HAL_StatusTypeDef HAL_I2C_Master_Receive(I2C_HandleTypeDef *hi2c, uint16_t addr,
 {
     (void)hi2c; (void)timeout;
     if (!addr_present(addr) || nak_master_rx) return HAL_ERROR;
+    if (nak_master_rx_reg >= 0 && last_reg_addr == nak_master_rx_reg) return HAL_ERROR;
     for (uint16_t i = 0; i < size; i++) data[i] = bno_regs[last_reg_addr + i];
     return HAL_OK;
 }
@@ -649,6 +672,234 @@ TEST(test_display_i2c_scan)
     present_28 = 1;
 }
 
+TEST(test_init_device_at_wrong_address_times_out)
+{
+    /* Bus has a device, but not at either BNO055 address: the 850 ms
+     * detection loop must time out with a distinct error (vs the
+     * empty-bus bail) */
+    bno_reset();
+    present_28 = 0; present_29 = 0; present_50 = 1;
+    CHECK(Compass_Init() == COMPASS_ERROR);
+    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_I2C_INIT);
+    CHECK(strstr(Compass_GetErrorMessage(), "not found after timeout") != NULL);
+}
+
+TEST(test_init_chip_dies_after_reset)
+{
+    /* Chip-id reads fine until the SYS_TRIGGER reset pulse, then the chip
+     * never comes back: post-reset wait times out */
+    bno_reset();
+    reset_breaks_chip = 1;
+    CHECK(Compass_Init() == COMPASS_ERROR);
+    CHECK(strstr(Compass_GetErrorMessage(), "not responding after reset") != NULL);
+}
+
+TEST(test_init_register_read_failures_nonfatal)
+{
+    /* Verify/status/calibration read failures during init are logged
+     * but not fatal */
+    bno_reset();
+    nak_mem_read_reg = REG_OPR_MODE;
+    CHECK(Compass_Init() == COMPASS_OK);
+    CHECK(strstr(Compass_GetErrorMessage(), "verify operation mode") != NULL);
+
+    bno_reset();
+    nak_mem_read_reg = REG_SYS_STAT;
+    CHECK(Compass_Init() == COMPASS_OK);
+    CHECK(strstr(Compass_GetErrorMessage(), "read system status") != NULL);
+
+    bno_reset();
+    nak_mem_read_reg = REG_CALIB_STAT;
+    CHECK(Compass_Init() == COMPASS_OK);
+    CHECK(strstr(Compass_GetErrorMessage(), "read calibration status") != NULL);
+}
+
+TEST(test_recover_failure_paths)
+{
+    fresh_init();
+    Compass_Data d = {0};
+
+    /* Chip gone before the streak even builds: the 10th consecutive failure
+     * triggers a recovery attempt whose IsDeviceReady probe fails (the
+     * attempt interval gate is wide open right after init). */
+    nak_euler_read = 1;
+    present_28 = 0;
+    for (int i = 0; i < 10; i++) {
+        Test_SetTick(HAL_GetTick() + 200);
+        (void)Compass_Update(&d);
+    }
+
+    /* Chip back, but the chip-id read NAKs: recovery bails at the id check */
+    present_28 = 1;
+    nak_mem_read_reg = REG_CHIP_ID;
+    Test_SetTick(HAL_GetTick() + 6000);
+    (void)Compass_Update(&d);
+    nak_mem_read_reg = -1;
+
+    /* Fault clears: recovery succeeds and normal reads resume */
+    nak_euler_read = 0;
+    Test_SetTick(HAL_GetTick() + 6000);
+    (void)Compass_Update(&d);                   /* streak still hot: recovers */
+    Test_SetTick(HAL_GetTick() + 200);
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+}
+
+TEST(test_update_sys_status_warning_and_error)
+{
+    fresh_init();
+    Compass_Data d = {0};
+
+    /* Fusion not running (idle): warning path runs, update still OK.
+     * NB the warning string is transiently in debug slot 2, then the same
+     * update's "Mag: ..." line overwrites it - assert the durable field. */
+    bno_regs[REG_SYS_STAT] = BNO055_SYS_STATUS_IDLE;
+    Test_SetTick(HAL_GetTick() + 6000);         /* status gate is 5 s */
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+    CHECK(compass_debug.sys_status == BNO055_SYS_STATUS_IDLE);
+
+    /* System error: the error register is read and surfaced (message is
+     * likewise overwritten later in the same update) */
+    bno_regs[REG_SYS_STAT] = BNO055_SYS_STATUS_ERROR;
+    bno_regs[REG_SYS_ERR]  = 0x03;
+    Test_SetTick(HAL_GetTick() + 6000);
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+    CHECK(compass_debug.sys_status == BNO055_SYS_STATUS_ERROR);
+
+    bno_regs[REG_SYS_STAT] = 5;                 /* fusion running again */
+}
+
+TEST(test_update_raw_burst_failure_zeroes_gyro_rate)
+{
+    fresh_init();
+    Compass_Data d = {0};
+
+    /* 18-byte raw sensor burst NAKs: Euler heading still updates, but
+     * cal_gyro_z falls back to 0 rather than holding stale data */
+    nak_mem_read_reg = REG_ACCEL_X;
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+    CHECK(d.cal_gyro_z == 0.0f);
+    nak_mem_read_reg = -1;
+}
+
+TEST(test_calibrate_failure_and_guidance_strings)
+{
+    fresh_init();
+
+    /* Register read failures bail with COMPASS_ERROR */
+    nak_mem_read_reg = REG_CALIB_STAT;
+    CHECK(Compass_Calibrate() == COMPASS_ERROR);
+    nak_mem_read_reg = REG_SYS_STAT;
+    CHECK(Compass_Calibrate() == COMPASS_ERROR);
+    nak_mem_read_reg = REG_ST_RESULT;
+    CHECK(Compass_Calibrate() == COMPASS_ERROR);
+    nak_mem_read_reg = -1;
+
+    /* System-status strings: every case plus the default */
+    bno_regs[REG_CALIB_STAT] = 0x00;            /* nothing calibrated */
+    for (uint8_t s = 0; s <= 4; s++) {
+        bno_regs[REG_SYS_STAT] = s;
+        CHECK(Compass_Calibrate() == COMPASS_ERROR_CALIB);
+    }
+    bno_regs[REG_SYS_STAT] = 9;                 /* unknown */
+    CHECK(Compass_Calibrate() == COMPASS_ERROR_CALIB);
+    bno_regs[REG_SYS_STAT] = 5;
+
+    /* MAG guidance 0/3 and 2/3 (1/3 covered by test_calibrate_partial) */
+    bno_regs[REG_CALIB_STAT] = 0x00;            /* mag 0 */
+    CHECK(Compass_Calibrate() == COMPASS_ERROR_CALIB);
+    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "figure 8 pattern (0/3)") != NULL);
+    bno_regs[REG_CALIB_STAT] = 0x02;            /* mag 2 */
+    CHECK(Compass_Calibrate() == COMPASS_ERROR_CALIB);
+    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "Almost done") != NULL);
+    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "(2/3)") != NULL);
+
+    /* GYR + ACC complete strings while sys/mag lag */
+    bno_regs[REG_CALIB_STAT] = 0x3C;            /* gyr=3, acc=3, mag=0 */
+    CHECK(Compass_Calibrate() == COMPASS_ERROR_CALIB);
+    CHECK(strstr(Compass_GetDebugMessageByIndex(6), "GYR CAL: Complete!") != NULL);
+    CHECK(strstr(Compass_GetDebugMessageByIndex(7), "ACC CAL: Complete!") != NULL);
+}
+
+TEST(test_selftest_read_failures)
+{
+    fresh_init();
+
+    nak_mem_read_reg = REG_SYS_ERR;
+    CHECK(Compass_SelfTest() == COMPASS_ERROR);
+    nak_mem_read_reg = REG_CALIB_STAT;
+    CHECK(Compass_SelfTest() == COMPASS_ERROR);
+    nak_mem_read_reg = -1;
+
+    nak_euler_read = 1;
+    CHECK(Compass_SelfTest() == COMPASS_ERROR);
+    nak_euler_read = 0;
+}
+
+TEST(test_get_heading_failure_returns_zero)
+{
+    fresh_init();
+    nak_euler_read = 1;
+    CHECK(Compass_GetHeading() == 0.0f);
+    nak_euler_read = 0;
+}
+
+TEST(test_cal_data_write_failures)
+{
+    fresh_init();
+    uint8_t cal[22] = {0};
+
+    nak_master_tx = 1;                          /* mode-switch write NAKs */
+    CHECK(Compass_GetCalibrationData(cal, sizeof(cal)) == COMPASS_ERROR);
+    CHECK(Compass_SetCalibrationData(cal, sizeof(cal)) == COMPASS_ERROR);
+    nak_master_tx = 0;
+}
+
+TEST(test_get_system_status_read_failures)
+{
+    fresh_init();
+    uint8_t st, self, err;
+
+    nak_master_rx_reg = REG_SYS_STAT;           /* first read fails */
+    CHECK(Compass_GetSystemStatus(&st, &self, &err) == COMPASS_ERROR);
+    nak_master_rx_reg = REG_ST_RESULT;          /* second read fails */
+    CHECK(Compass_GetSystemStatus(&st, &self, &err) == COMPASS_ERROR);
+    nak_master_rx_reg = REG_SYS_ERR;            /* third read fails */
+    CHECK(Compass_GetSystemStatus(&st, &self, &err) == COMPASS_ERROR);
+    nak_master_rx_reg = -1;
+
+    int8_t temp;
+    nak_master_rx_reg = REG_TEMP;
+    CHECK(Compass_GetTemperature(&temp) == COMPASS_ERROR);
+    nak_master_rx_reg = -1;
+}
+
+TEST(test_display_scan_many_devices)
+{
+    fresh_init();
+
+    /* 5 devices: the scan screen wraps onto a second line of addresses */
+    present_29 = 1;
+    extra_addrs[0] = 0x50;
+    extra_addrs[1] = 0x51;
+    extra_addrs[2] = 0x52;
+    extra_addr_count = 3;
+    disp_nlines = 0;
+    CHECK(Compass_DisplayI2CScan() == 5);
+    int saw_second_line = 0;
+    for (int i = 0; i < disp_nlines; i++) {
+        if (strstr(disp_lines[i], "0x50") != NULL) saw_second_line = 1;
+    }
+    CHECK(saw_second_line);
+}
+
+TEST(test_get_debug_message_accessor)
+{
+    fresh_init();
+    const char *msg = Compass_GetDebugMessage();
+    CHECK(msg != NULL);
+    CHECK(strcmp(msg, Compass_GetDebugMessageByIndex(0)) == 0);
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void)
@@ -675,6 +926,19 @@ int main(void)
     run_test_cal_data_roundtrip();
     run_test_accessors();
     run_test_display_i2c_scan();
+    run_test_init_device_at_wrong_address_times_out();
+    run_test_init_chip_dies_after_reset();
+    run_test_init_register_read_failures_nonfatal();
+    run_test_recover_failure_paths();
+    run_test_update_sys_status_warning_and_error();
+    run_test_update_raw_burst_failure_zeroes_gyro_rate();
+    run_test_calibrate_failure_and_guidance_strings();
+    run_test_selftest_read_failures();
+    run_test_get_heading_failure_returns_zero();
+    run_test_cal_data_write_failures();
+    run_test_get_system_status_read_failures();
+    run_test_display_scan_many_devices();
+    run_test_get_debug_message_accessor();
 
     return TEST_SUMMARY();
 }

@@ -75,6 +75,20 @@ TEST(test_read_path_and_diagnostics)
     uart_get_diagnostics(NULL, NULL, NULL);
 }
 
+TEST(test_flush_uart_buffer_drains_pending)
+{
+    uart_init();
+    Serial1.inject("garbage");
+    CHECK(uart_data_available() == true);
+    flush_uart_buffer();
+    CHECK(uart_data_available() == false);
+    CHECK(uart_read_byte() == 0xFF);           /* nothing left */
+
+    /* Flush of an already-empty buffer is a no-op */
+    flush_uart_buffer();
+    CHECK(uart_data_available() == false);
+}
+
 TEST(test_tx_paths)
 {
     uart_init();
@@ -107,6 +121,7 @@ int main(void)
 {
     run_test_init_flushes_and_resets();
     run_test_read_path_and_diagnostics();
+    run_test_flush_uart_buffer_drains_pending();
     run_test_tx_paths();
     run_test_error_counters_get_and_clear();
 

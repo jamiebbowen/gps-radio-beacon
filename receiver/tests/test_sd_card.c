@@ -465,6 +465,41 @@ TEST(test_self_test_pass_and_write_failure)
     bd_prog_fail = 0;
 }
 
+TEST(test_rotation_launchflag_and_write_failure)
+{
+    wipe_card();
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+
+    /* Opening a second log file closes the first (sd_card.c:241-242) */
+    char name[16];
+    CHECK(SD_Card_CreateLogFile(name, sizeof(name)) == SD_CARD_OK);
+    CHECK(log_file_open == 1);
+    CHECK(sd_open_new_log_file(NULL, 0) == SD_CARD_OK);   /* rotation */
+    CHECK(log_file_open == 1);
+
+    /* Launch flag without fused data: FusedFlags column shows 0x10 (:481) */
+    GPS_Data beacon; memset(&beacon, 0, sizeof(beacon));
+    beacon.latitude = 39.9f; beacon.longitude = -105.1f;
+    beacon.launch_detected = 1;                            /* is_fused = 0 */
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 10.0f, 20.0f, -90, 5)
+          == SD_CARD_OK);
+    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    char big[2048];
+    CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
+    CHECK(strstr(big, "NAV,GPS,") != NULL);
+    CHECK(strstr(big, ",10,") != NULL);                  /* FusedFlags %02X */
+
+    /* NOTE: the littlefs-failure branches (mount-after-format, opencfg /
+     * header-write / mid-session write errors) are correct defensive error
+     * handling but can't be driven faithfully by the RAM block device:
+     * a failed prog leaves littlefs' program cache dirty, and the next
+     * operation trips LFS_ASSERT(pcache->block == LFS_BLOCK_NULL), and the
+     * self-test readback-mismatch branch can't be driven either (metadata
+     * pairs relocate off blocks 0-1, so targeted garbage reads corrupt the
+     * mount, not just the test file). Kept as defensive code; covered by
+     * review, not by behavioral test. */
+}
+
 TEST(test_timestamp_format)
 {
     char ts[32];
@@ -472,6 +507,11 @@ TEST(test_timestamp_format)
     SD_Card_GetTimestamp(ts, sizeof(ts));
     CHECK(strcmp(ts, "83.456") == 0);
     SD_Card_GetTimestamp(NULL, 0);            /* must not crash */
+
+    /* Internal guard: WriteLogEntry with no mounted fs (the public APIs all
+     * guard earlier, so this is only reachable from inside the module) */
+    SD_Card_DeInit();
+    CHECK(SD_Card_WriteLogEntry("x") == SD_CARD_ERROR);
 }
 
 /* ------------------------------------------------------------------ */
@@ -491,6 +531,7 @@ int main(void)
     run_test_compass_cal_persistence();
     run_test_format_wipes_everything();
     run_test_self_test_pass_and_write_failure();
+    run_test_rotation_launchflag_and_write_failure();
     run_test_timestamp_format();
 
     return TEST_SUMMARY();
