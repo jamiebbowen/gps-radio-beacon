@@ -107,9 +107,11 @@ boost / tipover).
 
 ### 3.3 Duplicate filtering
 
-Identical consecutive packets (string comparison) are skipped to avoid
-redundant UI updates and wasted CPU. A counter tracks how many have been
-filtered.
+**Currently disabled.** Byte-identical back-to-back duplicates were only
+ever produced by the radio re-delivering the same frame, and the LoRa CRC
+plus the application checksum already reject corrupted frames, so the
+comparison cost was not buying anything. The diagnostics getter still
+reports the field but always returns 0.
 
 ### 3.4 Coordinate validation
 
@@ -237,6 +239,53 @@ sensitivity becomes the limit. See `docs/flight-analysis.md` for how
 `analyze_flight.py` computes predicted range from flight data.
 
 ---
+
+## 6b. Resiliency additions (2026-08-30 review)
+
+Later hardening on top of the layers above. Each has host-side regression
+tests (`transmitter/tests`, `receiver/tests`).
+
+### Transmitter
+
+- **EKF innovation gate** (`nav.cpp`): a GPS fix whose normalized innovation
+  exceeds chi2(3 dof, 99.9%) AND is > 20 m from the filter estimate is
+  rejected as multipath/stale-position. Fails open when the IMU is dead
+  (coast-phase innovations are legitimately large).
+- **Two-fix anchor confirmation**: the tangent-plane anchor requires two
+  consecutive fixes within 30 m of each other inside 10 s. A lone power-on
+  glitch fix can no longer anchor the EKF at a wrong origin.
+- **GPS watchdog correctness**: recovery keys on a live good fix
+  (fix_quality >= 1, sats > 0, bytes flowing) instead of the latched
+  `valid` flag, which a stale hot-start position could hold forever.
+- **Radio wedge recovery**: TX radio re-inits on sustained TX-complete
+  failure; a latched TX failure no longer silences the beacon permanently.
+
+### Receiver
+
+- **Radio wedge recovery**: a sustained (3 s) not-RX chip mode triggers RX
+  re-entry, escalating to a full chip re-init after 3 retries; recoveries
+  are SD-logged (`RF wedge recovered`).
+- **Auto re-scan**: after contact, > 90 s of radio silence re-starts the
+  channel scan instead of sitting deaf on a dead channel.
+- **Scan dwell re-arm**: the dwell timer now starts when the chip actually
+  enters RX on a channel, not when the hop is commanded - worst-case lock
+  time dropped from ~61 s to ~14 s (verified in field logs).
+- **Callsign packets delivered in binary mode**: ID packets no longer
+  silently dropped.
+- **Compass convention-lock guard**: the quaternion heading convention
+  search refuses to lock when the device X axis is within 15 deg of a
+  45-degree multiple, where two mirror candidates both fit the 12 deg
+  acceptance gate; a wrong lock would have mirrored every heading.
+- **Headless/display-failure boot**: OLED failure no longer hangs boot;
+  the unit runs with radio + SD + watchdog only.
+- **Error channel hygiene**: informational messages moved off
+  `Compass_SetError(0, ...)` so real faults stay latched and visible.
+
+### Tooling
+
+- `tools/log_summary.py` summarizes a session's SD logs into exactly these
+  health indicators (wedges, LOST windows, IWDG resets, heartbeat GPS
+  states, telemetry gaps, errors) so a flight can be audited in seconds.
 
 ## 7. Not-implemented / rejected approaches
 
