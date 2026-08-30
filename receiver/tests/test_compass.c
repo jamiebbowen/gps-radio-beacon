@@ -900,6 +900,33 @@ TEST(test_get_debug_message_accessor)
     CHECK(strcmp(msg, Compass_GetDebugMessageByIndex(0)) == 0);
 }
 
+TEST(test_healthy_updates_preserve_error_state)
+{
+    /* A real error latched by any API must survive subsequent healthy
+     * 5 Hz updates - the routine "Heading: ..." debug line used to go
+     * through SetError(0,...), wiping the message AND the code every
+     * 200 ms, so error screens showed the heading and "Err: 0x00". */
+    fresh_init();
+    nak_master_tx = 1;
+    uint8_t mode;
+    CHECK(Compass_GetOperationMode(&mode) == COMPASS_ERROR);   /* latches error */
+    nak_master_tx = 0;
+    uint8_t code_before = Compass_GetErrorCode();
+    char msg_before[64];
+    strncpy(msg_before, Compass_GetErrorMessage(), sizeof(msg_before) - 1);
+    msg_before[sizeof(msg_before) - 1] = '\0';
+    CHECK(code_before != 0 && msg_before[0] != '\0');
+
+    Compass_Data d = {0};
+    for (int i = 0; i < 5; i++) {
+        Test_SetTick(HAL_GetTick() + 200);
+        CHECK(Compass_Update(&d) == COMPASS_OK);               /* healthy polls */
+    }
+    CHECK(Compass_GetErrorCode() == code_before);              /* not clobbered */
+    CHECK(strcmp(Compass_GetErrorMessage(), msg_before) == 0);
+    CHECK(strstr(Compass_GetDebugMessageByIndex(4), "Heading:") != NULL);
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void)
@@ -939,6 +966,7 @@ int main(void)
     run_test_get_system_status_read_failures();
     run_test_display_scan_many_devices();
     run_test_get_debug_message_accessor();
+    run_test_healthy_updates_preserve_error_state();
 
     return TEST_SUMMARY();
 }

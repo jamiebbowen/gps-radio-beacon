@@ -1104,10 +1104,12 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
   /* Store heading in compass data structure */
   heading = compass_data_ptr->heading; /* Store in global for compatibility */
   
-  /* Log the heading for debugging */
-  snprintf(debug_msg, sizeof(debug_msg), "Heading: %.1f deg, P:%.1f R:%.1f", 
+  /* Log the heading for debugging. Slot 4 (free on the update path);
+   * MUST NOT go through Compass_SetError - this runs at 5 Hz and would
+   * clobber any real error message/code moments after it is set. */
+  snprintf(debug_msg, sizeof(debug_msg), "Heading: %.1f deg, P:%.1f R:%.1f",
            compass_data_ptr->heading, compass_data_ptr->pitch, compass_data_ptr->roll);
-  Compass_SetError(0, debug_msg, 0);
+  Compass_SetDebug(4, debug_msg);
   
   /* Update timestamp */
   compass_data_ptr->timestamp = HAL_GetTick();

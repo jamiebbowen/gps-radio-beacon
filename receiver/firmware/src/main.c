@@ -107,8 +107,8 @@ Compass_Data compass_data;
 /* Display mode control */
 static DisplayMode_t current_display_mode = DISPLAY_MODE_NAVIGATION;
 static uint32_t mode_change_time = 0;
-/* Set on a button press so the 500 ms display throttle is bypassed for one
- * frame; otherwise a mode change could take up to 500 ms to become visible. */
+/* Set on a button press so the 250 ms display throttle is bypassed for one
+ * frame; otherwise a mode change could take up to 250 ms to become visible. */
 static uint8_t force_display_update = 0;
 
 /* Flags and counters */
@@ -343,7 +343,6 @@ int main(void)
       SD_Card_EnsureLogFile();
       SD_Card_LogError("Boot after IWDG watchdog reset (firmware hang)");
     }
-    RCC->CSR |= RCC_CSR_RMVF;
 
     /* Log file is created lazily on the first RF packet (see
      * SD_Card_LogNavigation in sd_card.c) so no-RF boots leave no artifact. */
@@ -395,7 +394,12 @@ int main(void)
     Display_Update();
     HAL_Delay(3000);
   }
-  
+
+  /* Clear the reset flags unconditionally: if SD init failed above, a set
+   * IWDGRSTF would otherwise survive into a later boot and be logged then
+   * as a spurious "Boot after IWDG watchdog reset". */
+  RCC->CSR |= RCC_CSR_RMVF;
+
   IWDG_FEED();
 
   /* Initialize compass */
