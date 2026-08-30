@@ -257,7 +257,7 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
    *    2   L:Fix B:3D                          13
    *    3   S:13 12.3m/s    <- sats | speed     13
    *    4   Excellent            <- quality     13
-   *    5   ~1.2mi left          <- countdown   13
+   *    5   READY TO FLY (pad) / ~1.2mi left (in flight)  13
    *    6   RSSI -108 SNR +12                   21
    *    7   Packets: 12345                      21
    */
@@ -321,6 +321,32 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
     }
     Display_DrawTextRowCol(1, 0, wide);
 
+    /* Ground speed from the FUSED velocity (0 until the first FUSED
+     * packet). Gates row 5: at pad speeds the RSSI range extrapolation is
+     * near-field garbage, so the row shows the ready-to-fly verdict
+     * instead; in flight the countdown reclaims it. */
+    float speed_ms = 0.0f;
+    if (last_rf_packet_time > 0) {
+      float vn = remote_gps_data->v_north;
+      float ve = remote_gps_data->v_east;
+      speed_ms = sqrtf(vn * vn + ve * ve);
+      /* Cap at 999.9: a 4-digit speed would push row 3 to 14 chars and
+       * overdraw the direction arrow (13-col cap for rows 2-5). Clamp here
+       * so the range proof reaches every snprintf below. */
+      if (speed_ms > 999.9f) speed_ms = 999.9f;
+    }
+
+    /* Ready-to-fly verdict: the same checks as the PRE-FLIGHT page -
+     * fresh link (25 s gate, matching the prelaunch TX cadence + margin),
+     * TX fix with >=4 sats, local RX fix, live (not stale) compass.
+     * SD card is advisory there and excluded here too. */
+    uint8_t rtf_link = (last_rf_packet_time > 0) &&
+                       (HAL_GetTick() - last_rf_packet_time) <= 25000u;
+    uint8_t rtf_tx   = (remote_gps_data->fix >= 1 &&
+                        remote_gps_data->satellites >= 4);
+    uint8_t rtf_rx   = has_valid_local_gps;
+    uint8_t rtf_cmp  = (compass_data.heading_valid && !compass_data.heading_stale);
+
     /* Row 2: Combined fix status (arrow-constrained) */
     const char *b_fix = "B:--";
     if (last_rf_packet_time > 0) {
@@ -345,12 +371,6 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
      *   "S:13  0.0m/s"  <- no FUSED packet received yet (speed defaults to 0)
      *   "S: 0 12.3m/s"  <- no GPS packet yet (unusual, but valid) */
     if (last_rf_packet_time > 0) {
-      float vn = remote_gps_data->v_north;
-      float ve = remote_gps_data->v_east;
-      float speed_ms = sqrtf(vn * vn + ve * ve);
-      /* Cap at 999.9: a 4-digit speed would push the row to 14 chars and
-       * overdraw the direction arrow (13-col cap for rows 2-5). */
-      if (speed_ms > 999.9f) speed_ms = 999.9f;
       snprintf(narrow, sizeof(narrow), "S:%-2d %4.1fm/s",
                (int)remote_gps_data->satellites, (double)speed_ms);
     } else if (hb_heard) {
@@ -376,7 +396,20 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
       snprintf(narrow, sizeof(narrow), "%s", LoRa_QualityLabel(rssi, snr));
       Display_DrawTextRowCol(4, 0, narrow);
 
-      /* Row 5: remaining LOS range.
+      /* Row 5: pad -> ready-to-fly verdict; in flight -> range countdown.
+       * The verdict string names the failing checks: L=link, T=TX GPS,
+       * R=RX GPS, C=compass (details live on the PRE-FLIGHT page). */
+      if (speed_ms < 2.0f) {
+        if (rtf_link && rtf_tx && rtf_rx && rtf_cmp) {
+          Display_DrawTextRowCol(5, 0, "READY TO FLY");
+        } else {
+          snprintf(narrow, sizeof(narrow), "NOT RDY:%s%s%s%s",
+                   rtf_link ? "" : "L", rtf_tx ? "" : "T",
+                   rtf_rx ? "" : "R", rtf_cmp ? "" : "C");
+          Display_DrawTextRowCol(5, 0, narrow);
+        }
+      } else {
+      /* Remaining LOS range.
        *
        * Three cases, in priority order:
        *   1. Valid GPS anchor on both ends AND the Friis extrapolation
@@ -429,6 +462,7 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
         }
       }
       Display_DrawTextRowCol(5, 0, narrow);
+      }
     } else if (hb_heard) {
       /* Link is live (heartbeats), just no position yet */
       snprintf(narrow, sizeof(narrow), "%s", LoRa_QualityLabel(rssi, snr));
@@ -531,6 +565,10 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
     Display_DrawTextRowCol(0, 0, has_valid_local_gps ? "L:Fix" : "L:No GPS Fix");
 
     if (RF_Receiver_GetLastHeartbeat(&hb, &hb_age_ms)) {
+      /* Row 1: beacon is alive but has no fix, so ready-to-fly is blocked
+       * by definition - say so on the spare row rather than leaving the
+       * pad-wait screen without a verdict. */
+      Display_DrawTextRowCol(1, 0, "NOT READY YET");
       /* Clamp so "Beacon HB 99999s ago" (20 chars) always fits 21 cols */
       uint32_t hb_s = hb_age_ms / 1000u;
       if (hb_s > 99999u) hb_s = 99999u;
