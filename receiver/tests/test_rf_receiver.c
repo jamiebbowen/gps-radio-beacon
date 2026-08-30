@@ -224,6 +224,46 @@ TEST(test_channel_cycling_covers_all_channels)
     CHECK(RF_Receiver_SetChannel(0) == RF_OK);
 }
 
+TEST(test_callsign_captured_in_binary_mode)
+{
+    /* The callsign packet has no type byte and variable length, so the
+     * binary dispatch used to drop it silently. It must reach the ASCII
+     * parser (which classifies comma-free packets as callsigns) without
+     * being mistaken for position data. */
+    const char *cs = "KE0MZS-2 CH3";
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    memcpy(fake_pkt.data, cs, strlen(cs));
+    fake_pkt.length = (uint16_t)strlen(cs);
+    fake_pkt.rssi = -80;
+    fake_pkt.snr = 5;
+    fake_pkt_pending = 1;
+    run_for(250, 250);
+
+    /* Not position data: same policy as heartbeats */
+    CHECK(RF_Receiver_DataAvailable() == 0);
+    CHECK(RF_Receiver_GetLastPacketTime() == 0);
+
+    /* But the parser retained it */
+    GPS_Data scratch;
+    char heard[RF_PARSER_MAX_CALLSIGN_LEN] = "";
+    CHECK(RF_Receiver_GetParsedData(&scratch, heard, sizeof(heard), NULL) == 1);
+    CHECK(strcmp(heard, cs) == 0);
+
+    /* Binary garbage is NOT a callsign */
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    fake_pkt.data[0] = 0x42;
+    fake_pkt.data[1] = 0x00;
+    fake_pkt.data[2] = 0xFF;
+    fake_pkt.data[3] = 0x10;
+    fake_pkt.data[4] = 0x99;
+    fake_pkt.length = 5;
+    fake_pkt_pending = 1;
+    run_for(250, 250);
+    heard[0] = '\0';
+    CHECK(RF_Receiver_GetParsedData(&scratch, heard, sizeof(heard), NULL) == 1);
+    CHECK(strcmp(heard, cs) == 0);              /* unchanged */
+}
+
 TEST(test_heartbeat_lifecycle)
 {
     HeartbeatPacket_t hb;
@@ -776,6 +816,7 @@ int main(void)
     run_test_spi_selftest_oneshot_in_poll();
     run_test_nonzero_irq_status_latched();
     run_test_channel_cycling_covers_all_channels();
+    run_test_callsign_captured_in_binary_mode();
     run_test_heartbeat_lifecycle();
     run_test_position_packet_flow();
     run_test_fused_packet_flow();

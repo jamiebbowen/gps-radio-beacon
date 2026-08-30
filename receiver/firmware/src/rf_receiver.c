@@ -317,6 +317,26 @@ uint8_t RF_Receiver_DataAvailable(void)
         memcpy(&last_heartbeat, last_packet.data, last_packet.length);
         heartbeat_pending = 1;
         last_heartbeat_time = HAL_GetTick();
+      } else {
+        /* The callsign ("CALLSIGN-id CHn") has no type byte and a variable
+         * length, so it matches none of the typed branches above. Route
+         * anything that looks like printable comma-free ASCII to the ASCII
+         * parser (which classifies no-comma packets as callsigns) so the
+         * operator can confirm airframe+channel; without this the ID packet
+         * was silently dropped in binary mode. Deliberately does NOT set
+         * rf_packet_ready / last_packet_time: a callsign is not position
+         * data (same policy as heartbeats). */
+        uint8_t printable = (last_packet.length >= 5 &&
+                             last_packet.length < RF_ASCII_BUFFER_SIZE);
+        for (uint16_t i = 0; printable && i < last_packet.length; i++) {
+          uint8_t b = last_packet.data[i];
+          if (b < 0x20 || b > 0x7E || b == ',') printable = 0;
+        }
+        if (printable) {
+          memcpy(rf_ascii_buffer, last_packet.data, last_packet.length);
+          rf_ascii_buffer[last_packet.length] = '\0';
+          (void)RF_Parser_ParseAsciiPacket(rf_ascii_buffer);
+        }
       }
 #else
       /* ASCII packet format */
