@@ -120,6 +120,15 @@ static int copy_file(lfs_t *lfs, const char *lfs_path, const char *host_path) {
         }
         bytes += r;
     }
+    if (r < 0) {
+        /* IO error mid-file: the copy is truncated - say so loudly instead
+         * of listing it below as if it were complete. */
+        fprintf(stderr, "  ! read %s -> %lld after %llu bytes (TRUNCATED)\n",
+                lfs_path, (long long)r, (unsigned long long)bytes);
+        fclose(out);
+        lfs_file_close(lfs, &lfile);
+        return (int)r;
+    }
     fclose(out);
     lfs_file_close(lfs, &lfile);
 

@@ -63,6 +63,31 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* Safety: refuse if the device (or any partition on it, for whole-disk
+     * paths like /dev/sda) is currently mounted. Formatting a mounted
+     * filesystem corrupts the live mount, and a typo'd /dev/sda should not
+     * be able to wipe the OS disk no matter how the prompt is answered. */
+    {
+        FILE *m = fopen("/proc/mounts", "r");
+        if (m) {
+            char src[256], rest[512];
+            int mounted = 0;
+            while (fscanf(m, "%255s %511s %*[^\n]\n", src, rest) == 2) {
+                size_t dl = strlen(dev);
+                if (strncmp(src, dev, dl) == 0 &&
+                    (src[dl] == '\0' || (src[dl] >= '0' && src[dl] <= '9')
+                     || src[dl] == 'p')) {
+                    fprintf(stderr, "%s is mounted at %s - refusing.\n"
+                                    "Unmount it first.\n", src, rest);
+                    mounted = 1;
+                    break;
+                }
+            }
+            fclose(m);
+            if (mounted) return 1;
+        }
+    }
+
     dev_fd = open(dev, O_RDWR);
     if (dev_fd < 0) {
         fprintf(stderr, "open %s: %s\n", dev, strerror(errno));
