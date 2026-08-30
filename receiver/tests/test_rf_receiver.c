@@ -41,12 +41,15 @@ static uint8_t       fake_lora_init_result   = LORA_OK;
 static uint8_t       fake_device_status_fail = 0;
 static uint16_t      fake_irq_value          = 0;
 
+static uint32_t      fake_set_rx_calls       = 0;
+static uint32_t      fake_init_calls         = 0;
 uint8_t LoRa_Init(SPI_HandleTypeDef *hspi)
 {
     (void)hspi;
+    fake_init_calls++;
     return fake_lora_init_result;
 }
-uint8_t LoRa_SetReceiveMode(void) { return LORA_OK; }
+uint8_t LoRa_SetReceiveMode(void) { fake_set_rx_calls++; return LORA_OK; }
 uint8_t LoRa_GetDeviceStatus(uint8_t *status)
 {
     if (fake_device_status_fail) { *status = 0; return LORA_ERROR; }
@@ -692,6 +695,38 @@ TEST(test_diagnostics_getters)
     DMA1_Stream4_IRQHandler();
 }
 
+TEST(test_radio_wedge_rx_recovery)
+{
+    /* A healthy link first: RX confirmed, no recovery churn */
+    scan_active = 0;
+    rf_wedges_recovered = 0;
+    fake_mode = 5;
+    uint32_t base_rx = fake_set_rx_calls;
+    uint32_t base_init = fake_init_calls;
+    run_for(600, 200);
+    CHECK(rf_wedges_recovered == 0);
+
+    /* Chip falls out of RX mid-session (EMI, glitched SPI command, 3V3
+     * sag): the 4 Hz diag notices within 250 ms, and a sustained 3 s
+     * not-RX streak re-enters RX. */
+    fake_mode = 2;                               /* STDBY_RC */
+    run_for(3400, 200);
+    CHECK(fake_set_rx_calls > base_rx);          /* RX re-entered */
+    CHECK(rf_wedges_recovered == 1);
+
+    /* Still wedged: three RX retries, then a full chip re-init */
+    run_for(10000, 200);
+    CHECK(fake_init_calls > base_init);          /* LoRa_Init ran */
+    CHECK(rf_wedges_recovered >= 4);
+
+    /* RX restored: the streak resets and recovery goes quiet */
+    fake_mode = 5;
+    uint32_t wedges_now = rf_wedges_recovered;
+    run_for(1000, 200);
+    CHECK(rf_wedges_recovered == wedges_now);
+    CHECK(RF_Receiver_GetWedgesRecovered() == rf_wedges_recovered);
+}
+
 int main(void)
 {
     Test_SetTick(now_ms);
@@ -701,6 +736,7 @@ int main(void)
     run_test_init_failure_paths();
     CHECK(RF_Receiver_Init() == RF_OK);
 
+    run_test_radio_wedge_rx_recovery();
     run_test_spi_selftest_oneshot_in_poll();
     run_test_nonzero_irq_status_latched();
     run_test_channel_cycling_covers_all_channels();

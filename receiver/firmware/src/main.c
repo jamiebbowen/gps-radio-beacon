@@ -579,6 +579,22 @@ int main(void)
       }
     }
 
+    /* Mid-session radio wedge recoveries (chip fell out of RX): durable
+     * breadcrumb so field logs show when the RF front end had to be
+     * kicked back to life. */
+    if (rf_initialized && sd_card_ok) {
+      static uint32_t wedges_logged = 0;
+      uint32_t wedges = RF_Receiver_GetWedgesRecovered();
+      if (wedges != wedges_logged) {
+        char w_msg[40];
+        snprintf(w_msg, sizeof(w_msg), "RF wedge recovered (#%lu)",
+                 (unsigned long)wedges);
+        SD_Card_EnsureLogFile();
+        SD_Card_LogError(w_msg);
+        wedges_logged = wedges;
+      }
+    }
+
     /* Drive the boot channel scan; returns 1 the moment a packet locks it */
     if (rf_initialized && RF_Receiver_ScanUpdate()) {
       if (sd_card_ok) {

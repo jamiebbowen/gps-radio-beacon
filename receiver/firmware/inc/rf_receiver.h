@@ -81,6 +81,7 @@ uint8_t RF_Receiver_GetLastHeartbeat(HeartbeatPacket_t *hb, uint32_t *age_ms);
 #define RF_NOISE_CLEAR_DBM  -105  /* release alert at/below this floor */
 uint8_t RF_Receiver_GetNoiseFloor(int16_t *nf_dbm);
 uint8_t RF_Receiver_NoiseAlert(void);
+uint32_t RF_Receiver_GetWedgesRecovered(void);
 
 /* Boot-time channel scan: hop channels until a CRC-valid packet is heard */
 void    RF_Receiver_StartScan(void);

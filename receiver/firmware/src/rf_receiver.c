@@ -54,6 +54,7 @@ static uint8_t rf_last_device_mode = 0;  // Last device operating mode
 static uint8_t rf_spi_test_result = 0xFF;  // SPI communication test (0=fail, 1=pass, 0xFF=not tested)
 static uint8_t rf_last_busy_state = 0;  // Last BUSY pin state
 static uint8_t rf_header_matches = 0;
+static uint32_t rf_wedges_recovered = 0;  // mid-session RX-loss recoveries
 static volatile uint8_t rf_packet_ready = 0;
 static uint8_t rf_last_bytes[4] = {0};
 static char rf_ascii_buffer[RF_ASCII_BUFFER_SIZE];
@@ -200,6 +201,38 @@ uint8_t RF_Receiver_DataAvailable(void)
     }
   }
   
+  /* Radio wedge recovery. RF_EnsureRxMode enters RX exactly once ever; a
+   * chip knocked out of RX mid-session (EMI, a glitched SPI command, a
+   * 3V3 sag) would otherwise stay deaf until power cycle while the
+   * display still showed the last lock. The 4 Hz diag read above already
+   * knows the mode - act on a SUSTAINED not-RX streak (3 s) so legit
+   * standby blips (retune ~ms) never trip it. Exempt the channel scan:
+   * CAD parks the chip in standby between sniffs by design. */
+  if (!scan_active) {
+    static uint32_t not_rx_since_ms = 0;
+    static uint8_t  wedge_rx_retries = 0;
+    if (rf_last_device_mode == 5) {          /* RX mode confirmed */
+      not_rx_since_ms = 0;
+      wedge_rx_retries = 0;
+    } else {
+      if (not_rx_since_ms == 0) {
+        not_rx_since_ms = now_ms;
+      } else if (now_ms - not_rx_since_ms >= 3000) {
+        not_rx_since_ms = now_ms;
+        if (++wedge_rx_retries <= 3) {
+          (void)LoRa_SetReceiveMode();     /* usually enough */
+        } else {
+          /* RX re-entry is not sticking - the chip itself is wedged, and
+           * a full LoRa_Init (which ends in RX mode) is the only reset
+           * the SX1268 has short of power. */
+          wedge_rx_retries = 0;
+          (void)LoRa_Init(&hspi_lora);
+        }
+        rf_wedges_recovered++;
+      }
+    }
+  }
+
   /* Ambient noise-floor sampling, 1 Hz. Only sample while the chip is
    * confirmed in RX mode (mode 5) - GetRssiInst is undefined in standby,
    * which the radio briefly enters during scan/manual retunes. */
@@ -702,6 +735,15 @@ uint8_t RF_Receiver_GetNoiseFloor(int16_t *nf_dbm)
 uint8_t RF_Receiver_NoiseAlert(void)
 {
   return noise_alert_active;
+}
+
+/**
+ * @brief Count of mid-session radio wedge recoveries (RX re-entry or
+ *        full chip re-init after a sustained not-RX streak)
+ */
+uint32_t RF_Receiver_GetWedgesRecovered(void)
+{
+  return rf_wedges_recovered;
 }
 
 /**
