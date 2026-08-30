@@ -63,6 +63,16 @@
 #define EKF_INIT_POS_VAR_M2             25.0f  /* initial P diag (pos)   */
 #define EKF_INIT_VEL_VAR_MS2            4.0f   /* initial P diag (vel)   */
 
+/* GPS innovation gate (nav_update_from_gps). A fix whose normalized
+ * innovation (chi-square-ish, 3 dof) exceeds NAV_NIS_REJECT (~4 sigma) AND
+ * is more than NAV_GATE_MIN_M from the filter's own estimate is treated as
+ * a multipath/stale-position glitch and rejected. Armed only while the IMU
+ * is healthy (predict tracks real dynamics); with a dead IMU the filter
+ * coasts and honest boost-phase motion produces big innovations, so the
+ * gate fails open and GPS flows ungated. */
+#define NAV_NIS_REJECT                  16.0f  /* 3-dof chi2 99.9% ~= 16.3 */
+#define NAV_GATE_MIN_M                  20.0f  /* never reject sub-20 m steps */
+
 /* Fused-packet transmit cadence in LAUNCH state. Set to 10 Hz so we get
  * smoothed interpolation between 1 Hz GPS fixes. Ignored when state machine
  * isn't in LAUNCH / POST_LAUNCH (uses state-machine cadence there). */

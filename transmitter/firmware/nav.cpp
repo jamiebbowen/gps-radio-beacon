@@ -47,6 +47,7 @@ static float    s_m_per_deg_lon = 111320.0f;
 static uint32_t s_last_gps_ms      = 0;
 static uint32_t s_last_predict_ms  = 0;
 static bool     s_have_any_predict = false;
+static uint32_t s_gps_rejects      = 0;
 
 /* --------- helpers ------------------------------------------------------- */
 
@@ -104,6 +105,7 @@ void nav_init(void) {
     s_have_any_predict = false;
     s_last_gps_ms      = 0;
     s_last_predict_ms  = 0;
+    s_gps_rejects      = 0;
 }
 
 void nav_predict(void) {
@@ -161,6 +163,48 @@ void nav_update_from_gps(float lat_deg, float lon_deg, float alt_m,
 
     float z[3];
     latlon_to_ned(lat_deg, lon_deg, alt_m, &z[0], &z[1], &z[2]);
+
+    /* Innovation gate: reject multipath jumps / stale-position glitches.
+     * Armed only while the IMU is healthy - with live rotation+accel the
+     * predict step tracks real dynamics, so a big normalized innovation
+     * means the FIX is wrong. With a dead IMU the filter coasts at constant
+     * velocity and honest boost-phase motion produces huge innovations;
+     * gating there would reject good fixes exactly when GPS is the only
+     * position source, so fail open. A rejected fix does not refresh
+     * s_last_gps_ms, so age/dead-reckoning flags reflect only accepted
+     * fixes. */
+    {
+        uint32_t now = millis();
+        bool imu_ok = imu_has_quaternion()
+                   && (imu_last_accel_ms() > 0)
+                   && ((now - imu_last_accel_ms()) < 500u);
+        if (imu_ok) {
+            float R[3] = {
+                s_ekf.sigma_gh * s_ekf.sigma_gh,
+                s_ekf.sigma_gh * s_ekf.sigma_gh,
+                s_ekf.sigma_gv * s_ekf.sigma_gv,
+            };
+            float nis = 0.0f, norm2 = 0.0f;
+            for (int i = 0; i < 3; i++) {
+                float S = s_ekf.P[i][i] + R[i];
+                if (S <= 1e-6f) continue;
+                float innov = z[i] - s_ekf.x[i];
+                nis   += innov * innov / S;
+                norm2 += innov * innov;
+            }
+            if (nis > NAV_NIS_REJECT && norm2 > NAV_GATE_MIN_M * NAV_GATE_MIN_M) {
+                s_gps_rejects++;
+#if IMU_FUSION_LOG_RESIDUALS
+                Serial.print(F("[Nav] GPS REJECTED: nis="));
+                Serial.print(nis, 1);
+                Serial.print(F(" |innov|="));
+                Serial.println(sqrtf(norm2), 1);
+#endif
+                return;
+            }
+        }
+    }
+
     ekf_update_gps_position(&s_ekf, z);
     s_last_gps_ms = millis();
 
@@ -207,3 +251,5 @@ void nav_get_fused(NavFused_t *out) {
 }
 
 bool nav_is_valid(void) { return s_anchored; }
+
+uint32_t nav_get_gps_rejects(void) { return s_gps_rejects; }

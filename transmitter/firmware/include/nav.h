@@ -51,6 +51,9 @@ void nav_get_fused(NavFused_t *out);
 /* True once a valid GPS fix has anchored the tangent plane. */
 bool nav_is_valid(void);
 
+/* Number of GPS fixes rejected by the innovation gate since nav_init(). */
+uint32_t nav_get_gps_rejects(void);
+
 #ifdef __cplusplus
 }
 #endif

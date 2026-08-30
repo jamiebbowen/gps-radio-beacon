@@ -203,6 +203,47 @@ TEST(test_predict_axis_mapping_enu_to_ned)
     CHECK(fabsf(f.v_e) < 0.5f);
 }
 
+TEST(test_innovation_gate_rejects_gps_glitch)
+{
+    fresh_nav_with_anchor();
+    CHECK(nav_get_gps_rejects() == 0);
+
+    /* IMU healthy: the gate is armed */
+    fake_has_quat = true;
+    fake_quat[0] = 1.0f;
+    fake_accel_ms = now_ms;
+    now_ms += 100;
+    nav_predict();
+
+    /* A 111 m multipath jump against a tight filter: rejected, no movement */
+    nav_update_from_gps(ANCHOR_LAT + 0.001f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    NavFused_t f;
+    nav_get_fused(&f);
+    CHECK(fabsf(f.lat_deg - ANCHOR_LAT) < 1e-5f);
+    CHECK(nav_get_gps_rejects() == 1);
+    CHECK(strstr(Serial.log, "REJECTED") != NULL);
+
+    /* An honest 3 m step: under the 20 m floor, always accepted */
+    fake_accel_ms = now_ms;
+    nav_update_from_gps(ANCHOR_LAT + 0.00003f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    CHECK(nav_get_gps_rejects() == 1);              /* no new rejection */
+    nav_get_fused(&f);
+    CHECK(f.lat_deg > ANCHOR_LAT);                  /* pulled north */
+}
+
+TEST(test_innovation_gate_fails_open_when_imu_dead)
+{
+    fresh_nav_with_anchor();
+
+    /* IMU explicitly dead (no quaternion): gate off, big jump flows through */
+    fake_has_quat = false;
+    nav_update_from_gps(ANCHOR_LAT + 0.001f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    CHECK(nav_get_gps_rejects() == 0);
+    NavFused_t f;
+    nav_get_fused(&f);
+    CHECK(f.lat_deg > ANCHOR_LAT + 0.0003f);  /* one update, Kp=0.5: ~55 m */
+}
+
 TEST(test_rotated_quaternion)
 {
     /* 90 deg yaw about Z: body +X maps to ENU +Y (north) */
@@ -278,6 +319,8 @@ int main(void)
     run_test_gps_gating();
     run_test_anchor_and_roundtrip();
     run_test_gps_updates_pull_position();
+    run_test_innovation_gate_rejects_gps_glitch();
+    run_test_innovation_gate_fails_open_when_imu_dead();
     run_test_predict_axis_mapping_enu_to_ned();
     run_test_rotated_quaternion();
     run_test_zero_dt_predict_is_noop();
