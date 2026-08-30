@@ -166,11 +166,13 @@ int lfs_sd_bd_init(void)
     }
     sd_sector_count = (uint32_t)sectors;
 
-    /* Switch SPI1 from the ~82 kHz init clock to ~2.6 MHz for data-phase
-     * transfers. Without this, every LittleFS commit spends ~50 ms per
-     * sector at 82 kHz and the main loop falls behind display updates.
-     * At 2.6 MHz the same commit takes ~1.6 ms per sector - a ~30x speedup
-     * that restores responsive UI even during post-launch traffic bursts. */
+    /* Switch SPI1 from the ~82 kHz init clock to ~1.3 MHz for data-phase
+     * transfers (SD_SetFastSpeed picked prescaler 16 after 2.6 MHz proved
+     * unreliable on this board's wiring - see sd_diskio.c). Without this,
+     * every LittleFS commit spends ~50 ms per sector at 82 kHz and the main
+     * loop falls behind display updates; at 1.3 MHz a commit is ~3 ms per
+     * sector - a ~16x speedup that keeps the UI responsive even during
+     * post-launch traffic bursts. */
     SD_SetFastSpeed();
 
     /* Whole-card LittleFS; block_count = floor(sectors / sectors_per_block). */
