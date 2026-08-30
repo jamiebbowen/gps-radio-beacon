@@ -315,7 +315,19 @@ TEST(test_isr_plumbing)
     HAL_UART_RxCpltCallback(&other);
     CHECK(uart_byte_counter == bytes_before);
 
-    CHECK(GPS_IsFixed() == 1);                 /* current stub behavior */
+    /* Fix latch tracks the parser: still 1 from the valid RMC fed earlier */
+    GPS_Data fix_scratch = {0};
+    CHECK(GPS_IsFixed() == 1);
+
+    /* A void (V) RMC clears it even though the sentence parses as no-fix */
+    feed_sentence("$GPRMC,123519,V,4807.038,N,01131.000,E,022.4,084.4,230394,,");
+    (void)GPS_Update(&fix_scratch);
+    CHECK(GPS_IsFixed() == 0);
+
+    /* And a valid fix re-latches it */
+    feed_sentence("$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,,");
+    (void)GPS_Update(&fix_scratch);
+    CHECK(GPS_IsFixed() == 1);
 
     /* Receive_IT failure INSIDE the byte callback marks last_bytes[0]=0xF2
      * (the 0xE1 path in GPS_Update is covered by test_rearm_when_uart_ready) */

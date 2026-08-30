@@ -25,6 +25,7 @@ static uint8_t gps_rx_data;
 static uint8_t gps_nmea_buffer[GPS_BUFFER_SIZE];
 static uint16_t gps_nmea_index = 0;
 static uint8_t gps_nmea_ready = 0;
+static uint8_t gps_last_fix = 0;   /* Fix state from the last parsed sentence */
 static uint8_t last_bytes[4] = {0}; /* Debug: Store last 4 raw bytes */
 static uint32_t uart_byte_counter = 0; /* Counter for UART activity */
 static uint32_t nmea_sentence_counter = 0; /* Counter for complete NMEA sentences */
@@ -180,8 +181,13 @@ uint8_t GPS_Update(GPS_Data *gps_data)
     last_bytes[0] = 0xB1;
     last_bytes[1] = 0xB2;
     
-    /* Use the parser module to parse NMEA sentences */
-    if (GPS_ParseNMEA((char*)gps_nmea_buffer, gps_data) == GPS_PARSER_OK) {
+    /* Use the parser module to parse NMEA sentences. The parser writes
+     * gps_data->fix from the actual sentence (GGA quality / RMC A|V) even
+     * when it returns PARSER_ERROR for a no-fix sentence, so this latch
+     * always reflects the latest on-air fix state. */
+    uint8_t parse_result = GPS_ParseNMEA((char*)gps_nmea_buffer, gps_data);
+    gps_last_fix = gps_data->fix ? 1 : 0;
+    if (parse_result == GPS_PARSER_OK) {
       /* Don't override fix status - it's set by the parser based on actual GPS data */
       status = GPS_OK;
       
@@ -218,9 +224,11 @@ uint8_t GPS_Update(GPS_Data *gps_data)
  */
 uint8_t GPS_IsFixed(void)
 {
-  /* Implementation depends on the current state of gps_data */
-  /* For now, we'll just return 1 (fixed) for testing */
-  return 1;
+  /* Real fix state from the last parsed sentence - NOT a stub. main.c ORs
+   * this into the local-GPS validity condition, so returning a constant 1
+   * here used to make stale coordinates (last-known position with fix=0)
+   * pass as a current fix whenever they were non-zero and in range. */
+  return gps_last_fix;
 }
 
 /**
