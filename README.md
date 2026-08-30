@@ -12,14 +12,14 @@ Tested on a Mach-0.99 / 2 km AGL flight with a 37 dB link margin — see
 ```
 +-------------------------+           LoRa 433 MHz          +-------------------------+
 |       TRANSMITTER       |  - - - - - - - - - - - - - ->  |         RECEIVER        |
-|  (flies with the rocket)|        ~8-12 km LoS range       |   (handheld ground)     |
+|  (flies with the rocket)|        ~4-6 km LoS (SF7)        |   (handheld ground)     |
 +-------------------------+                                 +-------------------------+
   - ItsyBitsy M4 (SAMD51)                                     - STM32F401 Black Pill
   - u-blox GPS (UART)                                         - NEO-6M GPS (UART)
-  - BNO085 IMU (I2C) - launch detect                          - QMC5883L compass (I2C)
+  - BNO085 IMU (I2C) - launch detect                          - BNO055 IMU (I2C) - compass
   - E22-400M33S LoRa (SPI)                                    - E22 LoRa (SPI)
   - Power: 3.3 V + LiPo                                       - SSD1309 OLED (I2C)
-                                                              - microSD log (SPI)
+                                                              - microSD log (SPI, littlefs)
 ```
 
 The transmitter runs a state machine (`PRE_LAUNCH` -> `LAUNCH` -> `POST_LAUNCH`
@@ -40,6 +40,11 @@ The receiver logs every packet to SD card for post-flight analysis.
 |   |                        (radio, GPS, compass, OLED, SD card, navigation UI)
 |   `-- tools/
 |       `-- analyze_flight.py  Post-flight log analyzer + KML/MP4 renderer
+|
+|-- tools/
+|   |-- log_summary.py       Field-log health forensics (wedges, watchdogs,
+|   |                          telemetry gaps) - run on a session directory
+|   `-- lfs_extract/         Pull Lxxxxxxx.TXT logs off the littlefs SD image
 |
 |-- docs/                    Reference documentation (wiring, radio config,
 |                            reliability, troubleshooting)
@@ -66,16 +71,19 @@ Edit `include/mpu_config.h` to set your amateur-radio callsign.
 
 ```bash
 cd receiver/firmware
-make                  # builds bin/firmware.elf
+make                  # builds bin/gps_radio_beacon_receiver.elf
 # Flash with st-flash, OpenOCD, or DFU as appropriate for your toolchain
 ```
 
 ### Flight analysis
 
-After a flight, pull the SD card from the receiver and run:
+After a flight, pull the SD card from the receiver and extract the logs
+(the card is littlefs, not FAT):
 
 ```bash
-python3 receiver/tools/analyze_flight.py /path/to/Lxxxxxxx.TXT
+make extract DEV=/dev/sdX                        # -> flight_data/<timestamp>/
+python3 tools/log_summary.py flight_data/<ts>/   # health audit in seconds
+python3 receiver/tools/analyze_flight.py flight_data/<ts>/L0001.TXT
 ```
 
 Options:
