@@ -540,10 +540,22 @@ int main(void)
 
     /* Channel switching: button 2 on the Rocket Select page, or a long press
      * of button 1 as a fallback for units without the second button wired.
-     * On any other page, button 2 jumps straight home to Navigation. */
+     * A long press anywhere else just cycles the page (a held press must
+     * never be a no-op). Button 2 off the Rocket Select page jumps straight
+     * home to Navigation. */
     uint8_t cycle_channel = 0;
-    if (Button_WasLongPressed() && current_display_mode == DISPLAY_MODE_CHANNEL) {
-      cycle_channel = 1;
+    if (Button_WasLongPressed()) {
+      if (current_display_mode == DISPLAY_MODE_CHANNEL) {
+        cycle_channel = 1;
+      } else {
+        /* A long press only has a special meaning on the Rocket Select
+         * page. Anywhere else, fall back to the normal page cycle so a
+         * press held a beat too long still does SOMETHING - otherwise
+         * holds >=700 ms were silently swallowed and the button felt dead. */
+        current_display_mode = (current_display_mode + 1) % DISPLAY_MODE_COUNT;
+        mode_change_time = HAL_GetTick();
+        force_display_update = 1;
+      }
     }
     if (Button2_WasPressed()) {
       if (current_display_mode == DISPLAY_MODE_CHANNEL) {
