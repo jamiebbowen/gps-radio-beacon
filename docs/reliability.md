@@ -143,36 +143,35 @@ data is stale, because an out-of-date bearing is still useful for recovery.
 ```c
 Frequency:        433 MHz       /* US 70 cm amateur band */
 Bandwidth:        125 kHz
-Spreading factor: SF9
+Spreading factor: SF7           /* fast airtime for the 10 Hz fused stream */
 Coding rate:      4/7
-TX power:         30 dBm (1 W)  /* max legal in US */
-Preamble:         8 symbols
+TX power:         22 dBm        /* E22-400M33S module maximum */
+Preamble:         16 symbols (TX) / 8 (RX; longer TX preamble is safe)
 Sync word:        0x12
 ```
 
 ### 4.2 Budget worked through
 
-- TX power: **+30 dBm**
+- TX power: **+22 dBm**
 - TX antenna gain (17 cm whip, ~lambda/4): **+2 dBi**
 - Cable loss: **-0.5 dB**
-- EIRP: **+31.5 dBm**
+- EIRP: **+23.5 dBm**
 
 - Free-space path loss at 10 km, 433 MHz: **-132 dB**
 
 - RX antenna gain: **+2 dBi**
 - RX cable loss: **-0.5 dB**
-- RX sensitivity (SF9, BW125): **-136 dBm**
-- Effective RX floor: **-138 dBm**
+- RX sensitivity (SF7, BW125): **-123 dBm**
 
 ```
-Link margin = EIRP + RX antenna + RX sensitivity - path loss
-            = 31.5 + 2 - 0.5 - (-138) - 132
-            = ~39 dB at 10 km
+Received power = EIRP + RX antenna + RX cable - path loss
+               = 23.5 + 2 - 0.5 - 132 = -107 dBm
+Link margin    = -107 - (-123) = ~16 dB at 10 km
 ```
 
-**~39 dB of headroom** is enough to survive typical fading (10-20 dB),
-partial obstructions (10-30 dB), and co-channel interference (~10 dB) and
-still close the link.
+**~16 dB of headroom** at 10 km covers typical fading (10-20 dB) at the
+edge of practical range; closer in, the margin grows ~6 dB per halving of
+distance (e.g. ~34 dB at 2.5 km).
 
 A real flight (Apr 2026, ItsyBitsy + E22 + 17 cm whip, SF7) measured a
 worst-case RSSI of -86 dBm at 2.1 km slant range, giving a **37 dB link
@@ -182,8 +181,8 @@ margin** at SF7 -- consistent with the budget above.
 
 | Setting | Range | Air time | Data rate | Use case |
 |---|---|---|---|---|
-| SF7, 125 kHz | ~4-6 km | 60 ms | 5.5 kbps | Fast updates, short range |
-| SF9, 125 kHz (default) | ~8-12 km | 370 ms | 1.8 kbps | Balanced rocket tracking |
+| SF7, 125 kHz (default) | ~4-6 km | 60 ms | 5.5 kbps | Fast updates, 10 Hz fused stream |
+| SF9, 125 kHz | ~8-12 km | 370 ms | 1.8 kbps | Balanced rocket tracking |
 | SF10, 125 kHz | ~12-18 km | 660 ms | 980 bps | Max-range stationary |
 | SF12, 125 kHz | ~15-25 km | 2.6 s | 290 bps | Not useful for flight |
 

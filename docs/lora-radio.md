@@ -16,8 +16,8 @@ Successfully converted the GPS radio beacon receiver from UART-based RF (RXM-433
 ### 2. Updated RF Receiver (`rf_receiver.c`)
 - Replaced UART initialization with SPI initialization
 - Changed from interrupt-driven UART to DIO1-interrupt-driven LoRa packet reception (EXTI on DIO1 sets a flag; the main loop drains the packet over SPI)
-- Packet format remains the same: `$$data$$CHKSUM`
-- Maintains compatibility with existing parser
+- Packet format at the time of conversion was `$$data$$CHKSUM`; the current
+  firmware uses binary typed packets (see `transmitter/firmware/include/rf_packet.h`)
 
 ### 3. Removed UART Dependencies
 - Removed `RF_Receiver_UART_RxCpltCallback()` from gps.c

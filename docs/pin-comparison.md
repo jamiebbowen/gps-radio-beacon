@@ -72,11 +72,11 @@
 |-----------|-------------|----------|--------|
 | **Frequency** | 433.0 MHz | 433.0 MHz | ✅ |
 | **Bandwidth** | 125 kHz | 125 kHz | ✅ |
-| **Spreading Factor** | 9 (SF9) | 9 (SF9) | ✅ |
+| **Spreading Factor** | 7 (SF7) | 7 (SF7) | ✅ |
 | **Coding Rate** | 4/7 | 4/7 | ✅ |
 | **Sync Word** | 0x12 | 0x12 | ✅ |
 | **TX Power** | 22 dBm | 22 dBm | ℹ️ Doesn't need to match |
-| **Preamble** | 8 | 8 | ✅ |
+| **Preamble** | 16 | 8 | ✅ Longer TX preamble only overlaps more |
 
 ---
 
@@ -277,14 +277,14 @@ Before deploying, verify:
 ### LoRa Settings Match:
 - [ ] Frequency: 433.0 MHz
 - [ ] Bandwidth: 125 kHz
-- [ ] Spreading Factor: 9
+- [ ] Spreading Factor: 7
 - [ ] Coding Rate: 4/7
 - [ ] Sync Word: 0x12
 
 ### Packet Format Matches:
-- [ ] Both use $$data$$CHKSUM format
-- [ ] NMEA coordinate format (DDMM.MMMMM)
-- [ ] XOR checksum calculation
+- [ ] Binary typed packets: GPS 13 B / fused 16 B / heartbeat 8 B (+ callsign)
+- [ ] Same struct layout and scaling in rf_packet.h (TX) vs rf_parser.c (RX)
+- [ ] Legacy ASCII path ($$data$$CHKSUM) only if USE_BINARY_PACKETS=0
 
 ### Antennas Connected:
 - [ ] Transmitter has 433MHz antenna
