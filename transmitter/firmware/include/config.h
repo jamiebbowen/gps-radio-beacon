@@ -73,6 +73,10 @@
 #define NAV_NIS_REJECT                  16.0f  /* 3-dof chi2 99.9% ~= 16.3 */
 #define NAV_GATE_MIN_M                  20.0f  /* never reject sub-20 m steps */
 
+/* The tangent-plane anchor requires two consecutive fixes within this
+ * radius of each other: a lone glitch fix can't anchor the EKF wrong. */
+#define NAV_ANCHOR_CONFIRM_M            30.0f
+
 /* Fused-packet transmit cadence in LAUNCH state. Set to 10 Hz so we get
  * smoothed interpolation between 1 Hz GPS fixes. Ignored when state machine
  * isn't in LAUNCH / POST_LAUNCH (uses state-machine cadence there). */

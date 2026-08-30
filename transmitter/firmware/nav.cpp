@@ -49,6 +49,12 @@ static uint32_t s_last_predict_ms  = 0;
 static bool     s_have_any_predict = false;
 static uint32_t s_gps_rejects      = 0;
 
+/* Anchor confirmation: the first fix only becomes a candidate; the tangent
+ * plane anchors on a second fix within NAV_ANCHOR_CONFIRM_M of it. */
+static bool     s_anchor_pending   = false;
+static float    s_cand_lat = 0.0f, s_cand_lon = 0.0f, s_cand_alt = 0.0f;
+static uint32_t s_cand_ms = 0;
+
 /* --------- helpers ------------------------------------------------------- */
 
 static inline void anchor_set(float lat, float lon, float alt) {
@@ -106,6 +112,7 @@ void nav_init(void) {
     s_last_gps_ms      = 0;
     s_last_predict_ms  = 0;
     s_gps_rejects      = 0;
+    s_anchor_pending   = false;
 }
 
 void nav_predict(void) {
@@ -153,11 +160,31 @@ void nav_update_from_gps(float lat_deg, float lon_deg, float alt_m,
     if (fix_quality < 1) return;
     if (sats < 4)        return;
 
-    /* First valid fix anchors the tangent plane and initializes the EKF. */
     if (!s_anchored) {
-        anchor_set(lat_deg, lon_deg, alt_m);
-        ekf_set_position(&s_ekf, 0.0f, 0.0f, 0.0f);
-        s_last_gps_ms = millis();
+        /* Anchor on two CONSECUTIVE fixes that agree: a single glitch fix
+         * (multipath at power-on, stale cold-start position) used to anchor
+         * the tangent plane wrong, after which the innovation gate would
+         * reject every honest fix for tens of seconds. A bad candidate is
+         * simply replaced by the next fix, so one glitch costs one fix. */
+        uint32_t now = millis();
+        if (s_anchor_pending && (now - s_cand_ms) < 10000u) {
+            float dn = (lat_deg - s_cand_lat) * 111320.0f;
+            float de = (lon_deg - s_cand_lon) * 111320.0f
+                     * cosf(s_cand_lat * (float)M_PI / 180.0f);
+            float dd = alt_m - s_cand_alt;
+            float dist2 = dn * dn + de * de + dd * dd;
+            if (dist2 <= NAV_ANCHOR_CONFIRM_M * NAV_ANCHOR_CONFIRM_M) {
+                anchor_set(lat_deg, lon_deg, alt_m);
+                ekf_set_position(&s_ekf, 0.0f, 0.0f, 0.0f);
+                s_anchor_pending = false;
+                s_last_gps_ms = now;
+                return;
+            }
+        }
+        /* No candidate yet, stale candidate, or disagreement: (re)seed. */
+        s_cand_lat = lat_deg; s_cand_lon = lon_deg; s_cand_alt = alt_m;
+        s_cand_ms = now;
+        s_anchor_pending = true;
         return;
     }
 

@@ -61,19 +61,22 @@ uint32_t imu_last_accel_ms(void) { return fake_accel_ms; }
 #define ANCHOR_LON -104.8850000f
 #define ANCHOR_ALT 1650.0f
 
+static void step(uint32_t ms)
+{
+    now_ms += ms;
+    nav_predict();
+}
+
 static void fresh_nav_with_anchor(void)
 {
     nav_init();
     fake_has_quat = false;
     memset(fake_accel, 0, sizeof(fake_accel));
     fake_accel_ms = 0;
+    /* Anchoring requires two consecutive agreeing fixes (glitch guard) */
     nav_update_from_gps(ANCHOR_LAT, ANCHOR_LON, ANCHOR_ALT, 8, 1);
-}
-
-static void step(uint32_t ms)
-{
-    now_ms += ms;
-    nav_predict();
+    step(1000);
+    nav_update_from_gps(ANCHOR_LAT, ANCHOR_LON, ANCHOR_ALT, 8, 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -107,7 +110,51 @@ TEST(test_gps_gating)
     nav_update_from_gps(ANCHOR_LAT, ANCHOR_LON, ANCHOR_ALT, 3, 1);  /* < 4 sats */
     CHECK(nav_is_valid() == false);
 
-    nav_update_from_gps(ANCHOR_LAT, ANCHOR_LON, ANCHOR_ALT, 4, 1);  /* accepted */
+    nav_update_from_gps(ANCHOR_LAT, ANCHOR_LON, ANCHOR_ALT, 4, 1);  /* candidate */
+    CHECK(nav_is_valid() == false);               /* one fix only seeds a candidate */
+
+    now_ms += 1000;
+    nav_update_from_gps(ANCHOR_LAT, ANCHOR_LON, ANCHOR_ALT, 4, 1);  /* confirms */
+    CHECK(nav_is_valid() == true);
+}
+
+TEST(test_anchor_requires_two_agreeing_fixes)
+{
+    nav_init();
+    fake_has_quat = false;
+    fake_accel_ms = 0;
+
+    /* Fix 1: candidate. Fix 2: 111 m away (0.001 deg) - disagreement,
+     * candidate replaced, still not anchored. */
+    nav_update_from_gps(ANCHOR_LAT, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    CHECK(nav_is_valid() == false);
+    now_ms += 1000;
+    nav_update_from_gps(ANCHOR_LAT + 0.001f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    CHECK(nav_is_valid() == false);
+
+    /* Fix 3 agrees with fix 2: anchors THERE (the newer position). */
+    now_ms += 1000;
+    nav_update_from_gps(ANCHOR_LAT + 0.001f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    CHECK(nav_is_valid() == true);
+    NavFused_t f;
+    nav_get_fused(&f);
+    CHECK(fabsf(f.lat_deg - (ANCHOR_LAT + 0.001f)) < 1e-5f);
+}
+
+TEST(test_anchor_candidate_expires)
+{
+    nav_init();
+    fake_has_quat = false;
+    fake_accel_ms = 0;
+
+    /* Candidate goes stale after 10 s: an agreeing fix that arrives late
+     * must NOT confirm it (could be hours later after a power blip). */
+    nav_update_from_gps(ANCHOR_LAT, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    now_ms += 20000;
+    nav_update_from_gps(ANCHOR_LAT, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    CHECK(nav_is_valid() == false);
+    now_ms += 1000;
+    nav_update_from_gps(ANCHOR_LAT, ANCHOR_LON, ANCHOR_ALT, 8, 1);
     CHECK(nav_is_valid() == true);
 }
 
@@ -317,6 +364,8 @@ int main(void)
 {
     run_test_invalid_until_anchored();
     run_test_gps_gating();
+    run_test_anchor_requires_two_agreeing_fixes();
+    run_test_anchor_candidate_expires();
     run_test_anchor_and_roundtrip();
     run_test_gps_updates_pull_position();
     run_test_innovation_gate_rejects_gps_glitch();
