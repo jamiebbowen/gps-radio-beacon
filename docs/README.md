@@ -42,7 +42,9 @@ the "current truth" but is worth preserving for context:
 
 - Bug post-mortems (`clock-analysis`, `magic-number-solution`, `sd-cmd0-fix`,
   `lora-timing-fix`, `pin-changes-summary`)
-- Proposals not (yet) adopted (`binary-packet-proposal`)
+- Design history (`binary-packet-proposal` - since **adopted**; the current
+  wire format is the binary typed packets described in
+  `transmitter/firmware/include/rf_packet.h`)
 - Documents superseded by the main README or by a consolidated doc in this
   folder (`complete-system-summary`, `migration-guide`, `port-summary`,
   `build-fix`, `upload-fix`, `e22-400m33s-wiring`)
