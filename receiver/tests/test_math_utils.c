@@ -62,6 +62,25 @@ TEST(test_distance_typical_rocket_flight) {
     CHECK_NEAR(d, 2001.5, 20.0);
 }
 
+TEST(test_distance_never_nan_at_extremes) {
+    /* Antipodal points and float-identical points are where the haversine
+     * 'a' can round past 1.0; sqrtf(1-a) then returns NaN. The clamp must
+     * hold at both extremes. */
+    float d_anti = calculate_distance(39.89f, -105.11f, -39.89f, 74.89f);
+    CHECK(d_anti == d_anti);          /* not NaN */
+    CHECK_NEAR(d_anti, 20015086.0, 5000.0);   /* ~half earth circumference */
+
+    float d_same = calculate_distance(39.89f, -105.11f, 39.89f, -105.11f);
+    CHECK(d_same == d_same);
+    CHECK(d_same >= 0.0f && d_same < 0.001f);
+
+    /* Sub-millimetre separation: the classic a > 1 rounding trigger */
+    float d_tiny = calculate_distance(39.8900000f, -105.1100000f,
+                                      39.8900001f, -105.1100001f);
+    CHECK(d_tiny == d_tiny);
+    CHECK(d_tiny >= 0.0f && d_tiny < 1.0f);
+}
+
 /* ------------------------------------------------------------------ */
 /* calculate_bearing                                                   */
 /* ------------------------------------------------------------------ */
@@ -102,6 +121,7 @@ int main(void) {
     run_test_distance_one_degree_longitude_at_latitude();
     run_test_distance_symmetry();
     run_test_distance_typical_rocket_flight();
+    run_test_distance_never_nan_at_extremes();
     run_test_bearing_cardinal_directions();
     run_test_bearing_diagonal();
     run_test_bearing_always_in_range();

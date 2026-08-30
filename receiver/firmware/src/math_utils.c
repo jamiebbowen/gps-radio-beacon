@@ -26,6 +26,10 @@ float calculate_distance(float lat1, float lon1, float lat2, float lon2)
   float dlon = lon2_rad - lon1_rad;
   float dlat = lat2_rad - lat1_rad;
   float a = sinf(dlat/2) * sinf(dlat/2) + cosf(lat1_rad) * cosf(lat2_rad) * sinf(dlon/2) * sinf(dlon/2);
+  /* Float rounding can push a slightly past 1 when both points are nearly
+   * identical; sqrtf(1-a) would then return NaN and poison the distance. */
+  if (a > 1.0f) a = 1.0f;
+  if (a < 0.0f) a = 0.0f;
   float c = 2 * atan2f(sqrtf(a), sqrtf(1-a));
   float distance = EARTH_RADIUS_METERS * c;
   
