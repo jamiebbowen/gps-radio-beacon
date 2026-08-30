@@ -61,6 +61,8 @@ typedef struct {
   uint8_t  mag_cal;       /* Magnetometer calibration level: 0=uncal, 3=fully cal */
   uint8_t  orientation_valid; /* 0 = device axis ~vertical; heading geometrically
                                * undefined regardless of calibration (tilt, not CAL) */
+  uint8_t  heading_stale;     /* 1 = heading value predates a comm failure; keep
+                               * pointing at it but tell the user it is stale */
 } Compass_Data;
 
 /* Function prototypes */

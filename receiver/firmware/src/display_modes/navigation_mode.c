@@ -492,10 +492,24 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
     /* Direction indicator, right side. Same geometry as before so the
      * width caps above stay valid.
      *   heading_valid   -> arrow
+     *   heading_stale   -> blinking arrow (last known heading, comms down)
+     *   !orientation    -> circle + "VERT"
      *   !heading_valid  -> circle + "CAL" (prompt to figure-8 the device) */
     if (relative_direction >= 0.0f && relative_direction < 360.0f &&
-        compass_data.heading_valid) {
-      Display_DrawDirectionIndicator(96, 32, relative_direction);
+        (compass_data.heading_valid || compass_data.heading_stale)) {
+      if (compass_data.heading_stale && !compass_data.heading_valid) {
+        /* Blink at ~2 Hz via the 250 ms display cadence: stale bearings
+         * still help you walk, but must not look live. */
+        static uint8_t stale_blink = 0;
+        stale_blink = !stale_blink;
+        if (stale_blink) {
+          Display_DrawDirectionIndicator(96, 32, relative_direction);
+        } else {
+          Display_DrawCircle(96, 32, 15, 1);
+        }
+      } else {
+        Display_DrawDirectionIndicator(96, 32, relative_direction);
+      }
     } else if (!compass_data.heading_valid && !compass_data.orientation_valid) {
       Display_DrawCircle(96, 32, 15, 1);
       Display_DrawText(86, 28, "VERT");   /* hold-tilt issue, not calibration */

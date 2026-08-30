@@ -427,7 +427,12 @@ TEST(test_i2c_error_streak_recovers)
     for (int i = 0; i < 12; i++) {
         Test_SetTick(HAL_GetTick() + 200);    /* the 5 Hz poll cadence */
         CHECK(Compass_Update(&d) == COMPASS_ERROR);
-        CHECK(d.heading_valid == 0);          /* frozen, not stale-pointing */
+        CHECK(d.heading_valid == 0);
+        /* NB: an earlier test latched compass_cal_proven (process-wide, as
+         * on real boot), so a trustworthy last heading exists and is kept
+         * on screen, flagged stale - the error splash is only for units
+         * that never calibrated. */
+        CHECK(d.heading_stale == 1);
     }
 
     /* After the streak threshold, the bounded recovery ran and won (the
@@ -438,6 +443,34 @@ TEST(test_i2c_error_streak_recovers)
     /* Fault clears: next poll is healthy again */
     nak_euler_read = 0;
     CHECK(Compass_Update(&d) == COMPASS_OK);
+}
+
+TEST(test_stale_heading_flagged_on_comm_loss)
+{
+    fresh_init();
+    compass_cal_restored = 1;              /* trustworthy heading exists */
+    Compass_Data d = {0};
+    set_euler(45.0f, 0.0f, 0.0f);
+
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+    CHECK(d.heading_valid == 1);
+    CHECK(d.heading_stale == 0);
+    const float live_heading = d.heading;
+
+    /* Comms die: keep the last heading in the struct, flagged stale -
+     * the UI points at it (blink/* marker) instead of going blank */
+    nak_euler_read = 1;
+    CHECK(Compass_Update(&d) == COMPASS_ERROR);
+    CHECK(d.heading_valid == 0);
+    CHECK(d.heading_stale == 1);
+    CHECK_NEAR(d.heading, live_heading, 0.01f);   /* value retained */
+
+    /* Comms recover: live again, stale flag cleared */
+    nak_euler_read = 0;
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+    CHECK(d.heading_valid == 1);
+    CHECK(d.heading_stale == 0);
+    compass_cal_restored = 0;
 }
 
 TEST(test_calibrate_fully_calibrated)
@@ -629,6 +662,7 @@ int main(void)
     run_test_vertical_orientation_invalid();
     run_test_quat_lock_and_tilt_robustness();
     run_test_i2c_error_streak_recovers();
+    run_test_stale_heading_flagged_on_comm_loss();
     run_test_calibrate_fully_calibrated();
     run_test_calibrate_partial_guidance();
     run_test_selftest();

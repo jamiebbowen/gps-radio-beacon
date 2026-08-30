@@ -872,8 +872,11 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
     /* Transient I2C faults (shared bus with the display, cable noise) are
      * common; a streak means the sensor itself likely wedged. Recover with
      * the bounded re-init (no bus scan), rate-limited, then let the next
-     * poll judge. Heading is marked invalid meanwhile so the navigation
-     * arrow freezes instead of pointing at stale data. */
+     * poll judge. If a trustworthy heading existed, keep it in the struct
+     * and flag it STALE - the UI keeps pointing at it (better than nothing
+     * in a field) while telling the user it is no longer live. */
+    compass_data_ptr->heading_stale =
+        (compass_cal_proven || compass_cal_restored) ? 1 : 0;
     compass_data_ptr->heading_valid = 0;
     if (compass_i2c_error_streak < 250) compass_i2c_error_streak++;
     if (compass_i2c_error_streak >= COMPASS_ERROR_STREAK_RECOVER &&
@@ -1092,6 +1095,7 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
   compass_data_ptr->heading_valid =
       ((compass_cal_proven || compass_cal_restored)
        && compass_data_ptr->orientation_valid) ? 1 : 0;
+  compass_data_ptr->heading_stale = 0;  /* live data again */
   compass_data_ptr->mag_cal = mag_cal;
 
   /* Store heading in compass data structure */

@@ -30,6 +30,10 @@ static bool UpdateCompassData(Compass_Data *compass_data, float *compass_heading
       *compass_heading = compass_data->heading;
     }
     return true;
+  } else if (compass_data->heading_stale) {
+    /* Comms down but we have a last-known heading: keep showing it
+     * (flagged with * by the callers) instead of blanking the screen. */
+    return true;
   } else {
     /* Display error if compass update failed */
     Display_DrawTextRowCol(1, 0, "BNO055 ERROR");
@@ -83,8 +87,8 @@ void DisplayMode_CompassVisual(Compass_Data *compass_data, float *compass_headin
   Display_DrawText((uint8_t)(cx + r + 2), (uint8_t)(cy - 4), "E");
   Display_DrawText((uint8_t)(cx - r - 7), (uint8_t)(cy - 4), "W");
 
-  /* Heading needle — only draw if magnetometer is calibrated */
-  if (compass_data->heading_valid) {
+  /* Heading needle — draw for live or stale-but-calibrated headings */
+  if (compass_data->heading_valid || compass_data->heading_stale) {
     float h_rad   = heading * D2R;
     int tip_x  = cx + (int)(17.0f * sinf(h_rad));
     int tip_y  = cy - (int)(17.0f * cosf(h_rad));
@@ -114,6 +118,8 @@ void DisplayMode_CompassVisual(Compass_Data *compass_data, float *compass_headin
   /* --- Right half: text data (x=66) --- */
   if (compass_data->heading_valid) {
     snprintf(buffer, sizeof(buffer), "Hdg:%3.0fd", heading);
+  } else if (compass_data->heading_stale) {
+    snprintf(buffer, sizeof(buffer), "Hdg:%3.0fd*", heading); /* * = stale */
   } else if (!compass_data->orientation_valid) {
     snprintf(buffer, sizeof(buffer), "Hdg: VERT");
   } else {
@@ -154,8 +160,9 @@ void DisplayMode_CompassHeading(Compass_Data *compass_data, float *compass_headi
 
   if (!UpdateCompassData(compass_data, compass_heading)) return;
 
-  /* Row 0: heading */
-  sprintf(buffer, "BNO055 Hdg:%3.0fd", compass_data->heading);
+  /* Row 0: heading; trailing * = value predates a comm failure (stale) */
+  sprintf(buffer, "BNO055 Hdg:%3.0fd%s", compass_data->heading,
+          compass_data->heading_stale ? "*" : "");
   Display_DrawTextRowCol(0, 0, buffer);
 
   /* Row 1: pitch and roll */
