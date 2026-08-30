@@ -938,6 +938,18 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
        * tilt, and only once calibration makes headings meaningful. */
       if (fabsf(pitch) <= 45.0f && fabsf(roll) <= 45.0f &&
           (compass_cal_proven || compass_cal_restored)) {
+        /* Mirror-ambiguity guard: for every candidate pair whose headings
+         * differ by |2*yaw - 45k|, there is a yaw within 12 deg of a
+         * 45-degree multiple where BOTH sit inside the 12 deg acceptance
+         * gate - so the first match can lock the WRONG convention, and
+         * headings mirror (the arrow rotates backwards) until reboot.
+         * Only search when the yaw of the device X axis is at least 15 deg
+         * away from every multiple of 45 deg; there, any two candidates are
+         * separated by more than twice the gate and the lock is unique. */
+        float yaw_lock = atan2f(vy, vx) * (180.0f / (float)M_PI);
+        float m45 = fmodf(fabsf(yaw_lock), 45.0f);
+        float d45 = (m45 < 22.5f) ? m45 : (45.0f - m45);
+        if (d45 > 15.0f) {
         for (int c = 1; c <= 8; c++) {
           if (Compass_HeadingDelta(Compass_QuatHeadingCandidate(c, vx, vy),
                                    heading_euler) <= 12.0f) {
@@ -948,6 +960,7 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
             break;
           }
         }
+        }  /* mirror-ambiguity guard */
       }
     } else {
       heading = Compass_QuatHeadingCandidate(quat_conv_locked, vx, vy);

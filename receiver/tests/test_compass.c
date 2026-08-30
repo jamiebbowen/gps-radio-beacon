@@ -428,21 +428,68 @@ TEST(test_quat_lock_and_tilt_robustness)
     compass_cal_restored = 1;              /* headings meaningful */
     Compass_Data d = {0};
 
-    /* Level at 100 deg: Euler raw 100, quaternion pure-yaw-100 (conv 1).
-     * One trustworthy sample must lock the convention. */
-    set_euler(100.0f, 0.0f, 0.0f);
-    set_quat(0.6428f, 0.0f, 0.0f, 0.7660f);   /* w=cos50, z=sin50 */
+    /* Level at 112.5 deg: Euler raw 112.5, quaternion pure-yaw (conv 1).
+     * 112.5 is exactly between 45-degree multiples (d45 = 22.5), safely
+     * outside the mirror-ambiguity band - one trustworthy sample locks. */
+    set_euler(112.5f, 0.0f, 0.0f);
+    set_quat(0.55557f, 0.0f, 0.0f, 0.83147f);   /* w=cos56.25, z=sin56.25 */
     CHECK(Compass_Update(&d) == COMPASS_OK);
     CHECK(quat_conv_locked == 1);
-    CHECK_NEAR(d.heading, 100.0 + 98.5, 0.6);   /* + decl/mount offset */
+    CHECK_NEAR(d.heading, 112.5 + 98.5, 0.6);   /* + decl/mount offset */
 
     /* Now the Euler-glitch case: pitched to 80 deg, the Euler heading
      * register jumps to garbage (300 deg) while the quaternion still
-     * says 100. The reported heading must stay on the quaternion. */
+     * says 112.5. The reported heading must stay on the quaternion. */
     set_euler(300.0f, 0.0f, 80.0f);
     CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK_NEAR(d.heading, 198.5, 0.6);
+    CHECK_NEAR(d.heading, 211.0, 0.6);
     CHECK(d.orientation_valid == 1);
+    compass_cal_restored = 0;
+}
+
+TEST(test_quat_lock_all_conventions_selectable)
+{
+    /* Every one of the 8 candidate conventions must be selectable: whichever
+     * the mounted BNO055 actually uses, the search must find it. Drive the
+     * unambiguous yaw=112.5 orientation, set the Euler reference to what
+     * convention c would report, and expect the search to lock exactly c. */
+    const float qw = 0.55557f, qz = 0.83147f;   /* yaw = 112.5 deg */
+    const float vx = 1.0f - 2.0f * qz * qz;     /* matches compass.c math */
+    const float vy = 2.0f * qw * qz;
+    for (int c = 1; c <= 8; c++) {
+        fresh_init();
+        compass_cal_restored = 1;
+        quat_conv_locked = 0;                   /* module static: reset search */
+        Compass_Data d = {0};
+        set_euler(Compass_QuatHeadingCandidate(c, vx, vy), 0.0f, 0.0f);
+        set_quat(qw, 0.0f, 0.0f, qz);
+        CHECK(Compass_Update(&d) == COMPASS_OK);
+        CHECK(quat_conv_locked == c);
+    }
+    compass_cal_restored = 0;
+}
+
+TEST(test_quat_lock_refused_in_ambiguity_band)
+{
+    fresh_init();
+    compass_cal_restored = 1;
+    Compass_Data d = {0};
+
+    /* yaw=100 deg is 10 deg off the 90-degree multiple: candidates 1 (100)
+     * and 4 (80) BOTH sit inside the 12 deg gate of an Euler reading near
+     * 90 - a lock here can pick the mirror. Must refuse (fall back to
+     * Euler), not lock. */
+    set_euler(90.0f, 0.0f, 0.0f);
+    set_quat(0.6428f, 0.0f, 0.0f, 0.7660f);     /* yaw = 100 deg */
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+    CHECK(quat_conv_locked == 0);               /* refused: ambiguous */
+    CHECK_NEAR(d.heading, 90.0 + 98.5, 0.6);    /* Euler value still shown */
+
+    /* Rotate to the unambiguous diagonal: lock succeeds. */
+    set_euler(112.5f, 0.0f, 0.0f);
+    set_quat(0.55557f, 0.0f, 0.0f, 0.83147f);   /* yaw = 112.5 deg */
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+    CHECK(quat_conv_locked == 1);
     compass_cal_restored = 0;
 }
 
@@ -487,7 +534,7 @@ TEST(test_stale_heading_flagged_on_comm_loss)
     const float live_heading = d.heading;
 
     /* Comms die: keep the last heading in the struct, flagged stale -
-     * the UI points at it (blink/* marker) instead of going blank */
+     * the UI points at it (blinking marker) instead of going blank */
     nak_euler_read = 1;
     CHECK(Compass_Update(&d) == COMPASS_ERROR);
     CHECK(d.heading_valid == 0);
@@ -945,6 +992,8 @@ int main(void)
     run_test_periodic_mode_recovery();
     run_test_vertical_orientation_invalid();
     run_test_quat_lock_and_tilt_robustness();
+    run_test_quat_lock_all_conventions_selectable();
+    run_test_quat_lock_refused_in_ambiguity_band();
     run_test_i2c_error_streak_recovers();
     run_test_stale_heading_flagged_on_comm_loss();
     run_test_calibrate_fully_calibrated();
