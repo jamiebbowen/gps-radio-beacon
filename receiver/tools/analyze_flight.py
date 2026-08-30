@@ -38,7 +38,7 @@ SOUND_SPEED_MPS = 343.0      # for Mach number (nominal, sea-level 20 C)
 
 # LoRa SX1268 sensitivity floor (dBm) for common spreading factors @ 125 kHz BW.
 # Override with --sensitivity if your radio config differs.
-DEFAULT_SENSITIVITY_DBM = -124.0  # SF9, 125 kHz (matches current receiver config)
+DEFAULT_SENSITIVITY_DBM = -123.0  # SF7, 125 kHz (matches current receiver config)
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -659,7 +659,7 @@ def main():
     ap.add_argument("log", help="Path to NAV log file (Lxxxxxxx.TXT)")
     ap.add_argument("--sensitivity", type=float, default=DEFAULT_SENSITIVITY_DBM,
                     help=f"Receiver sensitivity floor in dBm for range prediction "
-                         f"(default {DEFAULT_SENSITIVITY_DBM} = LoRa SF9 @ 125 kHz)")
+                         f"(default {DEFAULT_SENSITIVITY_DBM} = LoRa SF7 @ 125 kHz)")
     ap.add_argument("--kml", metavar="PATH",
                     help="Write a Google-Earth KML of the flight to PATH "
                          "(includes time-animated rocket track for Movie Maker)")

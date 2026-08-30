@@ -7,7 +7,7 @@ The SD Card display mode now shows detailed diagnostic information:
 ```
 SD Card: Present/Not Found
 Status: Ready/Error
-Err: <code>              ← FRESULT error code
+Err: <code>              ← SD init error code (see table below)
 <error_name>             ← Human-readable error
 Files: <count>
 Written: <size>
@@ -15,16 +15,23 @@ CMD0: 0x<hex>            ← CMD0 response from card
 MISO:H/L DET:H/L        ← Pin states
 ```
 
+> **Note (littlefs era):** the receiver no longer uses FAT. The card is
+> formatted **littlefs** on-device when unformatted, and logs are pulled
+> with `tools/lfs_extract` (raw card image -> Lxxxxxxx.TXT files). OS-level
+> FAT/exFAT formatting guidance further down is historical; the hardware
+> troubleshooting (SPI wiring, CMD0, MISO/DET states) still applies.
+
 ## Error Code Reference
 
-### FRESULT Error Codes
-| Code | Name | Meaning | Common Causes |
-|------|------|---------|---------------|
-| **0** | FR_OK | Success | Normal operation |
-| **1** | FR_DISK_ERR | Disk I/O error | Bad SPI connection, timing issues, card failure |
-| **3** | FR_NOT_READY | Drive not ready | Card not initialized, CMD0 failed |
-| **13** | FR_NO_FILESYSTEM | No FAT filesystem | Card not formatted, wrong format (exFAT/NTFS) |
-| **99** | DRIVER_LINK | Driver link failed | Internal firmware error |
+### SD Card screen error codes (littlefs era)
+| Code | Display | Meaning | Common Causes |
+|------|---------|---------|---------------|
+| **1** | MOUNT_FAIL | Mount failed even after a fresh format | Card or SPI badly broken |
+| **13** | FORMAT_FAIL | littlefs format failed | SPI or card dead |
+| **91** | CARD_INIT(CMD0) | Block-device init failed at card init | No card, bad wiring, card not responding |
+| **92** | GEOMETRY(CMD9) | Block-device init failed reading capacity | Marginal card / SPI timing |
+| **99** | BD_UNKNOWN | Other block-device failure | Internal firmware error |
+| other | LFS_ERR | littlefs runtime error (see sd_card.c) | Wear, power-loss corruption (littlefs is power-fail safe, so rare) |
 
 ### CMD0 Response Codes
 | Response | Meaning | Status |

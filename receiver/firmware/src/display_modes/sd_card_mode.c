@@ -73,22 +73,29 @@ void DisplayMode_SDCard(void)
     } else {
         Display_DrawTextRowCol(1, 0, "Status: Error");
         
-        /* Show error code (temporarily stored in write_errors field) */
-        /* FRESULT codes: 1=DISK_ERR, 3=NOT_READY, 13=NO_FILESYSTEM, 99=DRIVER_LINK */
+        /* Show error code (temporarily stored in write_errors field).
+         * Codes from sd_card.c init path (littlefs era):
+         *   1  = mount failed even after format
+         *   13 = format failed (SPI or card dead)
+         *   91 = block-device init failed at card init (CMD0)
+         *   92 = block-device init failed at geometry (CMD9)
+         *   99 = other/unknown block-device failure */
         snprintf(buffer, sizeof(buffer), "Err: %lu", sd_info.write_errors);
         Display_DrawTextRowCol(2, 0, buffer);
         
         /* Decode common errors */
         if (sd_info.write_errors == 1) {
-            Display_DrawTextRowCol(3, 0, "DISK_ERR");
-        } else if (sd_info.write_errors == 3) {
-            Display_DrawTextRowCol(3, 0, "NOT_READY");
+            Display_DrawTextRowCol(3, 0, "MOUNT_FAIL");
         } else if (sd_info.write_errors == 13) {
-            Display_DrawTextRowCol(3, 0, "NO_FILESYSTEM");
+            Display_DrawTextRowCol(3, 0, "FORMAT_FAIL");
+        } else if (sd_info.write_errors == 91) {
+            Display_DrawTextRowCol(3, 0, "CARD_INIT(CMD0)");
+        } else if (sd_info.write_errors == 92) {
+            Display_DrawTextRowCol(3, 0, "GEOMETRY(CMD9)");
         } else if (sd_info.write_errors == 99) {
-            Display_DrawTextRowCol(3, 0, "DRIVER_LINK");
+            Display_DrawTextRowCol(3, 0, "BD_UNKNOWN");
         } else {
-            Display_DrawTextRowCol(3, 0, "UNKNOWN");
+            Display_DrawTextRowCol(3, 0, "LFS_ERR");
         }
         
         Display_DrawTextRowCol(4, 0, "Files: N/A");
