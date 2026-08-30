@@ -144,14 +144,29 @@ uint8_t gps_poll_rx(void) {
         gps_last_byte_ms = current_time;   // health: UART is alive
     }
     
-    // Track when we last had valid GPS
-    if (current_coords.valid) {
+    // Track when we last had a GOOD fix: quality >= 1 AND at least one
+    // satellite tracked AND bytes actually flowing right now. This is what
+    // the watchdog keys on - NOT current_coords.valid, which latching (any
+    // sentence with lat/lon, even a stale cached hot-start position with
+    // fix_quality 0) would otherwise disarm recovery forever. The byte
+    // freshness check matters too: during total UART silence no sentence
+    // arrives to unlatch valid, so without it a stale good fix would
+    // cancel every silent-UART recovery attempt one poll later.
+    // Field evidence 2026-08-30: TX hot-started with a cached position,
+    // valid latched 1, sats dropped to 0, and the watchdog sat disarmed
+    // for 20 minutes (rst=0 in every heartbeat) while the user power-
+    // cycled to no avail.
+    uint32_t no_bytes_duration = current_time - last_byte_time;
+    uint8_t good_fix = current_coords.valid
+                    && current_coords.fix_quality >= 1
+                    && atoi(current_coords.satellites) > 0
+                    && no_bytes_duration <= GPS_HEALTH_SILENT_MS;
+    if (good_fix) {
         last_valid_time = current_time;
         gps_recovery_attempts = 0;  // Reset recovery counter on success
     }
     
     // Check for GPS hang conditions
-    uint32_t no_bytes_duration = current_time - last_byte_time;
     uint32_t no_valid_duration = current_time - last_valid_time;
     
     // Condition 1: No UART data for 30 seconds = GPS UART is dead
@@ -159,10 +174,13 @@ uint8_t gps_poll_rx(void) {
         Serial.println(F("[GPS] ⚠️  Watchdog: No UART data for 30s, attempting recovery..."));
         gps_recovery_attempts++;
         
-        // Recovery: Send GPS software reset command
+        // Recovery: controlled software reset (cold start). Do NOT use
+        // the factory-defaults variant ($PUBX,04,0,0,0,...) here: it
+        // reverts UART1 to 9600 baud and we talk at 115200 - recovery
+        // would permanently deafen the link it was meant to restore.
         uart_tx_string("$PUBX,00*33\r\n");  // u-blox poll request
         delay(100);
-        uart_tx_string("$PUBX,04,0,0,0,0,0*10\r\n");  // u-blox reset to factory defaults
+        uart_tx_string("$PUBX,04,0,0,2,0,0*12\r\n");  // u-blox cold start
         delay(500);
         
         // Reinitialize GPS
@@ -319,6 +337,11 @@ uint8_t gps_poll_rx(void) {
             if (is_rmc) {
                 if (nmea_get_field(nmea_buffer, RMC_FIELD_STATUS,
                                    fbuf, sizeof(fbuf)) < 1 || fbuf[0] != 'A') {
+                    /* Status V = receiver says NO FIX right now. Clear the
+                     * latched valid flag: a stale hot-start position must
+                     * not masquerade as a live fix (it previously stayed
+                     * latched forever, hiding total signal loss). */
+                    current_coords.valid = 0;
                     return bytes_processed;  // Skip invalid RMC (status = V)
                 }
             }
@@ -387,6 +410,12 @@ uint8_t gps_poll_rx(void) {
                 // Fix quality (field 6): 0=invalid, 1=GPS, 2=DGPS, 3=PPS, ...
                 if (nmea_get_field(nmea_buffer, 6, fbuf, sizeof(fbuf)) > 0) {
                     current_coords.fix_quality = atoi(fbuf);
+                    /* Quality 0 = no fix: unlatch. valid is set again by
+                     * the lon_dir branch above when a real position
+                     * sentence arrives. */
+                    if (current_coords.fix_quality == 0) {
+                        current_coords.valid = 0;
+                    }
                 }
 
                 // Number of satellites (field 7)

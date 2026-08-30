@@ -265,6 +265,79 @@ TEST(test_watchdog_no_fix_cold_restart)
     CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,2,0,0") != NULL); /* cold start */
 }
 
+TEST(test_hotstart_stale_position_unlatches)
+{
+    /* The 2026-08-30 field failure: hot start emits the CACHED position
+     * (RMC status A / GGA with lat+lon) but fix quality 0 and 00 sats.
+     * The old code latched valid=1 forever, which both hid the loss and
+     * disarmed the no-fix watchdog (its timer refreshed on 'valid'). */
+    feed_and_poll("$GNRMC,123519,A,3953.00000,N,10453.00000,W,0.0,0.0,230394,,*6A\r\n");
+    CHECK(gps_get_current_coordinates()->valid == 1);   /* position latched */
+
+    feed_and_poll("$GPGGA,123520,3953.00000,N,10453.00000,W,0,00,99.9,,M,,M,,*6A\r\n");
+    const GPSCoordinates_t *c = gps_get_current_coordinates();
+    CHECK(c->valid == 0);                               /* unlatched: no fix */
+    CHECK(c->fix_quality == 0);
+    CHECK(c->lat[0] != '\0');                           /* position kept, just not valid */
+
+    /* RMC status V also unlatches */
+    feed_and_poll(RMC_FIX);
+    CHECK(c->valid == 1);
+    feed_and_poll("$GPRMC,123519,V,3953.00000,N,10453.00000,W,,,230394,,*6A\r\n");
+    CHECK(c->valid == 0);
+
+    /* Restore a good fix for the next test */
+    feed_and_poll(GGA_FIX);
+    CHECK(c->valid == 1);
+}
+
+TEST(test_watchdog_zero_sats_cold_restart)
+{
+    /* Field failure, isolated: sentences flowing and the module even
+     * CLAIMS fix quality 1, but ZERO satellites tracked - a wedged
+     * acquisition engine. The good-fix gate requires sats > 0, so this
+     * stream must NOT disarm the watchdog: cold restart after 60 s. */
+    feed_and_poll(GGA_FIX);
+    gps_recovery_attempts = 0;
+
+    reset_uart_capture();
+    int fired_at = -1;
+    for (int i = 0; i < 150 && fired_at < 0; i++) {
+        now_ms += 1000;
+        feed_and_poll("$GPGGA,123519,3953.40284,N,10453.11007,W,1,00,0.9,1655.4,M,46.9,M,,*47\r\n");
+        if (gps_recovery_attempts >= 1) fired_at = i;
+    }
+
+    CHECK(fired_at >= 60);                     /* no-good-fix gate */
+    CHECK(gps_recovery_attempts == 1);         /* ...and it STAYS fired */
+    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,2,0,0") != NULL);  /* cold start */
+    CHECK(HB_GPS_RESETS(gps_get_health()) == 1);
+
+    /* Satellites tracked again: watchdog disarms */
+    feed_and_poll(GGA_FIX);
+    CHECK(gps_recovery_attempts == 0);
+}
+
+TEST(test_watchdog_never_factory_resets)
+{
+    /* The silent-UART recovery used to send $PUBX,04,0,0,0,0,0 (factory
+     * defaults), which reverts UART1 to 9600 baud - we talk at 115200, so
+     * 'recovery' would permanently deafen the link. It must cold-start. */
+    feed_and_poll(GGA_FIX);
+    gps_recovery_attempts = 0;
+    reset_uart_capture();
+
+    now_ms += 31000;
+    (void)gps_poll_rx();
+    CHECK(gps_recovery_attempts == 1);
+    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,0,0,0*10") == NULL);
+    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,2,0,0*12") != NULL);
+
+    /* Restore live data for the cooldown test */
+    feed_and_poll(GGA_FIX);
+    CHECK(gps_recovery_attempts == 0);
+}
+
 TEST(test_watchdog_three_strikes_then_cooldown_rearm)
 {
     /* Burn through the remaining attempts with more silence */
@@ -299,8 +372,9 @@ TEST(test_watchdog_three_strikes_then_cooldown_rearm)
     CHECK(gps_recovery_attempts == 1);
     CHECK(strstr(uart_tx_log, "$PUBX,00") != NULL);
 
-    /* Clean up: restore live data */
+    /* Clean up: restore live data (a real fix clears the attempt count) */
     feed_and_poll(GGA_FIX);
+    (void)gps_poll_rx();
     CHECK(gps_recovery_attempts == 0);
 }
 
@@ -332,6 +406,9 @@ int main(void)
     run_test_health_verdicts();
     run_test_watchdog_silent_uart_recovery();
     run_test_watchdog_no_fix_cold_restart();
+    run_test_hotstart_stale_position_unlatches();
+    run_test_watchdog_zero_sats_cold_restart();
+    run_test_watchdog_never_factory_resets();
     run_test_watchdog_three_strikes_then_cooldown_rearm();
     run_test_oversize_sentence_does_not_overflow();
 
