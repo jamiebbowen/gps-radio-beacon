@@ -74,7 +74,8 @@ reporting, SD self-test, LED packet pulse, LoRa link.
 ## Field notes
 
 - Button cycles: Navigation → GPS → RF → Compass Visual → Compass Heading →
-  SD Card → back. Any screen auto-returns to Navigation after 120 s.
+  SD Card → Rocket Select (long-press cycles channel) → RF Stats →
+  Preflight → back. Any screen auto-returns to Navigation after 120 s.
 - Remote position goes stale (nav arrow frozen, `has_valid_remote_gps`
   dropped) after **180 s** without a packet.
 - BEACON.TXT persists at most every **10 s**, so a power cut can lose up to
