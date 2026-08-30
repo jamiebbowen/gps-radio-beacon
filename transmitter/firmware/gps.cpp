@@ -273,17 +273,17 @@ uint8_t gps_poll_rx(void) {
     uint8_t buffer_index = 1;
     uint8_t sentence_complete = 0;
     uint16_t sentence_timeout = 0;
-    
+
     while (buffer_index < sizeof(nmea_buffer) - 1) {
         // Read data as fast as possible when available
         while (uart_data_available() && buffer_index < sizeof(nmea_buffer) - 1) {
             uint8_t byte = uart_read_byte();
-            
+
             // Skip framing errors
             if (byte == 0xFE || byte == 0xFF) {
                 continue;
             }
-            
+
             nmea_buffer[buffer_index] = byte;
             buffer_index++;
             bytes_processed++;
@@ -294,9 +294,22 @@ uint8_t gps_poll_rx(void) {
                 break;
             }
         }
-        
+
         if (sentence_complete) {
             break;
+        }
+
+        /* UART went silent mid-sentence (GPS reset by the watchdog, power
+         * blip, connector jiggle): without this bound the outer loop spins
+         * forever and the WDT reboots the whole beacon. Abandon the partial
+         * sentence after ~50 ms of silence - the next '$' resyncs. */
+        if (!uart_data_available()) {
+            if (++sentence_timeout > 5000) { // ~50ms at 10us per pass
+                break;
+            }
+            delayMicroseconds(10);
+        } else {
+            sentence_timeout = 0;
         }
     }
     

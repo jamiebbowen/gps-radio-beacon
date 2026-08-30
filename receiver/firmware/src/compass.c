@@ -245,8 +245,11 @@ static uint8_t Compass_ScanI2C(uint8_t *detected_addrs, uint8_t max_addrs)
   
   /* Scan all possible 7-bit I2C addresses */
   for (uint8_t addr = 1; addr < 128 && devices_found < max_addrs; addr++) {
-    /* Try to communicate with the device with multiple retries and longer timeout */
-    hal_status = HAL_I2C_IsDeviceReady(&hi2c_display, addr << 1, 5, 200);
+    /* Single quick probe per address: a healthy bus answers NACK in
+     * microseconds, so retries only multiply the worst case on a wedged
+     * bus (127 x 5 x 200 ms = 2+ minutes of boot-time hang, before the
+     * IWDG could ever help historically). 1 x 50 ms caps it at ~6.4 s. */
+    hal_status = HAL_I2C_IsDeviceReady(&hi2c_display, addr << 1, 1, 50);
     
     if (hal_status == HAL_OK) {
       /* Store the actual address value, not shifted */

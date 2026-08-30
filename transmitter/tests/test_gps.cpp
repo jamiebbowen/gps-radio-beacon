@@ -393,6 +393,21 @@ TEST(test_oversize_sentence_does_not_overflow)
     CHECK(nav_updates == 1);
 }
 
+TEST(test_mid_sentence_silence_abandons_parse)
+{
+    /* The GPS watchdog's cold-start reboots the module, which goes silent
+     * mid-sentence. The sentence reader must abandon the partial sentence
+     * (~50 ms) instead of spinning forever - the old loop never terminated,
+     * which the WDT would have answered by rebooting the whole beacon. */
+    feed("$GPGGA,123519,3953.40284,N");   /* no \r\n: silence mid-sentence */
+    (void)gps_poll_rx();                  /* must return, not hang */
+
+    /* The next '$' resyncs and a real sentence parses normally */
+    nav_updates = 0;
+    feed_and_poll(GGA_FIX);
+    CHECK(nav_updates == 1);
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void)
@@ -411,6 +426,7 @@ int main(void)
     run_test_watchdog_never_factory_resets();
     run_test_watchdog_three_strikes_then_cooldown_rearm();
     run_test_oversize_sentence_does_not_overflow();
+    run_test_mid_sentence_silence_abandons_parse();
 
     return TEST_SUMMARY();
 }

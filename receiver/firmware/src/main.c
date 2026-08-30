@@ -205,6 +205,20 @@ int main(void)
   
   /* Initialize display */
   Display_Init();
+
+  /* Arm the independent watchdog FIRST (LSI/256, full reload: ~32 s).
+   * It used to be armed only after all one-time init, so a boot-time
+   * hang - wedged I2C scan, SD bring-up, a stuck HAL init - bricked the
+   * ground station until a manual power cycle, exactly when the operator
+   * can least afford it. Fed once per boot stage below and once per main
+   * loop iteration; no single stage legitimately approaches 32 s.
+   * Direct register access because the HAL IWDG module isn't in the build.
+   * Note: once started, the IWDG cannot be stopped except by reset. */
+  IWDG->KR  = 0x5555;   /* unlock PR/RLR */
+  IWDG->PR  = 6;        /* prescaler /256 -> 32 kHz LSI / 256 = 125 Hz */
+  IWDG->RLR = 0x0FFF;   /* max reload: 4096 / 125 Hz = ~32.8 s */
+  IWDG->KR  = 0xCCCC;   /* start */
+#define IWDG_FEED() (IWDG->KR = 0xAAAA)
   
   /* Initialize remote GPS data structure with safe default values */
   memset(&remote_gps_data, 0, sizeof(GPS_Data));
@@ -242,6 +256,7 @@ int main(void)
     Display_Update();
     HAL_Delay(3000);
   }
+  IWDG_FEED();
   
   /* Initialize RF receiver. Retry before giving up: the SX1268 bring-up
    * (reset timing, BUSY, TCXO settle) can fail transiently at power-on,
@@ -276,6 +291,8 @@ int main(void)
     RF_Receiver_StartScan();
   }
   
+  IWDG_FEED();
+
   /* Initialize button */
   Button_Init();
   
@@ -378,6 +395,8 @@ int main(void)
     HAL_Delay(3000);
   }
   
+  IWDG_FEED();
+
   /* Initialize compass */
   if (Compass_Init() != COMPASS_OK) {
     /* Run I2C scan and display results instead of just showing error */
@@ -482,17 +501,8 @@ int main(void)
     RF_Receiver_StartScan();
   }
 
-  /* Arm the independent watchdog (LSI/256, full reload: ~32 s timeout).
-   * Any hang - HardFault, Error_Handler, a wedged I2C/SPI transaction -
-   * now costs a reset instead of a dead ground station. Armed here, after
-   * all one-time init (SD format can be slow), and refreshed once per main
-   * loop iteration; no single iteration legitimately approaches 32 s.
-   * Direct register access because the HAL IWDG module isn't in the build.
-   * Note: once started, the IWDG cannot be stopped except by reset. */
-  IWDG->KR  = 0x5555;   /* unlock PR/RLR */
-  IWDG->PR  = 6;        /* prescaler /256 -> 32 kHz LSI / 256 = 125 Hz */
-  IWDG->RLR = 0x0FFF;   /* max reload: 4096 / 125 Hz = ~32.8 s */
-  IWDG->KR  = 0xCCCC;   /* start */
+  /* The IWDG was armed at the top of boot; the loop just feeds it. */
+  IWDG_FEED();
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
