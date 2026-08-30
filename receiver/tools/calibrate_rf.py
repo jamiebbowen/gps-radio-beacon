@@ -3,8 +3,8 @@
 calibrate_rf.py - Fit LoRa path-loss model from receiver SD card logs.
 
 Reads one or more `L*.TXT` CSV logs produced by SD_Card_LogNavigation
-(schema: Timestamp,Type,BeaconLat,BeaconLon,BeaconAlt_m,BeaconSats,
-BaseLat,BaseLon,BaseAlt_m,Distance_km,Bearing_deg,Heading_deg,RSSI_dBm,SNR_dB)
+(current schema adds PktSrc, velocity, fused-age/flags etc. - only the
+columns in REQUIRED_COLS below are consumed, extra columns are ignored)
 and produces calibrated values for the two knobs in navigation_mode.c:
 
     #define LORA_PATH_LOSS_N        <fitted>
