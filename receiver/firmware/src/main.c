@@ -697,12 +697,8 @@ int main(void)
         has_last_good_local_gps = 1;
         last_good_gps_time = HAL_GetTick();
         
-        /* SD card logging disabled */
-        /* static uint32_t last_gps_log_time = 0;
-        if (HAL_GetTick() - last_gps_log_time > 10000) {
-          SD_Card_LogGPS(&local_gps_data, LOG_TYPE_GPS_LOCAL);
-          last_gps_log_time = HAL_GetTick();
-        } */
+        /* Local-GPS rows are deliberately not logged - the NAV rows carry
+         * the base position already; duplicating it just wears the card. */
       } else {
         /* Invalid coordinates despite having a fix - don't update local_gps_data */
         has_valid_local_gps = 0;
@@ -758,14 +754,13 @@ int main(void)
 
             /* Persist beacon location and log navigation data point */
             if (sd_card_ok) {
-              /* Rate-limit BEACON.TXT persistence.
-               * This does FA_CREATE_ALWAYS + f_sync + f_close, which is the
-               * most expensive FatFS operation (can block 100ms-1s+ during SD
-               * garbage collection). Post-launch the transmitter goes into
-               * continuous-send mode (~1.72s cadence), so doing this on every
-               * packet starves the main loop and causes the display to update
-               * in delayed bursts. BEACON.TXT is only read at boot for
-               * last-known-position recovery; staleness of 10s is harmless. */
+              /* Rate-limit BEACON.TXT persistence. A save is a full
+               * littlefs close/commit cycle (can block ~100 ms+ during flash
+               * GC). Post-launch packets arrive at ~2 s cadence, so doing
+               * this on every packet starves the main loop and the display
+               * updates in delayed bursts. BEACON.TXT is only read at boot
+               * for last-known-position recovery; staleness of 10 s is
+               * harmless. */
               static uint32_t last_beacon_save_ms = 0;
               uint32_t now_ms = HAL_GetTick();
               if (now_ms - last_beacon_save_ms >= 10000U) {
@@ -988,13 +983,15 @@ int main(void)
       break;
 
     case DISPLAY_MODE_PREFLIGHT: {
-      /* Link freshness: a beacon at its slowest cadence (60 s battery save
-       * pre-launch is 5 s) should be heard within 15 s. */
+      /* Link freshness: the gate must EXCEED the pre-launch cadence
+       * (PRE_LAUNCH_INTERVAL_SEC = 20 s), otherwise the check flaps CHK
+       * for the last 5 s of every pad cycle. 25 s covers one full cycle
+       * plus margin; heartbeats (5 s) fill the gap in no-fix state. */
       uint8_t pf_link_ok = 0;
       uint32_t pf_link_age_s = 0;
       if (last_rf_packet_time > 0) {
         pf_link_age_s = (current_time - last_rf_packet_time) / 1000;
-        pf_link_ok = (pf_link_age_s <= 15);
+        pf_link_ok = (pf_link_age_s <= 25);
       }
       int16_t pf_rssi = 0;
       int8_t pf_snr = 0;
