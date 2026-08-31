@@ -137,7 +137,7 @@ uint8_t RF_Receiver_Init(void)
   uint8_t test_status = 0;
   if (LoRa_GetDeviceStatus(&test_status) == LORA_OK && test_status != 0x00) {
     rf_spi_test_result = 1;  // Pass
-    rf_last_device_mode = (test_status >> 5) & 0x07;  // Extract mode
+    rf_last_device_mode = (test_status >> 4) & 0x07;  // ChipMode is bits [6:4]
   } else {
     rf_spi_test_result = 0;  // Fail
   }
@@ -205,7 +205,13 @@ uint8_t RF_Receiver_DataAvailable(void)
     /* Get device status to verify mode */
     uint8_t device_status = 0;
     if (LoRa_GetDeviceStatus(&device_status) == LORA_OK) {
-      rf_last_device_mode = (device_status >> 5) & 0x07;  // Extract mode from bits [7:5]
+      /* ChipMode is bits [6:4] of the status byte, NOT [7:5] - shifting
+       * by 5 decodes RX (0x50) as 2, so mode never read 5: the wedge
+       * detector below fired every 3 s forever and every 4th wedge ran a
+       * full LoRa_Init (~1 s deaf + loop stall), and the noise-floor
+       * sampler (gated on mode==5) never ran. Field logs showed exactly
+       * this (hundreds of spurious wedge recoveries per session). */
+      rf_last_device_mode = (device_status >> 4) & 0x07;
     }
   }
   

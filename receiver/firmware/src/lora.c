@@ -616,10 +616,11 @@ uint8_t LoRa_ClearIRQStatus(uint16_t irq_mask) {
 
 /**
  * @brief Get device status/mode
- * Status byte format:
- * [7:5] = chip mode: 0=Unused, 2=STDBY_RC, 3=STDBY_XOSC, 4=FS, 5=RX, 6=TX
- * [4:1] = command status
- * [0] = reserved
+ * Status byte format (datasheet rev 1.2, Table 13-76):
+ * [7]   = reserved
+ * [6:4] = chip mode: 0=Unused, 2=STDBY_RC, 3=STDBY_XOSC, 4=FS, 5=RX, 6=TX
+ * [3:1] = command status
+ * [0]   = reserved
  * NOTE: GetStatus returns status IMMEDIATELY after command, no NOP needed
  */
 uint8_t LoRa_GetDeviceStatus(uint8_t *status) {
