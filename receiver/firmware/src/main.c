@@ -675,12 +675,22 @@ int main(void)
         prev_noise_alert = noise_alert;
         if (sd_card_ok) {
           int16_t nf = 0;
-          (void)RF_Receiver_GetNoiseFloor(&nf);
+          uint8_t nf_valid = RF_Receiver_GetNoiseFloor(&nf);
           char nf_msg[48];
           uint8_t ch = RF_Receiver_GetChannel();
-          snprintf(nf_msg, sizeof(nf_msg), "RF NOISE %s CH%u %.2fMHz nf=%ddBm",
-                   noise_alert ? "HIGH" : "clear",
-                   (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)nf);
+          if (nf_valid) {
+            snprintf(nf_msg, sizeof(nf_msg), "RF NOISE %s CH%u %.2fMHz nf=%ddBm",
+                     noise_alert ? "HIGH" : "clear",
+                     (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)nf);
+          } else {
+            /* No floor to report: the window was just reset by a channel
+             * change (which is also what cleared the alert). Logging the
+             * uninitialized 0 as "nf=0dBm" made channel hops look like a
+             * noise event with an impossible floor. */
+            snprintf(nf_msg, sizeof(nf_msg), "RF NOISE %s CH%u %.2fMHz",
+                     noise_alert ? "HIGH" : "clear",
+                     (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch));
+          }
           SD_Card_LogEvent(nf_msg);
         }
         force_display_update = 1;  /* Surface the warning immediately */

@@ -459,7 +459,11 @@ TEST(test_noise_floor_estimation_and_alert)
 {
     int16_t nf = 0;
 
-    /* Channel switch in the previous test reset the window */
+    /* The previous test ended with a packet, which closes the link-quiet
+     * gate for RF_NOISE_LINK_QUIET_MS. Outlast it, then reset the window
+     * explicitly so the window contents are known. */
+    run_for(11000, 250);
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
     CHECK(RF_Receiver_GetNoiseFloor(&nf) == 0);
 
     /* Quiet channel: floor converges on the ambient level, no alert */
@@ -470,7 +474,7 @@ TEST(test_noise_floor_estimation_and_alert)
     CHECK(RF_Receiver_NoiseAlert() == 0);
 
     /* A few strong mid-packet samples must NOT drag the floor up:
-     * the 25th-percentile estimator ignores the upper tail. */
+     * the median estimator ignores the upper half. */
     fake_rssi_inst = -60;
     run_for(4000, 250);    /* 4 contaminated samples in a 16-window */
     fake_rssi_inst = -120;
@@ -508,6 +512,49 @@ TEST(test_noise_floor_estimation_and_alert)
     fake_mode = 5;                               /* back to RX */
     run_for(10000, 250);
     CHECK(RF_Receiver_GetNoiseFloor(&nf) == 1);
+}
+
+/* ------------------------------------------------------------------ */
+
+TEST(test_noise_alert_suppressed_while_link_active)
+{
+    int16_t nf = 0;
+
+    /* The noise test above injected no packets, so the link-quiet gate is
+     * already open. Fresh window, radio in RX, "hot" floor: if any sample
+     * is taken while packets flow, the alert would engage. */
+    CHECK(RF_Receiver_SetChannel(2) == RF_OK);
+    fake_mode = 5;
+    fake_rssi_inst = -70;
+
+    /* Packets flowing (one per 250 ms poll): the gate must hold sampling
+     * and the alert off - a live beacon's own transmissions pin the AGC
+     * and must not read as interference (park/backyard logs both latched
+     * a false "RF NOISE HIGH" at nf~-72 dBm with the beacon 2 m away). */
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    fake_pkt.data[0] = 0xFF;   /* unparseable: dropped, but still a packet */
+    fake_pkt.length = 1;
+    for (int i = 0; i < 60; i++) {       /* 15 s at 250 ms */
+        fake_pkt_pending = 1;
+        run_for(250, 250);
+    }
+    CHECK(RF_Receiver_GetNoiseFloor(&nf) == 0);   /* never sampled */
+    CHECK(RF_Receiver_NoiseAlert() == 0);
+
+    /* Contact lost: the gate opens after 10 s of silence, then the window
+     * needs RF_NOISE_MIN_SAMPLES samples before the alert may engage. */
+    run_for(12000, 250);       /* gate opens at +10 s -> a few samples */
+    CHECK(RF_Receiver_NoiseAlert() == 0);
+    run_for(8000, 250);        /* enough samples -> floor valid, alert on */
+    CHECK(RF_Receiver_GetNoiseFloor(&nf) == 1);
+    CHECK(nf == -70);
+    CHECK(RF_Receiver_NoiseAlert() == 1);
+
+    /* A single fresh packet clears the alert immediately (the gate check
+     * runs before the packet read, so the clear lands on the next poll) */
+    fake_pkt_pending = 1;
+    run_for(500, 250);
+    CHECK(RF_Receiver_NoiseAlert() == 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -828,6 +875,7 @@ int main(void)
     run_test_cad_result_failure_falls_back_to_dwell();
     run_test_cad_timeout_strikes_then_fallback();
     run_test_noise_floor_estimation_and_alert();
+    run_test_noise_alert_suppressed_while_link_active();
     run_test_diagnostics_getters();
     run_test_auto_rescan_after_prolonged_silence();
 

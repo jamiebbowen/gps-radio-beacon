@@ -87,14 +87,19 @@ static uint8_t heartbeat_pending = 0;
 static uint32_t last_heartbeat_time = 0;   /* 0 = never heard one */
 
 /* Ambient noise-floor monitor.
- * GetRssiInst is sampled ~1 Hz while the radio sits in continuous RX. The
- * floor estimate is the 25th percentile of a sliding window: samples taken
- * mid-packet (or during a scan retune) land in the upper percentiles, so
- * they can't inflate the estimate, while a genuinely raised floor lifts
- * the whole window and shows through. */
+ * GetRssiInst is sampled ~1 Hz while the radio sits in continuous RX and
+ * the link has been quiet (see RF_NOISE_LINK_QUIET_MS). The floor estimate
+ * is the median of a sliding window: samples taken mid-packet (or during a
+ * scan retune) land in the upper half, so they can't inflate the estimate,
+ * while a genuinely raised floor lifts the whole window and shows through. */
 #define RF_NOISE_WINDOW        16                        /* samples (~16 s) */
-#define RF_NOISE_PCTL_IDX      (RF_NOISE_WINDOW / 4)     /* 25th percentile */
 #define RF_NOISE_MIN_SAMPLES   (RF_NOISE_WINDOW / 2)     /* before valid */
+/* Only measure/assert the floor after the link has been quiet this long.
+ * A live beacon's own 1 Hz transmissions pin the receiver AGC and every
+ * GetRssiInst sample reads the beacon's shadow, not the ambient floor -
+ * park AND backyard logs both latched a false "RF NOISE HIGH" at nf~-72 dBm
+ * with the beacon 2 m away. 10 s > 2x heartbeat cadence, << auto-rescan. */
+#define RF_NOISE_LINK_QUIET_MS 10000U
 static int16_t  noise_samples[RF_NOISE_WINDOW];
 static uint8_t  noise_sample_idx = 0;
 static uint8_t  noise_sample_count = 0;
@@ -249,23 +254,32 @@ uint8_t RF_Receiver_DataAvailable(void)
 
   /* Ambient noise-floor sampling, 1 Hz. Only sample while the chip is
    * confirmed in RX mode (mode 5) - GetRssiInst is undefined in standby,
-   * which the radio briefly enters during scan/manual retunes. */
-  static uint32_t last_noise_ms = 0;
-  if (now_ms - last_noise_ms >= 1000) {
-    last_noise_ms = now_ms;
-    int16_t inst_rssi;
-    if (rf_last_device_mode == 5 && LoRa_GetRssiInst(&inst_rssi) == LORA_OK) {
-      noise_samples[noise_sample_idx] = inst_rssi;
-      noise_sample_idx = (uint8_t)((noise_sample_idx + 1) % RF_NOISE_WINDOW);
-      if (noise_sample_count < RF_NOISE_WINDOW) noise_sample_count++;
-      
-      /* Update the alert with hysteresis so it doesn't flap at the edge */
-      int16_t nf;
-      if (RF_Receiver_GetNoiseFloor(&nf)) {
-        if (!noise_alert_active && nf >= RF_NOISE_ALERT_DBM) {
-          noise_alert_active = 1;
-        } else if (noise_alert_active && nf <= RF_NOISE_CLEAR_DBM) {
-          noise_alert_active = 0;
+   * which the radio briefly enters during scan/manual retunes.
+   * On a live link (packet heard within RF_NOISE_LINK_QUIET_MS) the
+   * estimate is meaningless - see the define's comment - so hold the
+   * alert clear and don't sample. The floor is measured pre-lock and
+   * after contact loss, exactly when "is this channel jammed?" matters. */
+  if (last_any_packet_ms != 0 &&
+      (now_ms - last_any_packet_ms) < RF_NOISE_LINK_QUIET_MS) {
+    noise_alert_active = 0;
+  } else {
+    static uint32_t last_noise_ms = 0;
+    if (now_ms - last_noise_ms >= 1000) {
+      last_noise_ms = now_ms;
+      int16_t inst_rssi;
+      if (rf_last_device_mode == 5 && LoRa_GetRssiInst(&inst_rssi) == LORA_OK) {
+        noise_samples[noise_sample_idx] = inst_rssi;
+        noise_sample_idx = (uint8_t)((noise_sample_idx + 1) % RF_NOISE_WINDOW);
+        if (noise_sample_count < RF_NOISE_WINDOW) noise_sample_count++;
+
+        /* Update the alert with hysteresis so it doesn't flap at the edge */
+        int16_t nf;
+        if (RF_Receiver_GetNoiseFloor(&nf)) {
+          if (!noise_alert_active && nf >= RF_NOISE_ALERT_DBM) {
+            noise_alert_active = 1;
+          } else if (noise_alert_active && nf <= RF_NOISE_CLEAR_DBM) {
+            noise_alert_active = 0;
+          }
         }
       }
     }
@@ -746,12 +760,14 @@ uint8_t RF_Receiver_GetNoiseFloor(int16_t *nf_dbm)
     return 0;
   }
   
-  /* Partial selection sort: only the lowest RF_NOISE_PCTL_IDX+1 elements
-   * are needed. Window is 16 entries so this is trivially cheap. */
+  /* Median of the samples collected (lower median for even counts). The
+   * median stays anchored to genuinely quiet instants even when up to
+   * half the samples caught a transmission or an interference burst.
+   * Partial selection sort: only the lowest pctl+1 elements are needed.
+   * Window is 16 entries so this is trivially cheap. */
   int16_t tmp[RF_NOISE_WINDOW];
   memcpy(tmp, noise_samples, noise_sample_count * sizeof(tmp[0]));
-  uint8_t pctl = RF_NOISE_PCTL_IDX;
-  if (pctl >= noise_sample_count) pctl = (uint8_t)(noise_sample_count - 1);
+  uint8_t pctl = (uint8_t)((noise_sample_count - 1) / 2);
   for (uint8_t i = 0; i <= pctl; i++) {
     uint8_t min_j = i;
     for (uint8_t j = (uint8_t)(i + 1); j < noise_sample_count; j++) {
