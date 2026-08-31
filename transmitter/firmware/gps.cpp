@@ -40,6 +40,16 @@ static uint8_t  gps_recovery_attempts = 0; // watchdog resets issued
 #define GPS_HEALTH_SILENT_MS   3000UL   // no bytes at all -> wiring/power
 #define GPS_HEALTH_NO_NMEA_MS  5000UL   // bytes but no GGA/RMC -> baud/noise
 
+/* Max bytes one gps_poll_rx() call will chew through before returning.
+ * ~100 ms at 115200 baud: a full multi-GNSS burst (~800-1000 bytes)
+ * still drains in one call, but a flooded UART (floating RX pin, module
+ * stuck at the wrong baud after a cold start) cannot hang the main
+ * loop - without a budget the drain below never sees a quiet UART and
+ * never returns, and at boot gps_poll_rx() runs BEFORE watchdog_init(),
+ * so the beacon would hang with no recovery and never transmit.
+ * Nothing is lost by returning: there is no flush, bytes stay queued. */
+#define GPS_POLL_BYTE_BUDGET    1200u
+
 // Define states for NMEA parsing state machine
 typedef enum {
     NMEA_WAIT_FOR_START,    // Waiting for $ character
@@ -249,17 +259,26 @@ uint8_t gps_poll_rx(void) {
         last_debug = millis();
     }
       
-    /* Process EVERY complete sentence queued, then return. The only exit
-     * is the '$' hunt timing out on a quiet UART (~50 ms). */
+    /* Process every complete sentence queued, then return. Exits: the
+     * '$' hunt times out on a quiet UART, or the byte budget is spent
+     * (flooded UART - see GPS_POLL_BYTE_BUDGET). */
+    uint16_t sentences_this_call = 0;
+
 next_sentence:
     wait_timeout = 0;
 
     // First, wait for a '$' character to start a sentence
     while (1) {
+        if (bytes_processed >= GPS_POLL_BYTE_BUDGET) {
+            return bytes_processed;   /* rest of the flood stays queued */
+        }
         if (!uart_data_available()) {
             delayMicroseconds(10);
             wait_timeout++;
-            if (wait_timeout > 5000) { // Timeout after ~50ms
+            /* Mid-burst (a sentence already parsed this call): hold out
+             * ~50 ms for the next one. Idle: ~1 ms, so the main loop
+             * stays fast; queued data survives - nothing is flushed. */
+            if (wait_timeout > (sentences_this_call ? 5000u : 100u)) {
                 return bytes_processed;
             }
             continue;
@@ -486,6 +505,7 @@ next_sentence:
      * more of the burst may already be queued, so loop back instead of
      * returning. When the UART is quiet the '$' hunt above times out and
      * returns. */
+    sentences_this_call++;
     goto next_sentence;
 }
 

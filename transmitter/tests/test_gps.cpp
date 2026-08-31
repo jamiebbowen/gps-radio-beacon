@@ -40,10 +40,16 @@ void delayMicroseconds(unsigned int us) { (void)us; }
 static uint8_t  uq[4096];
 static size_t   uq_head = 0, uq_tail = 0;
 
-bool uart_data_available(void) { return uq_head != uq_tail; }
+/* When true, the fake UART never goes quiet: a floating or mis-bauded
+ * GPS RX line delivering an endless garbage stream. */
+static bool uart_endless_noise = false;
+
+bool uart_data_available(void) { return (uq_head != uq_tail) || uart_endless_noise; }
 uint8_t uart_read_byte(void)
 {
-    if (uq_head == uq_tail) return 0;
+    if (uq_head == uq_tail) {
+        return uart_endless_noise ? (uint8_t)'x' : 0;   /* flooded line */
+    }
     return uq[uq_head++ % sizeof(uq)];
 }
 void flush_uart_buffer(void) {}
@@ -429,6 +435,27 @@ TEST(test_oversize_sentence_does_not_overflow)
     CHECK(nav_updates == 1);
 }
 
+TEST(test_continuous_uart_garbage_is_bounded)
+{
+    /* A floating or mis-bauded GPS UART (e.g. after a watchdog cold-start
+     * or a brownout) delivers an endless byte stream with no 50 ms quiet
+     * gap for the sentence reader to exit on. gps_poll_rx must still
+     * return promptly: an unbounded drain hangs loop() - and at boot
+     * gps_poll_rx runs BEFORE watchdog_init(), so the beacon hangs with
+     * no recovery and never transmits. Field symptom 2026-08-30: beacon
+     * silent, receiver scans forever without locking. */
+    uart_endless_noise = true;
+    (void)gps_poll_rx();                        /* must return, not spin */
+    (void)gps_poll_rx();
+    uart_endless_noise = false;
+    CHECK(true);                                /* reaching here = bounded */
+
+    /* The beacon loop still runs: a clean burst right after parses fine */
+    nav_updates = 0;
+    feed_and_poll(GGA_FIX);
+    CHECK(nav_updates == 1);
+}
+
 TEST(test_mid_sentence_silence_abandons_parse)
 {
     /* The GPS watchdog's cold-start reboots the module, which goes silent
@@ -464,6 +491,7 @@ int main(void)
     run_test_watchdog_never_factory_resets();
     run_test_watchdog_three_strikes_then_cooldown_rearm();
     run_test_oversize_sentence_does_not_overflow();
+    run_test_continuous_uart_garbage_is_bounded();
     run_test_mid_sentence_silence_abandons_parse();
 
     return TEST_SUMMARY();
