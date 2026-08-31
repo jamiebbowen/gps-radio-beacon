@@ -125,7 +125,15 @@ uint8_t gps_poll_rx(void) {
     static uint32_t last_byte_time = 0;
     static uint8_t watchdog_initialized = 0;
 
-    flush_uart_buffer();
+    /* NOTE: no flush_uart_buffer() here. It used to discard everything
+     * queued, then one sentence per call was parsed - the main loop
+     * phase-locked to the 1 Hz burst and only ever saw its FIRST sentence
+     * (RMC on this module). Positions stayed live so raw packets looked
+     * fine, but sats/alt/fix-quality froze at whatever one lucky GGA last
+     * said, and the GGA-only EKF feed starved: field logs 2026-08-30 show
+     * FUS age pinned at 255 ds (dead-reckoning) or the anchor never
+     * confirming, while raw GPS streamed normally. The drain loop below
+     * parses every sentence in the burst. */
     
     // GPS Watchdog: Detect and recover from GPS hangs
     uint32_t current_time = millis();
@@ -241,6 +249,11 @@ uint8_t gps_poll_rx(void) {
         last_debug = millis();
     }
       
+    /* Process EVERY complete sentence queued, then return. The only exit
+     * is the '$' hunt timing out on a quiet UART (~50 ms). */
+next_sentence:
+    wait_timeout = 0;
+
     // First, wait for a '$' character to start a sentence
     while (1) {
         if (!uart_data_available()) {
@@ -355,7 +368,8 @@ uint8_t gps_poll_rx(void) {
                      * not masquerade as a live fix (it previously stayed
                      * latched forever, hiding total signal loss). */
                     current_coords.valid = 0;
-                    return bytes_processed;  // Skip invalid RMC (status = V)
+                    goto next_sentence;  /* Skip invalid RMC (status = V);
+                                          * keep draining the burst */
                 }
             }
 
@@ -468,7 +482,11 @@ uint8_t gps_poll_rx(void) {
         }
     }
     
-    return bytes_processed;
+    /* A full sentence was handled (or a partial/over-long one abandoned):
+     * more of the burst may already be queued, so loop back instead of
+     * returning. When the UART is quiet the '$' hunt above times out and
+     * returns. */
+    goto next_sentence;
 }
 
 /**

@@ -151,6 +151,25 @@ TEST(test_gga_full_fix_parsed_and_fed_to_nav)
     CHECK(nav_last_sats == 8 && nav_last_fq == 1);
 }
 
+TEST(test_burst_drains_all_sentences_in_one_poll)
+{
+    /* A 1 Hz burst arrives as several back-to-back sentences. One poll
+     * must parse them ALL: the old one-sentence-per-call flow (plus the
+     * hardware flush at the top of the next call) locked onto the burst's
+     * first sentence and starved the GGA-only EKF feed - field logs
+     * 2026-08-30: FUS age pinned at 255 ds / anchor never confirming
+     * while raw RMC positions streamed. */
+    nav_updates = 0;
+    feed(GGA_FIX);
+    feed(RMC_FIX);
+    (void)gps_poll_rx();                        /* one call, whole burst */
+
+    const GPSCoordinates_t *c = gps_get_current_coordinates();
+    CHECK(nav_updates == 1);                    /* GGA fed the EKF */
+    CHECK(strcmp(c->lat, "3954.00000") == 0);   /* RMC parsed after it */
+    CHECK(strcmp(c->satellites, "08") == 0);    /* GGA fields landed */
+}
+
 TEST(test_rmc_updates_position_only)
 {
     nav_updates = 0;
@@ -431,6 +450,7 @@ int main(void)
 {
     run_test_init_sends_ublox_config();
     run_test_gga_full_fix_parsed_and_fed_to_nav();
+    run_test_burst_drains_all_sentences_in_one_poll();
     run_test_rmc_updates_position_only();
     run_test_framing_error_bytes_skipped_pre_and_mid_sentence();
     run_test_rmc_void_status_skipped();
