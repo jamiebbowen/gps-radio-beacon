@@ -500,6 +500,64 @@ TEST(test_rotation_launchflag_and_write_failure)
      * review, not by behavioral test. */
 }
 
+TEST(test_write_recovers_lost_mount)
+{
+    wipe_card();
+    Test_SetTick(1000);
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+    char name[16];
+    CHECK(SD_Card_CreateLogFile(name, sizeof(name)) == SD_CARD_OK);
+
+    GPS_Data beacon; memset(&beacon, 0, sizeof(beacon));
+    beacon.latitude = 39.9f; beacon.longitude = -105.1f;
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 10.0f, 20.0f, -90, 5)
+          == SD_CARD_OK);
+    CHECK(SD_Card_Flush() == SD_CARD_OK);
+
+    /* Simulate a recovered contact bounce: mount + handle gone, block
+     * device healthy again, littlefs state clean. (A prog-failure
+     * mid-write is NOT simulated here - the RAM device leaves littlefs'
+     * cache dirty, see the note in test_rotation_launchflag_and_write_failure.)
+     * Statics are visible because this file #includes sd_card.c. */
+    CHECK(lfs_file_close(&lfs, &log_file) == 0);
+    log_file_open = 0;
+    CHECK(lfs_unmount(&lfs) == 0);
+    lfs_mounted = 0;
+    sd_info.is_mounted = 0;
+
+    /* Next write climbs the recovery ladder (mount + append reopen) and lands */
+    Test_SetTick(60000);
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 11.0f, 21.0f, -88, 6)
+          == SD_CARD_OK);
+    CHECK(lfs_mounted == 1 && log_file_open == 1);
+
+    /* Backoff: lose the mount again immediately - recovery is rate-limited
+     * (SD_RECOVERY_BACKOFF_MS) so this write fails fast instead of
+     * thrashing the card on every entry... */
+    CHECK(lfs_file_close(&lfs, &log_file) == 0);
+    log_file_open = 0;
+    CHECK(lfs_unmount(&lfs) == 0);
+    lfs_mounted = 0;
+    sd_info.is_mounted = 0;
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 12.0f, 22.0f, -88, 6)
+          == SD_CARD_ERROR);
+    CHECK(lfs_mounted == 0);
+
+    /* ...and recovers once the backoff has elapsed */
+    Test_SetTick(60000 + SD_RECOVERY_BACKOFF_MS + 1000);
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 13.0f, 23.0f, -88, 6)
+          == SD_CARD_OK);
+    CHECK(lfs_mounted == 1 && log_file_open == 1);
+
+    /* The recovered rows are in the file; the backoff-denied row is not */
+    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    char big[2048];
+    CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
+    CHECK(strstr(big, ",11.0,") != NULL);
+    CHECK(strstr(big, ",12.0,") == NULL);
+    CHECK(strstr(big, ",13.0,") != NULL);
+}
+
 TEST(test_timestamp_format)
 {
     char ts[32];
@@ -532,6 +590,7 @@ int main(void)
     run_test_format_wipes_everything();
     run_test_self_test_pass_and_write_failure();
     run_test_rotation_launchflag_and_write_failure();
+    run_test_write_recovers_lost_mount();
     run_test_timestamp_format();
 
     return TEST_SUMMARY();

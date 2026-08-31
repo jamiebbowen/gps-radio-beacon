@@ -315,6 +315,57 @@ SD_Card_Status SD_Card_CreateLogFile(char *filename, uint32_t max_len)
 }
 
 /* ========================================================================= */
+/* Mid-session recovery                                                      */
+/* ========================================================================= */
+
+/* A transient card glitch (contact bounce, 3V3 sag) poisons the open log
+ * handle or the mount, and without recovery every subsequent entry would
+ * be silently dropped for the rest of the flight - and the flight log is
+ * the primary post-flight diagnostic. Ladder: close+reopen (append) the
+ * current file; if the filesystem itself looks bad, cycle the mount and
+ * reopen. Backoff so a truly dead card can't stall the main loop. */
+#define SD_RECOVERY_BACKOFF_MS  30000U
+static uint32_t last_recovery_ms = 0;
+
+static uint8_t sd_try_log_recovery(void)
+{
+    uint32_t now = HAL_GetTick();
+    if (now - last_recovery_ms < SD_RECOVERY_BACKOFF_MS) return 0;
+    last_recovery_ms = now;
+
+    /* littlefs removes a file from its open list even when close fails
+     * (POSIX close semantics), so this ladder is safe after a failed
+     * close caused by the glitch being recovered from. */
+    if (log_file_open) {
+        (void)lfs_file_close(&lfs, &log_file);
+        log_file_open = 0;
+    }
+
+    if (lfs_mounted) {
+        /* Cheap step: the mount may be fine, only the handle poisoned */
+        if (lfs_file_opencfg(&lfs, &log_file, sd_info.current_log_file,
+                             LFS_O_WRONLY | LFS_O_APPEND, &log_file_cfg) == 0) {
+            log_file_open = 1;
+            return 1;
+        }
+        (void)lfs_unmount(&lfs);
+        lfs_mounted = 0;
+        sd_info.is_mounted = 0;
+    }
+
+    if (lfs_mount(&lfs, &lfs_sd_cfg) == 0) {
+        lfs_mounted = 1;
+        sd_info.is_mounted = 1;
+        if (lfs_file_opencfg(&lfs, &log_file, sd_info.current_log_file,
+                             LFS_O_WRONLY | LFS_O_APPEND, &log_file_cfg) == 0) {
+            log_file_open = 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* ========================================================================= */
 /* Log write helper                                                          */
 /* ========================================================================= */
 
@@ -322,9 +373,21 @@ static SD_Card_Status SD_Card_WriteLogEntry(const char *entry)
 {
     /* (No NULL guard: this helper is static and every call site passes a
      * freshly formatted stack buffer.) */
-    if (!sd_initialized || !lfs_mounted) {
+    if (!sd_initialized) {
         return SD_CARD_ERROR;
     }
+
+    /* A previously-opened log file proves this is a real logging session.
+     * The no-RF-boot no-artifact policy still holds: never recover a file
+     * that never existed. */
+    uint8_t had_log = (sd_info.current_log_file[0] != '\0');
+
+    /* Mount or handle lost mid-session: climb the recovery ladder
+     * (rate-limited) before giving up on the entry. */
+    if ((!lfs_mounted || !log_file_open) && had_log) {
+        if (!sd_try_log_recovery()) return SD_CARD_ERROR;
+    }
+    if (!lfs_mounted) return SD_CARD_ERROR;
     /* Drop silently if no log file yet - prevents no-RF boots from creating
      * artifacts on the card. */
     if (!log_file_open) return SD_CARD_OK;
@@ -333,6 +396,16 @@ static SD_Card_Status SD_Card_WriteLogEntry(const char *entry)
     lfs_ssize_t w = lfs_file_write(&lfs, &log_file, entry, len);
     if (w < 0 || (size_t)w != len) {
         sd_info.write_errors++;
+        /* Recover the handle and retry once so a transient glitch doesn't
+         * cost the entry that tripped on it. */
+        if (had_log && sd_try_log_recovery()) {
+            w = lfs_file_write(&lfs, &log_file, entry, len);
+            if (w >= 0 && (size_t)w == len) {
+                sd_info.bytes_written += (uint32_t)w;
+                log_sequence++;
+                return SD_CARD_OK;
+            }
+        }
         return SD_CARD_ERROR;
     }
     sd_info.bytes_written += (uint32_t)w;
@@ -437,8 +510,15 @@ SD_Card_Status SD_Card_Flush(void)
  */
 SD_Card_Status SD_Card_EnsureLogFile(void)
 {
-    if (!sd_initialized || !lfs_mounted) return SD_CARD_ERROR;
+    if (!sd_initialized) return SD_CARD_ERROR;
     if (log_file_open) return SD_CARD_OK;
+    /* Mount/handle lost mid-session: resume the session's file via the
+     * recovery ladder rather than splitting the flight across a new
+     * sequence file. Rate-limited; fails fast while the card is dead. */
+    if (sd_info.current_log_file[0] != '\0') {
+        return sd_try_log_recovery() ? SD_CARD_OK : SD_CARD_ERROR;
+    }
+    if (!lfs_mounted) return SD_CARD_ERROR;
     return sd_open_new_log_file(NULL, 0);
 }
 
@@ -453,7 +533,13 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
     if (!sd_initialized) return SD_CARD_ERROR;
 
     if (!log_file_open) {
-        if (sd_open_new_log_file(NULL, 0) != SD_CARD_OK) return SD_CARD_ERROR;
+        /* Mid-session glitch (mount or handle lost): resume the session's
+         * file in append mode via the recovery ladder; only start a new
+         * file when there is nothing to resume or the recovery was
+         * rate-limited but the card is healthy (log continuity wins). */
+        if (sd_info.current_log_file[0] == '\0' || !sd_try_log_recovery()) {
+            if (sd_open_new_log_file(NULL, 0) != SD_CARD_OK) return SD_CARD_ERROR;
+        }
     }
 
     char ts[16];
