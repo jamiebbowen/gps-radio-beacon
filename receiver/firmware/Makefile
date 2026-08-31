@@ -116,7 +116,11 @@ vpath %.c $(sort $(dir $(C_SOURCES)))
 -include $(wildcard $(BUILD_DIR)/*.d)
 
 # Default target
-all: $(BUILD_DIR) $(BIN_DIR) $(ELF) $(BIN) $(HEX) flash
+all: compile flash
+
+# Build only, no flash - CI uses this (no DFU device on a runner).
+# (Can't be called "build": that name is already $(BUILD_DIR).)
+compile: $(BUILD_DIR) $(BIN_DIR) $(ELF) $(BIN) $(HEX)
 
 # Create build directory
 $(BUILD_DIR):
@@ -161,4 +165,4 @@ clean:
 # Clean and rebuild
 rebuild: clean all
 
-.PHONY: all clean rebuild flash
+.PHONY: all build clean rebuild flash

@@ -31,7 +31,7 @@
 /* ------------------------------------------------------------------ */
 
 static uint8_t       fake_channel   = 0;
-static uint8_t       fake_mode      = 5;     /* 5 = RX (status bits [7:5]) */
+static uint8_t       fake_mode      = 5;     /* 5 = RX (ChipMode bits [6:4]) */
 static int16_t       fake_rssi_inst = -120;  /* Ambient level "measured"   */
 static LoRa_Packet_t fake_pkt;
 static uint8_t       fake_pkt_pending = 0;
@@ -53,7 +53,7 @@ uint8_t LoRa_SetReceiveMode(void) { fake_set_rx_calls++; return LORA_OK; }
 uint8_t LoRa_GetDeviceStatus(uint8_t *status)
 {
     if (fake_device_status_fail) { *status = 0; return LORA_ERROR; }
-    *status = (uint8_t)((fake_mode << 5) | 0x02);
+    *status = (uint8_t)((fake_mode << 4) | 0x02);  /* ChipMode at [6:4] */
     return LORA_OK;
 }
 uint8_t LoRa_GetIRQStatus(uint16_t *irq) { *irq = fake_irq_value; return LORA_OK; }

@@ -63,7 +63,7 @@ jobs:
             Drivers/CMSIS/Device/ST/STM32F4xx
 
       - name: Build receiver firmware
-        run: make -C receiver/firmware
+        run: make -C receiver/firmware compile
 
   # Transmitter firmware build (ItsyBitsy M4, arduino-cli).
   transmitter-firmware:
