@@ -63,6 +63,28 @@ typedef enum {
     NMEA_WAIT_FOR_END       // Wait for end of sentence
 } NMEAParseState;
 
+/* Send a raw UBX protocol frame. uart_tx_string cannot be used: UBX
+ * payloads contain 0x00. The checksum is the 8-bit Fletcher sum over
+ * class|id|length|payload, per the u-blox interface description. */
+static void gps_send_ubx(uint8_t cls, uint8_t id, const uint8_t *payload, uint16_t len) {
+    uint8_t ck_a = 0, ck_b = 0;
+    uint8_t meta[4] = { cls, id, (uint8_t)(len & 0xFF), (uint8_t)(len >> 8) };
+    uart_tx_byte(0xB5);  // UBX sync chars
+    uart_tx_byte(0x62);
+    for (uint8_t i = 0; i < 4; i++) {
+        uart_tx_byte(meta[i]);
+        ck_a = (uint8_t)(ck_a + meta[i]);
+        ck_b = (uint8_t)(ck_b + ck_a);
+    }
+    for (uint16_t i = 0; i < len; i++) {
+        uart_tx_byte(payload[i]);
+        ck_a = (uint8_t)(ck_a + payload[i]);
+        ck_b = (uint8_t)(ck_b + ck_a);
+    }
+    uart_tx_byte(ck_a);
+    uart_tx_byte(ck_b);
+}
+
 // Initialize GPS for u-blox MAX-M10S
 void gps_init(void) {
     // Basic initialization
@@ -91,6 +113,23 @@ void gps_init(void) {
     
     // Configure update rate to 1Hz
     uart_tx_string("$PUBX,40,00,0,1,0,0,0,0*A7\r\n");
+    delay(10);
+
+    /* Set the navigation dynamic model to airborne <4g via UBX-CFG-VALSET
+     * (key CFG-NAVSPG-DYNMODEL = 0x20110021, U1). The default "portable"
+     * model assumes pedestrian-grade dynamics and can reject valid fixes
+     * under boost-phase acceleration - standard practice for flight GPS is
+     * airborne <4g (good to 50 km / 500 m/s). RAM layer only: this runs
+     * every boot, so no flash wear; and because the watchdog's cold-start
+     * reset clears RAM config, re-sending here covers that path too. */
+    const uint8_t valset_dynmodel[] = {
+        0x00,                    /* version: apply immediately         */
+        0x01,                    /* layers: RAM                        */
+        0x00, 0x00,              /* reserved                           */
+        0x21, 0x00, 0x11, 0x20,  /* key ID, little-endian              */
+        0x06                     /* value: 6 = airborne <4g            */
+    };
+    gps_send_ubx(0x06, 0x8A, valset_dynmodel, sizeof(valset_dynmodel));
     delay(10);
 }
 
