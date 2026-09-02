@@ -267,6 +267,7 @@ TEST(test_fused_valid_packet) {
     CHECK(gps.fused_gps_fresh == 1);
     CHECK(gps.fused_imu_healthy == 1);
     CHECK(gps.fused_dr == 0);
+    CHECK(gps.fused_landed == 0);
     CHECK(gps.fused_age_ds == 7);
     CHECK(gps.launch_detected == 1);
 }
@@ -284,6 +285,34 @@ TEST(test_fused_dead_reckoning_flag) {
     CHECK(gps.fused_dr == 1);
     CHECK(gps.fused_gps_fresh == 0);
     CHECK(gps.fused_age_ds == 255);
+}
+
+TEST(test_fused_landed_flag_both_streams) {
+    /* The landed state is carried on BOTH packet types (FUSED_FLAG_LANDED
+     * on fused, FLAG_LANDED on raw GPS); the raw stream must update, not
+     * clear, the field or the nav page chip would flap as the streams
+     * interleave (same bug class as the fix-clobber regression above). */
+    RF_Parser_Reset();
+    uint8_t fused_pkt[FUSED_PACKET_SIZE], gps_pkt[13];
+    build_fused_packet(fused_pkt, 39.89, -105.11, 10000, 0, 0, 0, 3,
+                       FUSED_FLAG_GPS_FRESH | FUSED_FLAG_LANDED);
+    CHECK(RF_Parser_ParseFusedPacket(fused_pkt, FUSED_PACKET_SIZE) == RF_PARSER_OK);
+    GPS_Data gps;
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.fused_landed == 1);
+
+    /* Raw GPS packet WITHOUT the bit: updates the field (TX sends it on
+     * both streams, so "not landed" is real information, not noise). */
+    build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x43);
+    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.fused_landed == 0);
+
+    /* Raw GPS packet WITH FLAG_LANDED sets it again. */
+    build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x43 | FLAG_LANDED);
+    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.fused_landed == 1);
 }
 
 TEST(test_fused_malformed_rejected) {
@@ -460,6 +489,7 @@ int main(void) {
     run_test_binary_malformed_rejected();
     run_test_fused_valid_packet();
     run_test_fused_dead_reckoning_flag();
+    run_test_fused_landed_flag_both_streams();
     run_test_fused_malformed_rejected();
     run_test_fused_does_not_clobber_gps_fix();
     run_test_gps_does_not_clobber_fused_velocity();

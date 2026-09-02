@@ -483,11 +483,18 @@ TEST(test_rotation_launchflag_and_write_failure)
     beacon.launch_detected = 1;                            /* is_fused = 0 */
     CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 10.0f, 20.0f, -90, 5)
           == SD_CARD_OK);
+
+    /* Landed latch on the raw (non-fused) stream adds 0x20 to the flags */
+    beacon.fused_landed = 1;
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 11.0f, 20.0f, -90, 5)
+          == SD_CARD_OK);
+
     CHECK(SD_Card_Flush() == SD_CARD_OK);
     char big[2048];
     CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
     CHECK(strstr(big, "NAV,GPS,") != NULL);
     CHECK(strstr(big, ",10,") != NULL);                  /* FusedFlags %02X */
+    CHECK(strstr(big, ",30,") != NULL);                  /* 0x10 launch | 0x20 landed */
 
     /* NOTE: the littlefs-failure branches (mount-after-format, opencfg /
      * header-write / mid-session write errors) are correct defensive error

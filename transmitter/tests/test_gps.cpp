@@ -198,7 +198,7 @@ TEST(test_framing_error_bytes_skipped_pre_and_mid_sentence)
 
     /* Mid-sentence glitches: dropped before buffering, so the parser sees
      * the de-glitched text (no checksum layer on TX to reject it). */
-    feed("$GPRMC,1235\xFE\xFF19,A,3954.5,N,10454.5,W,,,230394,,*6A\r\n");
+    feed("$GPRMC,1235\xFE\xFF" "19,A,3954.5,N,10454.5,W,,,230394,,*6A\r\n");
     (void)gps_poll_rx();
     (void)gps_poll_rx();
     CHECK(strcmp(c->lat, "3954.5") == 0);

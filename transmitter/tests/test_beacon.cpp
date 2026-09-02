@@ -92,6 +92,9 @@ float gps_nmea_to_decimal(const char *nmea_coord, char direction)
 static launch_state_t fake_launch_state = LAUNCH_STATE_IDLE;
 launch_state_t launch_detect_get_state(void) { return fake_launch_state; }
 
+static bool fake_landed = false;
+bool launch_detect_has_landed(void) { return fake_landed; }
+
 static NavFused_t fake_fused;
 void nav_get_fused(NavFused_t *out) { *out = fake_fused; }
 
@@ -260,7 +263,30 @@ TEST(test_binary_launch_flag)
     GPSCoordinates_t c = valid_coords();
     CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 1);
     CHECK((tx_buf[12] & FLAG_LAUNCH_DETECTED) != 0);
+    CHECK((tx_buf[12] & FLAG_LANDED) == 0);
     fake_launch_state = LAUNCH_STATE_IDLE;
+}
+
+TEST(test_landed_flag_both_packet_types)
+{
+    /* The landing latch rides both streams so the RX indicator can't
+     * flap as GPS/FUS interleave (rx-side counterpart test lives in
+     * test_rf_parser.c). */
+    reset_tx();
+    fake_landed = true;
+    GPSCoordinates_t c = valid_coords();
+    CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 1);
+    CHECK((tx_buf[12] & FLAG_LANDED) != 0);
+
+    reset_tx();
+    memset(&fake_fused, 0, sizeof(fake_fused));
+    fake_fused.lat_deg = 39.89;  fake_fused.lon_deg = -105.11;
+    fake_fused.alt_m   = 1600.0; fake_fused.valid    = true;
+    fake_fused.gps_fresh = true;
+    CHECK(beacon_transmit_fused_data(100, 1) == 1);
+    CHECK(tx_buf[0] == PACKET_TYPE_FUSED);
+    CHECK((tx_buf[20] & FUSED_FLAG_LANDED) != 0);
+    fake_landed = false;
 }
 
 TEST(test_binary_rejection_and_tx_failure)
@@ -456,6 +482,7 @@ int main(void)
     run_test_binary_packet_fields();
     run_test_binary_altitude_clamps();
     run_test_binary_launch_flag();
+    run_test_landed_flag_both_packet_types();
     run_test_binary_rejection_and_tx_failure();
     run_test_heartbeat_contents_and_rate_limit();
     run_test_heartbeat_null_coords_and_saturation();
