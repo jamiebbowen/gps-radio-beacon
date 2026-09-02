@@ -570,6 +570,9 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
         } else if (beacon_gps->launch_detected) {
             fused_flags = 0x10;
         }
+        /* Landed (0x20) applies to both streams; kept out of the branches
+         * so a landed raw-GPS row logs it even if the launch bit cleared. */
+        if (beacon_gps->fused_landed) fused_flags |= 0x20;
     }
     float s_lat = 0, s_lon = 0, s_alt = 0;
     if (base_gps) {

@@ -511,12 +511,17 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
     Display_DrawTextRowCol(6, 0, wide);
 
     /* Row 7: packet count + source of last packet.
-     *   "GPS" = raw PACKET_TYPE_GPS from the beacon
-     *   "FUS" = PACKET_TYPE_FUSED, TX-side GPS fresh
-     *   "DR"  = PACKET_TYPE_FUSED but dead-reckoning (no fresh TX-side GPS)
+     *   "GPS"    = raw PACKET_TYPE_GPS from the beacon
+     *   "FUS"    = PACKET_TYPE_FUSED, TX-side GPS fresh
+     *   "DR"     = PACKET_TYPE_FUSED but dead-reckoning (no fresh TX-side GPS)
+     *   "LANDED" = either stream reported the landing latch - the moment
+     *              that most needs certainty during recovery, so it takes
+     *              precedence over the link-source label.
      * Helps spot when the link has dropped back to pure inertial. */
     const char *src = "GPS";
-    if (remote_gps_data->is_fused) {
+    if (remote_gps_data->fused_landed) {
+      src = "LANDED";
+    } else if (remote_gps_data->is_fused) {
       src = remote_gps_data->fused_dr ? "DR" : "FUS";
     }
     snprintf(wide, sizeof(wide), "Pkts:%lu %s",

@@ -54,6 +54,7 @@ typedef struct {
   uint8_t fused_dr;          /* 1 if FUSED_FLAG_DEAD_RECKONING was set        */
   uint8_t fused_gps_fresh;   /* 1 if TX-side GPS was fresh at TX time         */
   uint8_t fused_imu_healthy; /* 1 if TX-side IMU was healthy at TX time       */
+  uint8_t fused_landed;      /* 1 if FUSED_FLAG_LANDED was set (latched)   */
   uint8_t fused_age_ds;      /* Deciseconds since TX-side last fix (0..255)   */
   float   v_north;           /* Velocity north, m/s (fused packets only)      */
   float   v_east;            /* Velocity east,  m/s                           */

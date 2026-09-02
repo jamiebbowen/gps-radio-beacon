@@ -55,6 +55,7 @@ typedef struct __attribute__((packed)) {
 // Flags byte bit definitions
 #define FLAG_LAUNCH_DETECTED    0x80  // Bit 7: 1 = launched, 0 = on ground
 #define FLAG_FIX_QUALITY_GOOD   0x40  // Bit 6: 1 = good fix, 0 = poor
+#define FLAG_LANDED             0x10  // Bit 4: 1 = landing detected (latched)
 #define FLAG_FIX_TYPE_MASK      0x0F  // Bits 3-0: GPS fix type (0=none, 1=GPS, 2=DGPS, etc.)
 
 /* FusedPosPacket_t flags (separate bitmap from the GPS packet flags) */
@@ -62,7 +63,8 @@ typedef struct __attribute__((packed)) {
 #define FUSED_FLAG_GPS_FRESH         0x40  // Bit 6: 1 = GPS fix used within the last second
 #define FUSED_FLAG_IMU_HEALTHY       0x20  // Bit 5: 1 = BNO085 streaming, not saturated
 #define FUSED_FLAG_DEAD_RECKONING    0x10  // Bit 4: 1 = no GPS for > NAV_DR_TIMEOUT_S
-#define FUSED_FLAG_RESERVED_MASK     0x0F  // Bits 3-0: reserved
+#define FUSED_FLAG_LANDED            0x08  // Bit 3: 1 = landing detected (latched)
+#define FUSED_FLAG_RESERVED_MASK     0x07  // Bits 2-0: reserved
 
 /* Fused packet: 21 bytes. Transmitted with PACKET_TYPE_FUSED.
  *

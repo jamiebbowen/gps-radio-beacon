@@ -212,6 +212,12 @@ uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t
     if (launch_detect_get_state() == LAUNCH_STATE_CONFIRMED) {
         packet.flags |= FLAG_LAUNCH_DETECTED;
     }
+    /* Carried on the raw GPS stream too: the RX shows LANDED from either
+     * packet type, and without it the indicator would flap between the
+     * FUS stream (has FUSED_FLAG_LANDED) and this stream (cleared it). */
+    if (launch_detect_has_landed()) {
+        packet.flags |= FLAG_LANDED;
+    }
     if (coords->fix_quality >= 1) {
         packet.flags |= FLAG_FIX_QUALITY_GOOD;
     }
@@ -385,6 +391,11 @@ uint8_t beacon_transmit_fused_data(uint32_t system_time_seconds, uint8_t transmi
     if (launch_detect_get_state() == LAUNCH_STATE_CONFIRMED) {
         flags |= FUSED_FLAG_LAUNCH_DETECTED;
     }
+    /* Landing latch: recovery is the workflow that most needs certainty.
+     * The RX nav page shows LANDED and the SD log row carries the flag,
+     * instead of the operator inferring touchdown from the cadence drop
+     * to battery-save. */
+    if (launch_detect_has_landed()) flags |= FUSED_FLAG_LANDED;
     p.flags = flags;
 
     if (!transmit_fast) {

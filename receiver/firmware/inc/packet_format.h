@@ -56,6 +56,7 @@ typedef struct __attribute__((packed)) {
 // Flags byte bit definitions
 #define FLAG_LAUNCH_DETECTED    0x80  // Bit 7: 1 = launched, 0 = on ground
 #define FLAG_FIX_QUALITY_GOOD   0x40  // Bit 6: 1 = good fix, 0 = poor
+#define FLAG_LANDED             0x10  // Bit 4: 1 = landing detected (latched)
 #define FLAG_FIX_TYPE_MASK      0x0F  // Bits 3-0: GPS fix type (0=none, 1=GPS, 2=DGPS, etc.)
 
 /* FusedPosPacket_t flags (must match transmitter/firmware/include/packet_format.h) */
@@ -63,6 +64,7 @@ typedef struct __attribute__((packed)) {
 #define FUSED_FLAG_GPS_FRESH         0x40
 #define FUSED_FLAG_IMU_HEALTHY       0x20
 #define FUSED_FLAG_DEAD_RECKONING    0x10
+#define FUSED_FLAG_LANDED            0x08
 
 /* Fused packet: 21 bytes. See transmitter include for full field semantics. */
 typedef struct __attribute__((packed)) {

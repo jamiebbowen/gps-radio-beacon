@@ -464,8 +464,12 @@ uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
   parsed_gps_data.altitude = (float)altitude_encoded;
   parsed_gps_data.satellites = satellites;
 
-  /* Parse flags */
+  /* Parse flags. Landed is carried on this stream as well (FLAG_LANDED):
+   * the nav page chips read it from either packet type, and updating it
+   * here keeps LANDED from flapping between the FUS stream (sets it) and
+   * the raw GPS stream (would otherwise clear it every 5 s). */
   parsed_gps_data.launch_detected = (flags & FLAG_LAUNCH_DETECTED) ? 1 : 0;
+  parsed_gps_data.fused_landed    = (flags & FLAG_LANDED)          ? 1 : 0;
   parsed_gps_data.fix = flags & FLAG_FIX_TYPE_MASK;  /* Bits 3-0: GPS fix type */
 
   /* Clear fused metadata - this packet is a raw GPS fix, not EKF output.
@@ -479,6 +483,8 @@ uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
   parsed_gps_data.fused_dr          = 0;
   parsed_gps_data.fused_gps_fresh   = 0;
   parsed_gps_data.fused_imu_healthy = 0;
+  /* (fused_landed is deliberately NOT zeroed here: raw GPS packets carry
+   * their own FLAG_LANDED, parsed above, so both streams drive it.) */
   parsed_gps_data.fused_age_ds      = 0;
 
   /* Mark data as ready */
@@ -568,6 +574,7 @@ uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length)
   parsed_gps_data.fused_dr          = (flags & FUSED_FLAG_DEAD_RECKONING) ? 1 : 0;
   parsed_gps_data.fused_gps_fresh   = (flags & FUSED_FLAG_GPS_FRESH)      ? 1 : 0;
   parsed_gps_data.fused_imu_healthy = (flags & FUSED_FLAG_IMU_HEALTHY)    ? 1 : 0;
+  parsed_gps_data.fused_landed      = (flags & FUSED_FLAG_LANDED)         ? 1 : 0;
   parsed_gps_data.fused_age_ds      = age_ds;
 
   parsed_data_ready = 1;
