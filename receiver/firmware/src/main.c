@@ -737,6 +737,32 @@ int main(void)
       /* This allows navigation to continue while showing the current GPS status */
     }
     
+    /* One-shot SD breadcrumbs for "why was the handheld's fix slow?" The
+     * first-fix event records the time; the 120 s no-fix snapshot records
+     * the sat count, which distinguishes a silent module/UART (sats 0)
+     * from a marginal sky view (sats climbing but no fix). Both park
+     * sessions took ~150 s to first fix - this tells us why next time. */
+    static uint8_t local_fix_logged  = 0;
+    static uint8_t local_slow_logged = 0;
+    if (has_valid_local_gps && !local_fix_logged) {
+      local_fix_logged = 1;
+      if (sd_card_ok) {
+        char gps_msg[48];
+        snprintf(gps_msg, sizeof(gps_msg), "Local GPS first fix: sats=%d",
+                 (int)gps_data.satellites);
+        SD_Card_LogEvent(gps_msg);
+      }
+    } else if (!has_valid_local_gps && !local_slow_logged &&
+               HAL_GetTick() > 120000) {
+      local_slow_logged = 1;
+      if (sd_card_ok) {
+        char gps_msg[48];
+        snprintf(gps_msg, sizeof(gps_msg), "Local GPS no fix at 120s: sats=%d",
+                 (int)gps_data.satellites);
+        SD_Card_LogEvent(gps_msg);
+      }
+    }
+    
     /* Persist compass calibration as soon as it is "good enough" (mag_cal >= 2),
      * and re-save whenever calibration quality improves. Only latch on a
      * successful save so transient SD errors are retried. */
