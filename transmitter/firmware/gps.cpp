@@ -119,15 +119,19 @@ void gps_init(void) {
      * (key CFG-NAVSPG-DYNMODEL = 0x20110021, U1). The default "portable"
      * model assumes pedestrian-grade dynamics and can reject valid fixes
      * under boost-phase acceleration - standard practice for flight GPS is
-     * airborne <4g (good to 50 km / 500 m/s). RAM layer only: this runs
-     * every boot, so no flash wear; and because the watchdog's cold-start
-     * reset clears RAM config, re-sending here covers that path too. */
+     * airborne <4g. Enum per the u-blox 8/9/M10 interface spec:
+     *   0 portable, 2 stationary, 3 pedestrian, 4 automotive, 5 sea,
+     *   6 airborne <1g, 7 airborne <2g, 8 airborne <4g, 9 wrist
+     * (the older u-blox 5/6 spec shifted airborne to 5/6/7 - easy trap).
+     * RAM layer only: this runs every boot, so no flash wear; and because
+     * the watchdog's cold-start reset clears RAM config, re-sending here
+     * covers that path too. */
     const uint8_t valset_dynmodel[] = {
         0x00,                    /* version: apply immediately         */
         0x01,                    /* layers: RAM                        */
         0x00, 0x00,              /* reserved                           */
         0x21, 0x00, 0x11, 0x20,  /* key ID, little-endian              */
-        0x06                     /* value: 6 = airborne <4g            */
+        0x08                     /* value: 8 = airborne <4g            */
     };
     gps_send_ubx(0x06, 0x8A, valset_dynmodel, sizeof(valset_dynmodel));
     delay(10);
