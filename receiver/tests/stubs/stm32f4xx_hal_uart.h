@@ -43,6 +43,9 @@ HAL_StatusTypeDef HAL_UART_Init(UART_HandleTypeDef *huart);
 HAL_StatusTypeDef HAL_UART_DeInit(UART_HandleTypeDef *huart);
 HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *huart,
                                       uint8_t *data, uint16_t size);
+HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *huart,
+                                    const uint8_t *data, uint16_t size,
+                                    uint32_t timeout);
 void HAL_UART_IRQHandler(UART_HandleTypeDef *huart);
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart);
 

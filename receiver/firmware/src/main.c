@@ -756,9 +756,23 @@ int main(void)
                HAL_GetTick() > 120000) {
       local_slow_logged = 1;
       if (sd_card_ok) {
-        char gps_msg[48];
-        snprintf(gps_msg, sizeof(gps_msg), "Local GPS no fix at 120s: sats=%d",
-                 (int)gps_data.satellites);
+        /* Enriched snapshot so post-flight review can discriminate the
+         * failure families without guessing:
+         *   rx=0                 -> dead UART / module / wiring
+         *   rx>0, snt=0          -> garbage on the line (baud or protocol
+         *                           mismatch - e.g. module in UBX-binary mode)
+         *   snt>0, drp climbing  -> main-loop stalls losing bursts (software)
+         *   otherwise, sats>0    -> marginal sky view (physics) */
+        uint32_t u_bytes, u_sents, u_drops;
+        uint16_t u_errs;
+        GPS_GetRxStats(&u_bytes, &u_sents, &u_drops, &u_errs);
+        extern uint32_t gps_checksum_errors;   /* gps_parser.c */
+        char gps_msg[96];
+        snprintf(gps_msg, sizeof(gps_msg),
+                 "Local GPS no fix at 120s: rx=%lu snt=%lu drp=%lu csum=%lu er=%u sats=%d",
+                 (unsigned long)u_bytes, (unsigned long)u_sents,
+                 (unsigned long)u_drops, (unsigned long)gps_checksum_errors,
+                 (unsigned)u_errs, (int)gps_data.satellites);
         SD_Card_LogEvent(gps_msg);
       }
     }

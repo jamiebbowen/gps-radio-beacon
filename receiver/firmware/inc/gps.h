@@ -66,6 +66,8 @@ uint8_t GPS_Init(void);
 uint8_t GPS_Update(GPS_Data *gps_data);
 uint8_t GPS_IsFixed(void);
 void GPS_GetRawBytes(uint8_t *bytes);
+void GPS_GetRxStats(uint32_t *bytes, uint32_t *sentences,
+                    uint32_t *dropped, uint16_t *uart_errors);
 void GPS_UART_RxCpltCallback(UART_HandleTypeDef *huart);
 
 #ifdef __cplusplus

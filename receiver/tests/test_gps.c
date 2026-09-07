@@ -77,6 +77,31 @@ void HAL_UART_IRQHandler(UART_HandleTypeDef *huart)
     irq_handler_calls++;
 }
 
+/* TX capture for the boot-time UBX-CFG-MSG module config */
+static uint8_t tx_cap[512];
+static size_t  tx_cap_len = 0;
+HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *huart,
+                                    const uint8_t *data, uint16_t size,
+                                    uint32_t timeout)
+{
+    (void)huart; (void)timeout;
+    for (uint16_t i = 0; i < size && tx_cap_len < sizeof(tx_cap); i++) {
+        tx_cap[tx_cap_len++] = data[i];
+    }
+    return HAL_OK;
+}
+static int tx_cap_contains_msg(uint8_t msg_id, uint8_t rate)
+{
+    /* frame: B5 62 06 01 08 00 F0 <id> 00 <rate> ... */
+    for (size_t i = 0; i + 10 <= tx_cap_len; i++) {
+        if (tx_cap[i]   == 0xB5 && tx_cap[i+1] == 0x62 &&
+            tx_cap[i+2] == 0x06 && tx_cap[i+3] == 0x01 &&
+            tx_cap[i+6] == 0xF0 && tx_cap[i+7] == msg_id &&
+            tx_cap[i+9] == rate) return 1;
+    }
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Byte-feeding helpers (simulate the RX-complete interrupt)           */
 /* ------------------------------------------------------------------ */
@@ -137,7 +162,7 @@ TEST(test_complete_sentence_parsed)
     CHECK(GPS_Init() == GPS_OK);
 
     feed_sentence("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
-    CHECK(gps_nmea_ready == 1);
+    CHECK(gps_pend_head != gps_pend_tail);
 
     GPS_Data gps;
     memset(&gps, 0, sizeof(gps));
@@ -154,7 +179,7 @@ TEST(test_unparseable_sentence_reports_error)
 {
     /* Complete framing but bad checksum: assembled, then parser rejects */
     feed_string("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,,*00\r\n");
-    CHECK(gps_nmea_ready == 1);
+    CHECK(gps_pend_head != gps_pend_tail);
 
     GPS_Data gps;
     memset(&gps, 0, sizeof(gps));
@@ -178,7 +203,7 @@ TEST(test_framing_error_byte_dropped)
     HAL_UART_RxCpltCallback(&huart_gps);
 
     CHECK(uart_byte_counter == bytes_before);  /* not counted */
-    CHECK(gps_nmea_index == 0);                /* not buffered */
+    CHECK(gps_isr_index == 0);                 /* not buffered */
     huart_gps.ErrorCode = HAL_UART_ERROR_NONE;
 
     /* Re-arm failure inside the error path sets the 0xF2 marker */
@@ -198,13 +223,13 @@ TEST(test_noise_before_start_char_ignored)
 
     /* Garbage with no leading '$' must never assemble a sentence */
     feed_string("garbage noise\r\n");
-    CHECK(gps_nmea_ready == 0);
+    CHECK(gps_pend_head == gps_pend_tail);
 
     /* A '$' mid-noise starts a fresh sentence cleanly */
     feed_sentence("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
-    CHECK(gps_nmea_ready == 1);
-    gps_nmea_ready = 0;
-    gps_nmea_index = 0;
+    CHECK(gps_pend_head != gps_pend_tail);
+    gps_pend_tail = gps_pend_head;             /* drain without parsing */
+    gps_isr_index = 0;
 }
 
 TEST(test_new_dollar_restarts_sentence)
@@ -212,10 +237,10 @@ TEST(test_new_dollar_restarts_sentence)
     /* A '$' arriving mid-sentence (lost terminator) restarts assembly
      * instead of corrupting the buffer */
     feed_string("$GPGGA,123");
-    CHECK(gps_nmea_index == 10);
+    CHECK(gps_isr_index == 10);
     feed_sentence("$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,,");
-    CHECK(gps_nmea_ready == 1);
-    CHECK(strncmp((char *)gps_nmea_buffer, "$GPRMC", 6) == 0);
+    CHECK(gps_pend_head != gps_pend_tail);
+    CHECK(strncmp((char *)gps_pending[gps_pend_tail], "$GPRMC", 6) == 0);
 
     GPS_Data gps;
     memset(&gps, 0, sizeof(gps));
@@ -230,21 +255,21 @@ TEST(test_buffer_overflow_resets_index)
      * normal sentence must still get through */
     feed_byte('$');
     for (int i = 0; i < GPS_BUFFER_SIZE + 10; i++) feed_byte('X');
-    CHECK(gps_nmea_ready == 0);
-    CHECK(gps_nmea_index == 0);                /* overflow reset */
+    CHECK(gps_pend_head == gps_pend_tail);
+    CHECK(gps_isr_index == 0);                 /* overflow reset */
 
     feed_sentence("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
-    CHECK(gps_nmea_ready == 1);
-    gps_nmea_ready = 0;
-    gps_nmea_index = 0;
+    CHECK(gps_pend_head != gps_pend_tail);
+    gps_pend_tail = gps_pend_head;
+    gps_isr_index = 0;
 }
 
 TEST(test_lf_without_cr_not_a_sentence)
 {
     /* "\n" terminator without the preceding "\r": incomplete framing */
     feed_string("$GPGGA,123\n");
-    CHECK(gps_nmea_ready == 0);
-    gps_nmea_index = 0;
+    CHECK(gps_pend_head == gps_pend_tail);
+    gps_isr_index = 0;
 }
 
 TEST(test_debug_rotation_covers_all_modes)
@@ -266,7 +291,7 @@ TEST(test_debug_rotation_covers_all_modes)
     for (int i = 0; i < 30; i++) {
         (void)GPS_Update(&gps);
     }
-    gps_nmea_index = 0;
+    gps_isr_index = 0;
 }
 
 TEST(test_rearm_when_uart_ready)
@@ -354,7 +379,72 @@ TEST(test_first_and_raw_capture_buffers_fill)
     CHECK(raw_capture_filled == 1);
     CHECK(first_10_bytes[0] == '0');
     CHECK(first_10_bytes[9] == '9');
-    gps_nmea_index = 0;
+    gps_isr_index = 0;
+}
+
+TEST(test_init_sends_ubx_msg_config)
+{
+    /* Boot-time message shaping: six CFG-MSG set-rate frames (legacy UBX,
+     * valid on NEO-6M-class modules) - GSV/GLL/VTG/GSA off, RMC/GGA on. */
+    tx_cap_len = 0;
+    CHECK(GPS_Init() == GPS_OK);
+    CHECK(tx_cap_contains_msg(0x03, 0));       /* GSV off  */
+    CHECK(tx_cap_contains_msg(0x01, 0));       /* GLL off  */
+    CHECK(tx_cap_contains_msg(0x05, 0));       /* VTG off  */
+    CHECK(tx_cap_contains_msg(0x02, 0));       /* GSA off  */
+    CHECK(tx_cap_contains_msg(0x04, 1));       /* RMC on   */
+    CHECK(tx_cap_contains_msg(0x00, 1));       /* GGA on   */
+}
+
+TEST(test_fix_latch_expires_when_stream_dies)
+{
+    /* Field-failure shape: antenna unplugged / module wedge mid-session.
+     * Without an age gate the latch returned 1 forever and main.c kept
+     * re-copying frozen coordinates as a live "L:Fix" until reboot. */
+    GPS_Data gps;
+    memset(&gps, 0, sizeof(gps));
+    Test_SetTick(100000);
+    feed_sentence("$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,,");
+    (void)GPS_Update(&gps);
+    CHECK(GPS_IsFixed() == 1);
+
+    /* Stream goes silent: beyond the stale window the fix expires */
+    Test_SetTick(100000 + GPS_FIX_STALE_MS + 1);
+    CHECK(GPS_IsFixed() == 0);
+
+    /* Sentences resume: the latch re-arm itself */
+    feed_sentence("$GPRMC,123520,A,4807.038,N,01131.000,E,022.4,084.4,230394,,");
+    (void)GPS_Update(&gps);
+    CHECK(GPS_IsFixed() == 1);
+    Test_SetTick(0);        /* leave the shared tick where others expect it */
+}
+
+TEST(test_pending_fifo_survives_stall_and_drops_oldest_none)
+{
+    /* Two sentences completing inside one main-loop stall (display frame
+     * write): BOTH must survive in FIFO order. */
+    GPS_Data gps;
+    memset(&gps, 0, sizeof(gps));
+    Test_SetTick(0);
+    uint32_t drops_before = gps_sentences_dropped;
+    feed_sentence("$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,,");
+    feed_sentence("$GPGGA,123519,4807.038,N,01131.000,E,1,09,0.9,545.4,M,46.9,M,,");
+    (void)GPS_Update(&gps);                    /* drains both in one call */
+    CHECK(gps_sentences_dropped == drops_before);
+    CHECK(gps.satellites == 9);                /* GGA (second) won */
+    CHECK(gps.fix == 1);
+    CHECK(gps_pend_head == gps_pend_tail);     /* queue empty */
+
+    /* Three completions in one stall: queue depth is 2, the newest is
+     * dropped and counted (position freshness beats completeness). */
+    feed_sentence("$GPRMC,123520,A,4807.038,N,01131.000,E,022.4,084.4,230394,,");
+    feed_sentence("$GPGGA,123520,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+    feed_sentence("$GPRMC,123521,A,4807.038,N,01131.000,E,022.4,084.4,230394,,");
+    CHECK(gps_sentences_dropped == drops_before + 1);
+    memset(&gps, 0, sizeof(gps));
+    (void)GPS_Update(&gps);
+    CHECK(gps.second == 20);                   /* third RMC (…521) was dropped */
+    CHECK(gps.satellites == 8);                /* but the GGA survived */
 }
 
 /* ------------------------------------------------------------------ */
@@ -362,7 +452,9 @@ TEST(test_first_and_raw_capture_buffers_fill)
 int main(void)
 {
     run_test_init_success_and_failure_paths();
+    run_test_init_sends_ubx_msg_config();
     run_test_complete_sentence_parsed();
+    run_test_pending_fifo_survives_stall_and_drops_oldest_none();
     run_test_unparseable_sentence_reports_error();
     run_test_framing_error_byte_dropped();
     run_test_noise_before_start_char_ignored();
@@ -373,6 +465,7 @@ int main(void)
     run_test_rearm_when_uart_ready();
     run_test_isr_plumbing();
     run_test_first_and_raw_capture_buffers_fill();
+    run_test_fix_latch_expires_when_stream_dies();
 
     return TEST_SUMMARY();
 }
