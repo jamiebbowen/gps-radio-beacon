@@ -85,34 +85,60 @@ static void gps_send_ubx(uint8_t cls, uint8_t id, const uint8_t *payload, uint16
     uart_tx_byte(ck_b);
 }
 
+/* Send a PUBX-style proprietary NMEA command, computing the checksum.
+ * Body excludes '$' and '*XX\r\n'. (The few PUBX commands M10 still
+ * honors: PUBX,41 port config, PUBX,04 reset.) */
+static void gps_send_pubx(const char *body) {
+    uint8_t ck = 0;
+    for (const char *p = body; *p; p++) ck ^= (uint8_t)*p;
+    char buf[96];
+    snprintf(buf, sizeof(buf), "$%s*%02X\r\n", body, ck);
+    uart_tx_string(buf);
+}
+
 // Initialize GPS for u-blox MAX-M10S
 void gps_init(void) {
     // Basic initialization
     gpsInitialized = 1;
     
-    // Allow more time for GPS to boot fully
+    /* Baud self-heal. Nothing in this boot path sets the module's baud,
+     * and the ONLY reason it currently speaks 115200 is saved config from
+     * some earlier setup. If that is ever lost (module swap, config
+     * reset) the module boots at the factory 9600 and every command -
+     * including watchdog recovery - would be spoken at the wrong baud
+     * forever (condition-1 silence, 3 attempts, cooldown, re-arm, repeat).
+     * Phase 1: listen at 9600 and command a switch to 115200 via PUBX,41
+     * (supported on M10). Phase 2: switch our UART and re-issue at the
+     * new baud. A module already at 115200 ignores phase 1's command and
+     * hears phase 2's. */
+    uart_set_baud(9600);
+    delay(50);
+    gps_send_pubx("PUBX,41,1,0007,0003,115200,0");  /* UART1, in UBX+NMEA+RTCM, out UBX+NMEA, 115200 */
+    delay(250);  /* let the module switch and drain any in-flight bytes */
+    uart_set_baud(115200);
+    delay(50);
+    flush_uart_buffer();
+    gps_send_pubx("PUBX,41,1,0007,0003,115200,0");  /* idempotent at 115200 */
     delay(10);
-    
-    // For u-blox MAX-M10S, configure NMEA protocol
-    // NMEA Standard messages: GGA, RMC, GSA, GSV, GLL, VTG
-    // Enable only NMEA GSV, GGA, and RMC messages
-    uart_tx_string("$PUBX,40,GGA,1,1,0,0,0,0*5B\r\n"); // Enable GGA on UART1
-    delay(10);
-    uart_tx_string("$PUBX,40,GSV,1,1,0,0,0,0*5A\r\n"); // Enable GSV for satellite info
-    delay(10);
-    
-    // Configure other NMEA messages
-    uart_tx_string("$PUBX,40,GSA,1,0,0,0,0,0*4E\r\n"); // Disable GSA
-    delay(10); 
-    uart_tx_string("$PUBX,40,RMC,1,1,0,0,0,0*25\r\n"); // Enable RMC on UART1
-    delay(10);
-    uart_tx_string("$PUBX,40,GLL,1,0,0,0,0,0*5C\r\n"); // Disable GLL
-    delay(10);
-    uart_tx_string("$PUBX,40,VTG,1,0,0,0,0,0*5E\r\n"); // Disable VTG
-    delay(10);
-    
-    // Configure update rate to 1Hz
-    uart_tx_string("$PUBX,40,00,0,1,0,0,0,0*A7\r\n");
+
+    /* Message/rate config. The MAX-M10S REMOVED the legacy NMEA-era
+     * config interface: PUBX,40 (message rates/rateset) is silently
+     * ignored, so the old code here never did anything - the module kept
+     * its default message set (field evidence 2026-09-07: $GNGLL flowing
+     * despite the PUBX,40 "Disable GLL" line). Configure via
+     * UBX-CFG-VALSET with CFG-MSGOUT-* keys instead (U1 rate values:
+     * 1 = every nav solution, 0 = off), plus an explicit 1 Hz rate. */
+    const uint8_t valset_msgs[] = {
+        0x00, 0x01, 0x00, 0x00,              /* version, layers=RAM, reserved */
+        0xBB, 0x00, 0x91, 0x20, 0x01,        /* CFG-MSGOUT-NMEA_ID_GGA_UART1 = on  */
+        0xAC, 0x00, 0x91, 0x20, 0x01,        /* CFG-MSGOUT-NMEA_ID_RMC_UART1 = on  */
+        0xC5, 0x00, 0x91, 0x20, 0x01,        /* CFG-MSGOUT-NMEA_ID_GSV_UART1 = on  */
+        0xC0, 0x00, 0x91, 0x20, 0x00,        /* CFG-MSGOUT-NMEA_ID_GSA_UART1 = off */
+        0xCA, 0x00, 0x91, 0x20, 0x00,        /* CFG-MSGOUT-NMEA_ID_GLL_UART1 = off */
+        0xB1, 0x00, 0x91, 0x20, 0x00,        /* CFG-MSGOUT-NMEA_ID_VTG_UART1 = off */
+        0x01, 0x00, 0x21, 0x30, 0xE8, 0x03,  /* CFG-RATE-MEAS = 1000 ms (U2 LE)    */
+    };
+    gps_send_ubx(0x06, 0x8A, valset_msgs, sizeof(valset_msgs));
     delay(10);
 
     /* Set the navigation dynamic model to airborne <4g via UBX-CFG-VALSET

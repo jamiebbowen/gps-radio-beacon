@@ -69,6 +69,24 @@ void uart_tx_string(const char *s)
     while (*s) uart_tx_byte((uint8_t)*s++);
 }
 
+/* Record baud switches (the 9600->115200 self-heal dance) */
+static uint32_t baud_calls[8];
+static int      baud_call_count = 0;
+void uart_set_baud(uint32_t baud)
+{
+    if (baud_call_count < 8) baud_calls[baud_call_count++] = baud;
+}
+
+/* strstr cannot find bytes past a NUL (binary UBX frames contain 0x00) */
+static int log_contains_bytes(const uint8_t *needle, size_t n)
+{
+    if (uart_tx_len < n) return 0;
+    for (size_t i = 0; i <= uart_tx_len - n; i++) {
+        if (memcmp((uint8_t*)uart_tx_log + i, needle, n) == 0) return 1;
+    }
+    return 0;
+}
+
 /* nav layer capture */
 static int   nav_updates = 0;
 static float nav_last_lat = 0, nav_last_lon = 0, nav_last_alt = 0;
@@ -97,6 +115,7 @@ static void reset_uart_capture(void)
 {
     uart_tx_len = 0;
     uart_tx_log[0] = '\0';
+    baud_call_count = 0;
 }
 
 /** Feed one sentence and poll it through.
@@ -124,9 +143,27 @@ TEST(test_init_sends_ublox_config)
     reset_uart_capture();
     gps_init();
     CHECK(gpsInitialized == 1);
-    CHECK(strstr(uart_tx_log, "$PUBX,40,GGA,1,1") != NULL);   /* GGA on  */
-    CHECK(strstr(uart_tx_log, "$PUBX,40,GLL,1,0") != NULL);   /* GLL off */
-    CHECK(strstr(uart_tx_log, "$PUBX,40,RMC,1,1") != NULL);   /* RMC on  */
+
+    /* Baud self-heal dance: try 9600, command 115200 via PUBX,41, switch,
+     * re-issue at the new baud (a factory-reset module must recover). */
+    CHECK(baud_call_count == 2);
+    CHECK(baud_calls[0] == 9600);
+    CHECK(baud_calls[1] == 115200);
+    CHECK(strstr(uart_tx_log, "$PUBX,41,1,0007,0003,115200,0") != NULL);
+
+    /* M10 honors VALSET only (legacy PUBX,40 is silently ignored - 2026-09-07
+     * field log showed default-config GLL still flowing). Check the VALSET
+     * frame header and the GGA-on / GLL-off key+value pairs inside it. */
+    static const uint8_t ubx_hdr[]  = { 0xB5, 0x62, 0x06, 0x8A };
+    static const uint8_t gga_on[]   = { 0xBB, 0x00, 0x91, 0x20, 0x01 };
+    static const uint8_t gll_off[]  = { 0xCA, 0x00, 0x91, 0x20, 0x00 };
+    static const uint8_t rmc_on[]   = { 0xAC, 0x00, 0x91, 0x20, 0x01 };
+    static const uint8_t rate_1hz[] = { 0x01, 0x00, 0x21, 0x30, 0xE8, 0x03 };
+    CHECK(log_contains_bytes(ubx_hdr,  sizeof(ubx_hdr)));
+    CHECK(log_contains_bytes(gga_on,   sizeof(gga_on)));
+    CHECK(log_contains_bytes(gll_off,  sizeof(gll_off)));
+    CHECK(log_contains_bytes(rmc_on,   sizeof(rmc_on)));
+    CHECK(log_contains_bytes(rate_1hz, sizeof(rate_1hz)));
 
     /* gps_tx_string passthrough (and NULL safety) */
     reset_uart_capture();
@@ -274,7 +311,7 @@ TEST(test_watchdog_silent_uart_recovery)
 
     CHECK(gps_recovery_attempts == 1);
     CHECK(strstr(uart_tx_log, "$PUBX,00") != NULL);        /* poll request */
-    CHECK(strstr(uart_tx_log, "$PUBX,40,GGA,1,1") != NULL);/* gps_init ran */
+    CHECK(strstr(uart_tx_log, "$PUBX,41,1,0007,0003,115200,0") != NULL); /* gps_init ran */
     CHECK(HB_GPS_RESETS(gps_get_health()) == 1);
 
     /* Data resumes with a fix: attempt counter clears */

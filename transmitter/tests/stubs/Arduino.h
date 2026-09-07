@@ -121,6 +121,7 @@ public:
     unsigned long baud = 0;
 
     void begin(unsigned long b) { baud = b; }
+    void end() {}
     int  available() { return (int)(rx_tail - rx_head); }
     int  read() {
         if (rx_head == rx_tail) return -1;

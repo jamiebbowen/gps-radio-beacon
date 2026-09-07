@@ -8,6 +8,10 @@
 // UART initialization for GPS communication
 void uart_init(void);
 
+// Switch the GPS UART baud rate (for the power-on 9600->115200 dance:
+// a module with lost saved config boots at the factory 9600)
+void uart_set_baud(uint32_t baud);
+
 // Check if data is available to read
 bool uart_data_available(void);
 

@@ -33,6 +33,11 @@ void uart_init(void) {
     }
 }
 
+void uart_set_baud(uint32_t baud) {
+    GPS_SERIAL.end();
+    GPS_SERIAL.begin(baud);
+}
+
 void flush_uart_buffer(void) {
     // Clear any pending data in the hardware buffer
     while (GPS_SERIAL.available()) {
