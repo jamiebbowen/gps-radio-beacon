@@ -40,6 +40,7 @@ static uint8_t LoRa_ReadCommand(uint8_t cmd, uint8_t *data, uint8_t data_len);
 static uint8_t LoRa_WriteBuffer(uint8_t offset, const uint8_t *data, uint8_t length);
 static uint8_t LoRa_ReadBuffer(uint8_t offset, uint8_t *data, uint8_t length);
 static uint8_t LoRa_SetRfFrequencyMHz(float freq_mhz);
+static uint8_t LoRa_WriteRegister(uint16_t addr, const uint8_t *data, uint8_t len);
 
 /**
  * @brief Initialize LoRa module
@@ -169,6 +170,18 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
         return 0xB5;  // RF frequency command failed
     }
     lora_current_channel = 0;
+
+    /* Band-specific image calibration for the 430-440 MHz band containing
+     * the entire channel plan. The blanket CALIBRATE (0x7F) later re-uses
+     * whatever band was last captured here; per the SX1268 datasheet the
+     * image path must be calibrated for the band actually in use or image
+     * rejection degrades - worst right where we listen, at the noise floor. */
+    {
+        uint8_t img_params[2] = {0x6B, 0x6F};   /* 430-440 MHz (DS table) */
+        if (LoRa_SendCommand(SX1268_CMD_CALIBRATEIMAGE, img_params, 2) != LORA_OK) {
+            return 0xC9;  // Image calibration command failed
+        }
+    }
     
     /* Set PA configuration (for +22dBm output) */
     uint8_t pa_params[4] = {
@@ -223,8 +236,30 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
         return 0xC4;  // Packet params command failed
     }
     
-    /* SKIP sync word for now - register write may cause issues */
-    /* Module will use default sync word */
+    /* Write the LoRa sync word explicitly. The transmitter programs the
+     * private sync word 0x12 via RadioLib, which lands in registers
+     * 0x0740/0x0741 in the nibble-expanded form {0x14, 0x24}. Relying on
+     * the chip's power-on default was a silent assumption: any mismatch
+     * costs exact-match header detection precisely at marginal SNR -
+     * i.e. range. Field logs (park walk tests) showed the link dying ~40 dB
+     * short of the datasheet sensitivity, which is exactly the failure
+     * shape this assumption would produce. */
+    {
+        uint8_t sync_word[2] = {0x14, 0x24};   /* private sync word 0x12 */
+        if (LoRa_WriteRegister(SX1268_REG_LORA_SYNC_WORD_MSB, sync_word, 2) != LORA_OK) {
+            return 0xCA;  // Sync word write failed
+        }
+    }
+
+    /* Boosted RX gain: register 0x08AC = 0x96 buys ~3 dB of sensitivity for
+     * ~2 mA extra current. The default 0x94 (power-saving gain) is the wrong
+     * trade on a receiver whose entire job is hearing the faintest beacon. */
+    {
+        uint8_t gain_boost = 0x96;
+        if (LoRa_WriteRegister(SX1268_REG_RX_GAIN, &gain_boost, 1) != LORA_OK) {
+            return 0xCB;  // RX gain boost write failed
+        }
+    }
     
     /* Set buffer base addresses */
     uint8_t buf_params[2] = {0x00, 0x00}; // TX base, RX base
@@ -731,6 +766,18 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
 }
 
 /* ===== Private Functions ===== */
+
+/**
+ * @brief Write a register via WriteRegister (0x0D): cmd, addr MSB, addr LSB, data...
+ */
+static uint8_t LoRa_WriteRegister(uint16_t addr, const uint8_t *data, uint8_t len) {
+    uint8_t buf[2 + 4];
+    if (data == NULL || len == 0 || len > 4) return LORA_ERROR;
+    buf[0] = (uint8_t)(addr >> 8);
+    buf[1] = (uint8_t)(addr & 0xFF);
+    memcpy(&buf[2], data, len);
+    return LoRa_SendCommand(SX1268_CMD_WRITE_REGISTER, buf, (uint8_t)(2 + len));
+}
 
 /**
  * @brief Program the SX1268 RF frequency (PLL step = 32 MHz / 2^25)

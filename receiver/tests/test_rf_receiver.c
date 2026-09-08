@@ -843,11 +843,34 @@ TEST(test_auto_rescan_after_prolonged_silence)
     (void)RF_Receiver_ScanUpdate();
     CHECK(RF_Receiver_IsScanning() == 1);
 
+    /* Re-acquire specifics (regression: L0002 park walk - 9 min blackout
+     * at the range edge with the beacon on 60 s battery-save cadence):
+     * CAD is skipped (it cannot see preambles at marginal SNR) and the
+     * first dwell sits on the current channel for a full battery-save
+     * period, which a 6.5 s dwell could never guarantee. */
+    CHECK(scan_cad_phase == 0);
+    fake_cad_available = 1;
+    fake_cad_starts = 0;
+
+    uint8_t home_ch = RF_Receiver_GetChannel();
+    run_for(61000, 250);                      /* < 62 s: still dwelling */
+    (void)RF_Receiver_ScanUpdate();
+    CHECK(fake_cad_starts == 0);
+    CHECK(RF_Receiver_GetChannel() == home_ch);
+
+    run_for(2000, 250);                       /* one full TX slot later */
+    CHECK(RF_Receiver_ScanUpdate() == 0);
+    CHECK(RF_Receiver_GetChannel() == (uint8_t)((home_ch + 1) % LORA_CHANNEL_COUNT));
+    /* After the first hop the dwell returns to the pad-cadence value */
+    CHECK(scan_dwell_len_ms == RF_SCAN_DWELL_MS);
+
     /* A new packet locks the scan again */
     inject_gps_packet(39.89, -105.11);
     run_for(250, 250);
     CHECK(RF_Receiver_ScanUpdate() == 1);
     CHECK(RF_Receiver_IsScanning() == 0);
+
+    fake_cad_available = 0;   /* restore test-suite default */
 }
 
 int main(void)

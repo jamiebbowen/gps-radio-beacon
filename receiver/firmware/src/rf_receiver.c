@@ -34,6 +34,18 @@
 #define RF_SCAN_CAD_RX_WAIT_MS     800U    /* detection -> packet grace period */
 #define RF_SCAN_CAD_MAX_STRIKES    3U      /* timed-out CADs before fallback */
 
+/* Auto re-scan after contact loss. Two differences from the boot scan:
+ *   1. CAD is skipped - at the marginal SNR that caused the loss, CAD
+ *      physically cannot see the preamble, so the 30 s fast phase would be
+ *      pure dead time.
+ *   2. The first dwell sits on the CURRENT channel for just over one
+ *      battery-save period. A beacon we already locked almost certainly did
+ *      not hop channels; it went out of range. Its slowest state
+ *      (BATTERY_SAVE_INTERVAL_SEC = 60 s) transmits once per 60 s, which a
+ *      6.5 s-per-channel lap over 8 channels misses by construction (~90%
+ *      of laps see nothing). 62 s guarantees exactly one full TX slot. */
+#define RF_SCAN_REACQ_DWELL_MS   62000UL
+
 /* CAD scan sub-states */
 #define RF_CAD_IDLE     0   /* next update starts a CAD */
 #define RF_CAD_RUNNING  1   /* CAD in flight, polling for the result */
@@ -75,6 +87,7 @@ static uint32_t last_any_packet_ms = 0;
 #define RF_AUTO_RESCAN_SILENCE_MS  300000UL   /* 5 min = 5x slowest cadence */
 static uint32_t scan_dwell_start = 0;
 static uint32_t scan_dwell_pkt_count = 0;
+static uint32_t scan_dwell_len_ms = RF_SCAN_DWELL_MS;  /* current dwell length */
 static uint8_t scan_cad_phase = 0;       /* 1 = CAD fast phase, 0 = dwell */
 static uint32_t scan_cad_phase_start = 0;
 static uint8_t scan_cad_state = RF_CAD_IDLE;
@@ -808,10 +821,27 @@ void RF_Receiver_StartScan(void)
   scan_active = 1;
   scan_dwell_start = HAL_GetTick();
   scan_dwell_pkt_count = rf_lora_packets_received;
+  scan_dwell_len_ms = RF_SCAN_DWELL_MS;
   scan_cad_phase = 1;
   scan_cad_phase_start = scan_dwell_start;
   scan_cad_state = RF_CAD_IDLE;
   scan_cad_strikes = 0;
+}
+
+/**
+ * @brief Re-acquire after contact loss: dwell long on the current channel,
+ *        skip the CAD phase. See RF_SCAN_REACQ_DWELL_MS.
+ */
+static void RF_Scan_StartReacquire(void)
+{
+  scan_active = 1;
+  scan_dwell_start = HAL_GetTick();
+  scan_dwell_pkt_count = rf_lora_packets_received;
+  scan_dwell_len_ms = RF_SCAN_REACQ_DWELL_MS;
+  scan_cad_phase = 0;                 /* straight to the dwell phase */
+  scan_cad_state = RF_CAD_IDLE;
+  scan_cad_strikes = 0;
+  (void)LoRa_SetReceiveMode();        /* CAD never ran, but be explicit */
 }
 
 /**
@@ -846,6 +876,7 @@ static void RF_Scan_FallbackToDwell(void)
   (void)LoRa_SetReceiveMode();
   scan_dwell_start = HAL_GetTick();
   scan_dwell_pkt_count = rf_lora_packets_received;
+  scan_dwell_len_ms = RF_SCAN_DWELL_MS;
 }
 
 /**
@@ -860,7 +891,7 @@ uint8_t RF_Receiver_ScanUpdate(void)
    * the air is a deliberate choice - don't override it). */
   if (!scan_active && last_any_packet_ms != 0 &&
       (HAL_GetTick() - last_any_packet_ms) > RF_AUTO_RESCAN_SILENCE_MS) {
-    RF_Receiver_StartScan();
+    RF_Scan_StartReacquire();
     return 0;
   }
 
@@ -954,13 +985,18 @@ uint8_t RF_Receiver_ScanUpdate(void)
    * we'll get - they are 1 per dwell) would be lost and the scan would keep
    * cycling past a live beacon. Let DataAvailable() read it first; the lock
    * check above fires on the next call. */
-  if (HAL_GetTick() - scan_dwell_start >= RF_SCAN_DWELL_MS) {
+  if (HAL_GetTick() - scan_dwell_start >= scan_dwell_len_ms) {
     if (LoRa_PacketAvailable()) {
       return 0;
     }
     (void)RF_Receiver_NextChannel();
     scan_dwell_start = HAL_GetTick();
     scan_dwell_pkt_count = rf_lora_packets_received;
+    /* The long re-acquire dwell applies to the FIRST channel only; after
+     * the hop we're looking for a beacon that really did change channels,
+     * which the nominal dwell (one full packet period of the pad cadence)
+     * still guarantees to catch. */
+    scan_dwell_len_ms = RF_SCAN_DWELL_MS;
   }
   
   return 0;

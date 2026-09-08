@@ -48,6 +48,10 @@ static uint8_t  chip_snr_raw     = 0x14;   /* +20/4 = +5 dB          */
 static uint8_t  chip_rssi_inst   = 200;    /* -> -100 dBm ambient    */
 static uint32_t chip_freq_reg    = 0;      /* last programmed PLL word */
 static uint8_t  chip_cad_starts  = 0;
+static uint8_t  chip_sync_word[2] = {0, 0}; /* last write to reg 0x0740 */
+static uint8_t  chip_rx_gain     = 0;       /* last write to reg 0x08AC */
+static uint8_t  chip_img_freq1   = 0;       /* CalibrateImage params     */
+static uint8_t  chip_img_freq2   = 0;
 
 /* Fault knobs */
 static uint8_t  fake_busy_pin    = 0;      /* BUSY stuck high         */
@@ -74,6 +78,11 @@ static void chip_reset_state(void)
     chip_mode = 2;
     chip_irq = 0;
     chip_payload_len = 0;
+    chip_sync_word[0] = 0;
+    chip_sync_word[1] = 0;
+    chip_rx_gain = 0;
+    chip_img_freq1 = 0;
+    chip_img_freq2 = 0;
     fake_busy_pin = 0;
     fake_status_byte = 0x42;
     fail_after_txns = -1;
@@ -107,6 +116,24 @@ static void chip_handle_txn(void)
             if (txn_len >= 5) {
                 chip_freq_reg = ((uint32_t)txn[1] << 24) | ((uint32_t)txn[2] << 16)
                               | ((uint32_t)txn[3] << 8) | txn[4];
+            }
+            break;
+        case SX1268_CMD_WRITE_REGISTER:
+            if (txn_len >= 4) {
+                uint16_t addr = ((uint16_t)txn[1] << 8) | txn[2];
+                if (addr == SX1268_REG_LORA_SYNC_WORD_MSB && txn_len >= 5) {
+                    chip_sync_word[0] = txn[3];
+                    chip_sync_word[1] = txn[4];
+                }
+                if (addr == SX1268_REG_RX_GAIN) {
+                    chip_rx_gain = txn[3];
+                }
+            }
+            break;
+        case SX1268_CMD_CALIBRATEIMAGE:
+            if (txn_len >= 3) {
+                chip_img_freq1 = txn[1];
+                chip_img_freq2 = txn[2];
             }
             break;
         default: break;
@@ -298,6 +325,15 @@ TEST(test_init_success)
     /* CH0 = 433.0 MHz -> PLL word 433e6 / 32e6 * 2^25 */
     uint32_t expect = (uint32_t)((double)433000000.0 / 32000000.0 * 33554432.0);
     CHECK(chip_freq_reg == expect);
+
+    /* Sensitivity-critical register writes (range fixes):
+     *  - sync word explicitly programmed, nibble-expanded private 0x12,
+     *    matching the RadioLib transmitter (default is NOT assumed)
+     *  - boosted RX gain instead of power-saving
+     *  - image calibration for the 430-440 MHz band */
+    CHECK(chip_sync_word[0] == 0x14 && chip_sync_word[1] == 0x24);
+    CHECK(chip_rx_gain == 0x96);
+    CHECK(chip_img_freq1 == 0x6B && chip_img_freq2 == 0x6F);
 }
 
 TEST(test_init_failure_paths)
@@ -323,7 +359,7 @@ TEST(test_init_failure_paths)
      * distinct codes and verify all of them surfaced. */
     uint8_t seen[32];
     int seen_n = 0;
-    for (int n = 1; n <= 18; n++) {
+    for (int n = 1; n <= 24; n++) {
         chip_reset_state();
         fail_after_txns = n;
         uint8_t r = LoRa_Init(&hspi);
@@ -335,6 +371,7 @@ TEST(test_init_failure_paths)
     static const uint8_t expected[] = {
         0xB3,       /* TCXO busy-timeout */
         0xB2, 0xB4, 0xB5, 0xC1, 0xC2, 0xC3, 0xC4, 0xC6, 0xC7, 0xC8,
+        0xC9, 0xCA, 0xCB,  /* image cal, sync word, RX gain boost */
         0xB9, 0xBA  /* the two SetRx steps */
     };
     for (size_t i = 0; i < sizeof(expected); i++) {

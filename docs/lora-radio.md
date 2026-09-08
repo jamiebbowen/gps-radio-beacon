@@ -57,12 +57,17 @@ Both transmitter and receiver use identical settings:
 |-----------|-------|-------------|
 | Frequency | 433.0 MHz | ISM band (8-channel plan, 433.00-434.75 MHz) |
 | Bandwidth | 125 kHz | Standard LoRa BW |
-| Spreading Factor | 7 | SF7 (fast over-the-air time for 10 Hz fused packets) |
+| Spreading Factor | 9 | SF9 (range over airtime; fused cadence fits fine) |
 | Coding Rate | 4/7 | Forward error correction |
-| Sync Word | 0x12 | Private network |
-| TX Power | 22 dBm | Maximum for E22-400M33S |
-| Preamble Length | 8 symbols | Standard |
+| Sync Word | 0x12 | Private network; RX programs it explicitly (reg 0x0740 = `14 24`) |
+| TX Power | 22 dBm | SX1268 *chip* maximum; the E22-400M33S PA headroom is not driven (under evaluation) |
+| Preamble Length | 16 symbols (TX) | Doubles CAD-scan catch odds; RX preamble setting is don't-care |
 | CRC | Enabled | Packet integrity check |
+
+Receiver-specific radio tuning (lora.c): boosted RX gain (reg 0x08AC = 0x96,
+~+3 dB vs default power-saving) and band-specific image calibration for
+430-440 MHz (CalibrateImage 0x6B/0x6F). Both were missing until the 2026-09
+range investigation and matter most at the marginal end of the link.
 
 ## Packet Format
 
@@ -94,14 +99,17 @@ Before deploying, verify:
 
 ## Expected Performance
 
-### Range Improvements
+### Range Expectations
 - **Previous (300 baud UART):** ~500m line-of-sight
-- **LoRa SF7 @ 433MHz:** ~2-5km line-of-sight, ~10-15km with good antennas
+- **LoRa SF9 @ 433MHz, boosted RX gain:** datasheet floor ~-128 dBm; real-world
+  range depends mostly on antenna installation and the receiver-side noise
+  floor (park walk tests 2026-09: ~2.8 km through trees at ~6 dB above the
+  local -70 dBm ambient floor)
 
 ### Link Budget
-- TX Power: +22 dBm
-- RX Sensitivity (SF7): ~-123 dBm
-- Link Budget: ~145 dB (excellent for rocketry applications)
+- TX Power: +22 dBm (chip max; module PA not driven)
+- RX Sensitivity (SF9, BW125): ~-128 dBm datasheet, before local noise floor
+- Link Budget: ~150 dB on paper; in practice capped by the RX ambient floor
 
 ### Data Rate
 - SF7 @ 125kHz: ~5.5 kbps effective (GPS packet ~56 ms airtime)

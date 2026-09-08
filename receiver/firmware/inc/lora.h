@@ -100,6 +100,11 @@ extern "C" {
 #define SX1268_CMD_SET_LORASYMBTIMEOUT      0xA0
 #define SX1268_CMD_READ_REGISTER            0x1D
 #define SX1268_CMD_WRITE_REGISTER           0x0D
+
+/* SX1268 registers reached via READ/WRITE_REGISTER */
+#define SX1268_REG_LORA_SYNC_WORD_MSB       0x0740  /* nibble-expanded sync word */
+#define SX1268_REG_LORA_SYNC_WORD_LSB       0x0741
+#define SX1268_REG_RX_GAIN                  0x08AC  /* 0x94 power-save, 0x96 boosted */
 #define SX1268_CMD_READ_BUFFER              0x1E
 #define SX1268_CMD_WRITE_BUFFER             0x0E
 #define SX1268_CMD_GET_STATUS               0xC0
