@@ -102,7 +102,7 @@ void timer_isr_handler(void) {
         
         switch (beacon_state) {
             case BEACON_STATE_PRE_LAUNCH:
-                // Pre-launch - transmit every 30 seconds
+                // Pre-launch - transmit every PRE_LAUNCH_INTERVAL_SEC
                 if (time_since_last_tx >= PRE_LAUNCH_INTERVAL_SEC) {
                     Serial.print(F("[Timer] Setting beacon flag. Time since last TX: "));
                     Serial.println(time_since_last_tx);
@@ -347,13 +347,15 @@ void loop() {
 
 #if IMU_FUSION_ENABLED
     /* Fused-packet cadence: FUSED_TX_INTERVAL_MS in LAUNCH/POST_LAUNCH for
-     * smooth interpolated telemetry, once per GPS packet otherwise.  Kept
-     * separate from the GPS-packet TX path so both streams coexist. */
+     * smooth interpolated telemetry, FUSED_TX_INTERVAL_IDLE_MS everywhere
+     * else (pad + battery-save) to keep the PA quiet between updates.
+     * Kept separate from the GPS-packet TX path so both streams coexist. */
     static uint32_t last_fused_tx_ms = 0;
     uint32_t now_ms = millis();
     bool active_phase = (beacon_state == BEACON_STATE_LAUNCH)
                      || (beacon_state == BEACON_STATE_POST_LAUNCH);
-    uint32_t fused_interval_ms = active_phase ? FUSED_TX_INTERVAL_MS : 1000u;
+    uint32_t fused_interval_ms = active_phase ? FUSED_TX_INTERVAL_MS
+                                              : FUSED_TX_INTERVAL_IDLE_MS;
     if (nav_is_valid() && (now_ms - last_fused_tx_ms >= fused_interval_ms)) {
         beacon_transmit_fused_data(system_time_seconds, transmit_fast_flag);
         last_fused_tx_ms = now_ms;

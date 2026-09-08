@@ -467,7 +467,7 @@ uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
   /* Parse flags. Landed is carried on this stream as well (FLAG_LANDED):
    * the nav page chips read it from either packet type, and updating it
    * here keeps LANDED from flapping between the FUS stream (sets it) and
-   * the raw GPS stream (would otherwise clear it every 5 s). */
+   * the raw GPS stream (would otherwise clear it every pad interval). */
   parsed_gps_data.launch_detected = (flags & FLAG_LAUNCH_DETECTED) ? 1 : 0;
   parsed_gps_data.fused_landed    = (flags & FLAG_LANDED)          ? 1 : 0;
   parsed_gps_data.fix = flags & FLAG_FIX_TYPE_MASK;  /* Bits 3-0: GPS fix type */

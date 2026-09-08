@@ -87,9 +87,16 @@
 #define NAV_ANCHOR_CONFIRM_M            30.0f
 
 /* Fused-packet transmit cadence in LAUNCH state. Set to 10 Hz so we get
- * smoothed interpolation between 1 Hz GPS fixes. Ignored when state machine
- * isn't in LAUNCH / POST_LAUNCH (uses state-machine cadence there). */
+ * smoothed interpolation between 1 Hz GPS fixes. */
 #define FUSED_TX_INTERVAL_MS            100
+
+/* Fused-packet cadence in every non-flight state (pad idle, post-landing
+ * battery-save). Was 1 Hz: at full PA drive that ~170 ms-every-second
+ * burst pattern desenses GPS front ends nearby (the beacon's own included)
+ * - field logs showed the beacon GPS needing three watchdog recovery rounds
+ * before its first fix. Every 10 s cuts pad duty from ~17% to under 2%
+ * while still refreshing the operator's display healthily. */
+#define FUSED_TX_INTERVAL_IDLE_MS       10000
 
 #if TESTING_MODE
     // Testing Configuration - Fast intervals for development/testing
@@ -105,7 +112,10 @@
     
 #else
     // Production Configuration - Conservative intervals for flight
-    #define PRE_LAUNCH_INTERVAL_SEC         5     // 5 seconds between transmissions in pre-launch
+    #define PRE_LAUNCH_INTERVAL_SEC         20    // 20 s between raw GPS packets on the pad
+                                                  // (was 5 s - full-power bursts at pad cadence
+                                                  //  desense nearby GPS front ends; the RX preflight
+                                                  //  link gate and scan invariant are budgeted at 20 s)
     #define POST_LAUNCH_DURATION_SEC        1     // 1 second in LAUNCH state before POST_LAUNCH
     #define POST_LAUNCH_RECOVERY_DURATION_SEC 600 // 10 minutes duration in post-launch state
     #define BATTERY_SAVE_INTERVAL_SEC       60    // 60 seconds between transmissions in battery save

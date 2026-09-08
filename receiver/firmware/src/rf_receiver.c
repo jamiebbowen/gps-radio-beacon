@@ -15,11 +15,13 @@
 /* Private defines */
 #define RF_ASCII_BUFFER_SIZE       128
 
-/* Channel-scan dwell time. Must exceed the transmitter's slowest pad-state
- * packet interval (PRE_LAUNCH_INTERVAL_SEC = 5 s) so a beacon with GPS lock
- * cannot slip between hops. A beacon with NO fix only sends its callsign
- * every 5 min, so the scan may cycle for a while - that is expected; it
- * locks on the first CRC-valid packet from any channel. */
+/* Channel-scan dwell time. Exceeds the no-fix heartbeat cadence (5 s) so
+ * a beacon that can't see the sky is still caught deterministically. A
+ * beacon WITH a fix beaconed less predictably ever since PRE_LAUNCH went
+ * to 20 s + fused at 10 s (GPS-desense fix): each 6.5 s dwell on the right
+ * channel now has ~65% odds of catching a fused packet, so lock lands
+ * statistically within one or two 52 s laps instead of one. Lock still
+ * fires on the first CRC-valid packet from any channel. */
 #define RF_SCAN_DWELL_MS           6500U
 
 /* CAD fast-scan phase: sniff each channel for a LoRa preamble (~20 ms per
