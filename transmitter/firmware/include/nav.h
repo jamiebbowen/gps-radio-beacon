@@ -31,6 +31,8 @@ typedef struct {
     bool     gps_fresh;    /* true if GPS updated within NAV_DR_TIMEOUT_S */
     bool     dead_reckoning;
     bool     imu_healthy;
+    bool     sensor_degraded; /* BNO085 dead (init failed / silent >
+                               * NAV_SENSOR_DEAD_MS) - level, not a latch */
     bool     valid;        /* false until origin is anchored */
 } NavFused_t;
 

@@ -274,6 +274,19 @@ void nav_get_fused(NavFused_t *out) {
     out->imu_healthy   = (imu_last_accel_ms() > 0) && (imu_age_ms < 500u)
                       && imu_has_quaternion();
 
+    /* FUSED_FLAG_SENSOR_DEGRADED: the BNO085 is the EKF's only inertial
+     * source, so "degraded" = init failed at boot, the stream never
+     * started, or it went silent past NAV_SENSOR_DEAD_MS (wedged I2C, or
+     * a chip reset being recovered through the wasReset() re-enable - i.e.
+     * "in retry"). A level, not a latch: it clears when the stream comes
+     * back. Where imu_healthy answers "staleness right now" (500 ms),
+     * this answers "the sensor is actually gone" so the RX preflight page
+     * can tell a dead IMU apart from an ordinary fix gap. */
+    out->sensor_degraded =
+           !launch_detect_get_imu_status()
+        || (now > NAV_SENSOR_DEAD_MS && imu_last_accel_ms() == 0)
+        || (imu_last_accel_ms() > 0 && imu_age_ms > NAV_SENSOR_DEAD_MS);
+
     out->valid = true;
 }
 

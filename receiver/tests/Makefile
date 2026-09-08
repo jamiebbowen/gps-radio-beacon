@@ -43,7 +43,7 @@ $(BUILD)/test_gps: test_gps.c $(SRC_DIR)/gps.c \
 # images (that IS the test - the firmware's format-recovery path). LittleFS
 # confirms each such mount with an expected "Corrupted dir pair" diagnostic
 # on stderr; silencing it keeps real failures visible in the output.
-LFS_DIR  := ../../firmware/lib/littlefs
+LFS_DIR  := ../firmware/lib/littlefs
 LFS_CFLAGS := -I$(LFS_DIR) -DLFS_NO_MALLOC -DLFS_NO_DEBUG -DLFS_NO_WARN -DLFS_NO_ERROR
 $(BUILD)/test_sd_card: test_sd_card.c $(SRC_DIR)/sd_card.c \
                        $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c test_harness.h | $(BUILD)

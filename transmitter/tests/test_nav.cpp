@@ -50,6 +50,9 @@ void imu_get_linear_accel_body(float *x, float *y, float *z)
 }
 uint32_t imu_last_accel_ms(void) { return fake_accel_ms; }
 
+static bool fake_imu_initialized = true;
+bool launch_detect_get_imu_status(void) { return fake_imu_initialized; }
+
 /* Include the module under test (real ekf.cpp is linked separately) */
 #include "../firmware/nav.cpp"
 
@@ -358,6 +361,68 @@ TEST(test_freshness_flags_age_out)
     CHECK(f.age_ds == 255);
 }
 
+TEST(test_sensor_degraded_silence_window)
+{
+    fresh_nav_with_anchor();
+    fake_accel_ms = now_ms;
+
+    NavFused_t f;
+    nav_get_fused(&f);
+    CHECK(f.sensor_degraded == false);          /* stream is live */
+
+    /* Exactly at the window: still just "stale", not "dead" */
+    now_ms += NAV_SENSOR_DEAD_MS;
+    nav_get_fused(&f);
+    CHECK(f.sensor_degraded == false);
+
+    /* Past the window: the BNO085 is gone */
+    now_ms += 1;
+    nav_get_fused(&f);
+    CHECK(f.sensor_degraded == true);
+}
+
+TEST(test_sensor_degraded_is_a_level_not_a_latch)
+{
+    fresh_nav_with_anchor();
+    fake_accel_ms = now_ms;
+    now_ms += NAV_SENSOR_DEAD_MS + 1;
+
+    NavFused_t f;
+    nav_get_fused(&f);
+    CHECK(f.sensor_degraded == true);
+
+    fake_accel_ms = now_ms;                     /* wasReset() re-enable worked */
+    nav_get_fused(&f);
+    CHECK(f.sensor_degraded == false);
+}
+
+TEST(test_sensor_degraded_init_failed)
+{
+    /* Chip never answered at boot: degraded immediately, whatever the
+     * stream timestamps say. */
+    fresh_nav_with_anchor();
+    fake_imu_initialized = false;
+    fake_accel_ms = now_ms;
+
+    NavFused_t f;
+    nav_get_fused(&f);
+    CHECK(f.sensor_degraded == true);
+    fake_imu_initialized = true;
+}
+
+TEST(test_sensor_degraded_never_streamed)
+{
+    /* Init "succeeded" but the bus is wedged: no sample ever arrives.
+     * Flagged once uptime has passed the dead window (no false alarm
+     * during the boot settle). */
+    fresh_nav_with_anchor();
+    fake_accel_ms = 0;                          /* nothing ever streamed */
+
+    NavFused_t f;
+    nav_get_fused(&f);
+    CHECK(f.sensor_degraded == true);           /* now_ms starts at 100000 */
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void)
@@ -374,6 +439,10 @@ int main(void)
     run_test_rotated_quaternion();
     run_test_zero_dt_predict_is_noop();
     run_test_freshness_flags_age_out();
+    run_test_sensor_degraded_silence_window();
+    run_test_sensor_degraded_is_a_level_not_a_latch();
+    run_test_sensor_degraded_init_failed();
+    run_test_sensor_degraded_never_streamed();
 
     return TEST_SUMMARY();
 }

@@ -64,7 +64,7 @@ typedef struct __attribute__((packed)) {
 #define FUSED_FLAG_IMU_HEALTHY       0x20  // Bit 5: 1 = BNO085 streaming, not saturated
 #define FUSED_FLAG_DEAD_RECKONING    0x10  // Bit 4: 1 = no GPS for > NAV_DR_TIMEOUT_S
 #define FUSED_FLAG_LANDED            0x08  // Bit 3: 1 = landing detected (latched)
-#define FUSED_FLAG_SENSOR_DEGRADED   0x04  // Bit 2: 1 = an EKF sensor (baro/mag/BNO085) declared dead or in retry
+#define FUSED_FLAG_SENSOR_DEGRADED   0x04  // Bit 2: 1 = BNO085 (the EKF's only inertial source) dead or in retry
 #define FUSED_FLAG_RESERVED_MASK     0x03  // Bits 1-0: reserved
 
 /* Fused packet: 21 bytes. Transmitted with PACKET_TYPE_FUSED.

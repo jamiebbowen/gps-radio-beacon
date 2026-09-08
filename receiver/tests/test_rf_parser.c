@@ -268,8 +268,78 @@ TEST(test_fused_valid_packet) {
     CHECK(gps.fused_imu_healthy == 1);
     CHECK(gps.fused_dr == 0);
     CHECK(gps.fused_landed == 0);
+    CHECK(gps.fused_sensor_degraded == 0);
     CHECK(gps.fused_age_ds == 7);
     CHECK(gps.launch_detected == 1);
+}
+
+TEST(test_fused_sensor_degraded_flag) {
+    RF_Parser_Reset();
+    uint8_t pkt[FUSED_PACKET_SIZE];
+    build_fused_packet(pkt, 39.89, -105.11, 100000, 0, 0, 0, 3,
+                       FUSED_FLAG_SENSOR_DEGRADED);
+
+    CHECK(RF_Parser_ParseFusedPacket(pkt, sizeof(pkt)) == RF_PARSER_OK);
+
+    GPS_Data gps;
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.is_fused == 1);
+    CHECK(gps.fused_sensor_degraded == 1);
+    /* Bit isolation: nothing else may light up */
+    CHECK(gps.fused_dr == 0);
+    CHECK(gps.fused_landed == 0);
+    CHECK(gps.fused_gps_fresh == 0);
+    CHECK(gps.fused_imu_healthy == 0);
+}
+
+TEST(test_sensor_degraded_cleared_by_raw_gps) {
+    /* Only the fused stream carries the bit; once the beacon falls back to
+     * raw GPS packets the RX must stop claiming the IMU is dead (same
+     * clearing discipline as fused_dr / fused_gps_fresh). */
+    RF_Parser_Reset();
+    uint8_t fused_pkt[FUSED_PACKET_SIZE], gps_pkt[13];
+    build_fused_packet(fused_pkt, 39.89, -105.11, 100000, 0, 0, 0, 3,
+                       FUSED_FLAG_SENSOR_DEGRADED);
+    CHECK(RF_Parser_ParseFusedPacket(fused_pkt, FUSED_PACKET_SIZE) == RF_PARSER_OK);
+
+    build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x41);
+    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
+
+    GPS_Data gps;
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.fused_sensor_degraded == 0);
+}
+
+TEST(test_fused_reserved_bits_ignored) {
+    /* Bits 1-0 are reserved on the wire: a newer TX may define them later;
+     * until then the parser must not misattribute them to known flags. */
+    RF_Parser_Reset();
+    uint8_t pkt[FUSED_PACKET_SIZE];
+    build_fused_packet(pkt, 39.89, -105.11, 10000, 0, 0, 0, 3,
+                       FUSED_FLAG_RESERVED_MASK);
+    CHECK(RF_Parser_ParseFusedPacket(pkt, sizeof(pkt)) == RF_PARSER_OK);
+
+    GPS_Data gps;
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.is_fused == 1);
+    CHECK(gps.fused_dr == 0 && gps.fused_gps_fresh == 0);
+    CHECK(gps.fused_imu_healthy == 0 && gps.fused_sensor_degraded == 0);
+    CHECK(gps.fused_landed == 0);
+}
+
+TEST(test_fused_wire_format_constants_pin) {
+    /* Mirror of transmitter/tests/test_beacon.cpp::test_fused_wire_format_pin:
+     * this repo's two copies of packet_format.h must never drift. Keep the
+     * literal expectations in sync on both sides. */
+    CHECK(sizeof(FusedPosPacket_t) == FUSED_PACKET_SIZE);
+    CHECK(FUSED_PACKET_SIZE == 21);
+    CHECK(FUSED_FLAG_LAUNCH_DETECTED == 0x80);
+    CHECK(FUSED_FLAG_GPS_FRESH       == 0x40);
+    CHECK(FUSED_FLAG_IMU_HEALTHY     == 0x20);
+    CHECK(FUSED_FLAG_DEAD_RECKONING  == 0x10);
+    CHECK(FUSED_FLAG_LANDED          == 0x08);
+    CHECK(FUSED_FLAG_SENSOR_DEGRADED == 0x04);
+    CHECK(FUSED_FLAG_RESERVED_MASK   == 0x03);
 }
 
 TEST(test_fused_dead_reckoning_flag) {
@@ -489,6 +559,10 @@ int main(void) {
     run_test_binary_malformed_rejected();
     run_test_fused_valid_packet();
     run_test_fused_dead_reckoning_flag();
+    run_test_fused_sensor_degraded_flag();
+    run_test_sensor_degraded_cleared_by_raw_gps();
+    run_test_fused_reserved_bits_ignored();
+    run_test_fused_wire_format_constants_pin();
     run_test_fused_landed_flag_both_streams();
     run_test_fused_malformed_rejected();
     run_test_fused_does_not_clobber_gps_fix();

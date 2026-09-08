@@ -21,11 +21,12 @@
  *   RX GPS   OK 8sat            / CHK no fix
  *   COMPASS  OK                 / CHK
  *   SD CARD  OK                 / WARN no logging
- *   (blank)
+ *   TX IMU   OK                 / CHK dead!  (advisory)
  *   ** READY TO FLY **          / NOT READY
  */
 void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
                            uint8_t tx_fix, uint8_t tx_sats, uint8_t tx_hb_state,
+                           uint8_t tx_sensor_degraded,
                            uint8_t rx_fix_ok, uint8_t rx_sats,
                            uint8_t compass_ok, uint8_t sd_ok)
 {
@@ -73,6 +74,13 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
 
     /* SD card (advisory: receiver works without it, but no track log) */
     Display_DrawTextRowCol(5, 0, sd_ok ? "SD CARD  OK" : "SD CARD  WARN nolog");
+
+    /* TX IMU (advisory: a dead BNO085 costs fused smoothing only - the
+     * beacon still flies on raw GPS with the altitude-climb fallback.
+     * Carried on the fused stream as FUSED_FLAG_SENSOR_DEGRADED; goes
+     * "OK" implicitly for beacons running pre-fused firmware.) */
+    Display_DrawTextRowCol(6, 0, tx_sensor_degraded ? "TX IMU   CHK dead!"
+                                                    : "TX IMU   OK");
 
     /* Verdict */
     if (link_ok && tx_gps_ok && rx_fix_ok && compass_ok) {

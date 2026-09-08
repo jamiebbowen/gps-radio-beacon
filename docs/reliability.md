@@ -258,6 +258,11 @@ tests (`transmitter/tests`, `receiver/tests`).
   `valid` flag, which a stale hot-start position could hold forever.
 - **Radio wedge recovery**: TX radio re-inits on sustained TX-complete
   failure; a latched TX failure no longer silences the beacon permanently.
+- **IMU-dead reporting**: fused packets carry
+  `FUSED_FLAG_SENSOR_DEGRADED` (bit 2) when the BNO085 failed init or went
+  silent for > `NAV_SENSOR_DEAD_MS` (2 s) - a level, not a latch, so it
+  clears if the wasReset() re-enable brings the chip back. Distinct from
+  `FUSED_FLAG_IMU_HEALTHY` (500 ms staleness window).
 
 ### Receiver
 
@@ -279,6 +284,12 @@ tests (`transmitter/tests`, `receiver/tests`).
   the unit runs with radio + SD + watchdog only.
 - **Error channel hygiene**: informational messages moved off
   `Compass_SetError(0, ...)` so real faults stay latched and visible.
+- **TX-IMU surfacing**: `FUSED_FLAG_SENSOR_DEGRADED` decodes into the nav
+  page chip (`SNS!`), the preflight page (`TX IMU CHK dead!`, advisory
+  only - a dead IMU still flies on raw GPS + altitude-climb fallback), and
+  the SD log (`FusedFlags` bit 0x40). Bit mapping is pinned by mirrored
+  wire-format tests in `transmitter/tests/test_beacon.cpp` and
+  `receiver/tests/test_rf_parser.c`.
 
 ### Tooling
 

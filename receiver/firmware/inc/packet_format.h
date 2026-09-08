@@ -60,11 +60,13 @@ typedef struct __attribute__((packed)) {
 #define FLAG_FIX_TYPE_MASK      0x0F  // Bits 3-0: GPS fix type (0=none, 1=GPS, 2=DGPS, etc.)
 
 /* FusedPosPacket_t flags (must match transmitter/firmware/include/packet_format.h) */
-#define FUSED_FLAG_LAUNCH_DETECTED   0x80
-#define FUSED_FLAG_GPS_FRESH         0x40
-#define FUSED_FLAG_IMU_HEALTHY       0x20
-#define FUSED_FLAG_DEAD_RECKONING    0x10
-#define FUSED_FLAG_LANDED            0x08
+#define FUSED_FLAG_LAUNCH_DETECTED   0x80  /* Bit 7: 1 = launched                         */
+#define FUSED_FLAG_GPS_FRESH         0x40  /* Bit 6: 1 = GPS fix used within last second  */
+#define FUSED_FLAG_IMU_HEALTHY       0x20  /* Bit 5: 1 = BNO085 streaming               */
+#define FUSED_FLAG_DEAD_RECKONING    0x10  /* Bit 4: 1 = no GPS for > NAV_DR_TIMEOUT_S    */
+#define FUSED_FLAG_LANDED            0x08  /* Bit 3: 1 = landing detected (latched)       */
+#define FUSED_FLAG_SENSOR_DEGRADED   0x04  /* Bit 2: 1 = BNO085 dead or in retry          */
+#define FUSED_FLAG_RESERVED_MASK     0x03  /* Bits 1-0: reserved                          */
 
 /* Fused packet: 21 bytes. See transmitter include for full field semantics. */
 typedef struct __attribute__((packed)) {

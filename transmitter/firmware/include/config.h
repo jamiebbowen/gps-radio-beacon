@@ -56,6 +56,15 @@
  * drift dominates and consumers should treat the position as a soft hint. */
 #define NAV_DR_TIMEOUT_S                3.0f
 
+/* Milliseconds of BNO085 silence before the fused output is flagged
+ * FUSED_FLAG_SENSOR_DEGRADED ("dead or in retry"). The BNO085 streams at
+ * 100 Hz, so even the worst legitimate gap is tens of ms; 2 s of silence
+ * means a wedged I2C bus, a chip reset being recovered via wasReset(), or
+ * the chip never answered at boot. This is deliberately 4x the 500 ms
+ * imu_healthy staleness window: healthy/degraded answers different
+ * questions ("data stale right now" vs "the sensor is gone"). */
+#define NAV_SENSOR_DEAD_MS              2000u
+
 /* EKF tuning. These default values are conservative; tune from logs. */
 #define EKF_SIGMA_ACCEL_MS2             0.5f   /* process noise (m/s^2)  */
 #define EKF_SIGMA_GPS_HORIZ_M           3.0f   /* GPS horiz meas noise   */

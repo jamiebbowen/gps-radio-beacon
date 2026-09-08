@@ -20,6 +20,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include <Arduino.h>
 #include "include/gps.h"
@@ -456,6 +457,42 @@ TEST(test_fused_velocity_clamps_and_flags)
     fake_launch_state = LAUNCH_STATE_IDLE;
 }
 
+TEST(test_fused_sensor_degraded_flag)
+{
+    reset_tx();
+    memset(&fake_fused, 0, sizeof(fake_fused));
+    fake_fused.valid           = true;
+    fake_fused.lat_deg         = 39.89f;
+    fake_fused.lon_deg         = -105.11f;
+    fake_fused.alt_m           = 1655.0f;
+    fake_fused.sensor_degraded = true;
+
+    CHECK(beacon_transmit_fused_data(100, 1) == 1);
+    /* Exact byte: ONLY bit 2 may be set. SENSOR_DEGRADED is the wire-format
+     * pin for the IMU-dead signal - the receiver decodes it at the same
+     * offset (see its mirror test in receiver/tests/test_rf_parser.c). */
+    CHECK(tx_buf[20] == FUSED_FLAG_SENSOR_DEGRADED);
+}
+
+TEST(test_fused_wire_format_pin)
+{
+    /* The receiver carries its own copy of packet_format.h; a drift between
+     * the two files breaks the link silently. These literal CHECKs (and the
+     * identical block in receiver/tests/test_rf_parser.c) make a drift a
+     * red test on whichever side changed without updating the other. */
+    CHECK(sizeof(FusedPosPacket_t) == 21);
+    CHECK(offsetof(FusedPosPacket_t, age_ds) == 19);
+    CHECK(offsetof(FusedPosPacket_t, flags)  == 20);
+
+    CHECK(FUSED_FLAG_LAUNCH_DETECTED == 0x80);
+    CHECK(FUSED_FLAG_GPS_FRESH       == 0x40);
+    CHECK(FUSED_FLAG_IMU_HEALTHY     == 0x20);
+    CHECK(FUSED_FLAG_DEAD_RECKONING  == 0x10);
+    CHECK(FUSED_FLAG_LANDED          == 0x08);
+    CHECK(FUSED_FLAG_SENSOR_DEGRADED == 0x04);
+    CHECK(FUSED_FLAG_RESERVED_MASK   == 0x03);
+}
+
 TEST(test_fused_hexdump_cadence_and_tx_failure)
 {
     reset_tx();
@@ -491,6 +528,8 @@ int main(void)
     run_test_fused_not_anchored_no_tx();
     run_test_fused_packet_fields();
     run_test_fused_velocity_clamps_and_flags();
+    run_test_fused_sensor_degraded_flag();
+    run_test_fused_wire_format_pin();
     run_test_fused_hexdump_cadence_and_tx_failure();
 
     return TEST_SUMMARY();

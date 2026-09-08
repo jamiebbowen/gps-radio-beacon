@@ -1071,6 +1071,7 @@ int main(void)
       DisplayMode_Preflight(pf_link_ok, pf_link_age_s, pf_rssi,
                             remote_gps_data.fix, (uint8_t)remote_gps_data.satellites,
                             pf_hb_state,
+                            remote_gps_data.fused_sensor_degraded,
                             has_valid_local_gps, (uint8_t)local_gps_data.satellites,
                             compass_data.heading_valid && !compass_data.heading_stale,
                             sd_card_ok);

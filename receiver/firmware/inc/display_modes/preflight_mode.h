@@ -25,6 +25,8 @@ extern "C" {
  * @param tx_sats      TX satellite count from the last position packet
  * @param tx_hb_state  heartbeat GPS health state (HB_GPS_*), or 0xFF if no
  *                     recent heartbeat
+ * @param tx_sensor_degraded  1 = TX BNO085 dead / in retry (fused stream,
+ *                     advisory only - beacon still flies on raw GPS)
  * @param rx_fix_ok    1 = receiver's own GPS has a fix
  * @param rx_sats      receiver satellite count
  * @param compass_ok   1 = compass heading valid
@@ -32,6 +34,7 @@ extern "C" {
  */
 void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
                            uint8_t tx_fix, uint8_t tx_sats, uint8_t tx_hb_state,
+                           uint8_t tx_sensor_degraded,
                            uint8_t rx_fix_ok, uint8_t rx_sats,
                            uint8_t compass_ok, uint8_t sd_ok);
 

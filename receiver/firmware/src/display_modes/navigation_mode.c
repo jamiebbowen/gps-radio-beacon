@@ -514,6 +514,8 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
      *   "GPS"    = raw PACKET_TYPE_GPS from the beacon
      *   "FUS"    = PACKET_TYPE_FUSED, TX-side GPS fresh
      *   "DR"     = PACKET_TYPE_FUSED but dead-reckoning (no fresh TX-side GPS)
+     *   "SNS!"   = PACKET_TYPE_FUSED but the TX BNO085 is dead / in retry -
+     *              fused velocity is stale coast; position degrades to raw GPS
      *   "LANDED" = either stream reported the landing latch - the moment
      *              that most needs certainty during recovery, so it takes
      *              precedence over the link-source label.
@@ -521,8 +523,12 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
     const char *src = "GPS";
     if (remote_gps_data->fused_landed) {
       src = "LANDED";
+    } else if (remote_gps_data->is_fused && remote_gps_data->fused_dr) {
+      src = "DR";
+    } else if (remote_gps_data->is_fused && remote_gps_data->fused_sensor_degraded) {
+      src = "SNS!";
     } else if (remote_gps_data->is_fused) {
-      src = remote_gps_data->fused_dr ? "DR" : "FUS";
+      src = "FUS";
     }
     snprintf(wide, sizeof(wide), "Pkts:%lu %s",
              (unsigned long)rf_packet_count, src);

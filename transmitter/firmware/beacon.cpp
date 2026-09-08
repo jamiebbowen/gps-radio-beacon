@@ -383,13 +383,10 @@ uint8_t beacon_transmit_fused_data(uint32_t system_time_seconds, uint8_t transmi
     p.age_ds      = f.age_ds;
 
     uint8_t flags = 0;
+    if (f.gps_fresh)       flags |= FUSED_FLAG_GPS_FRESH;
+    if (f.imu_healthy)     flags |= FUSED_FLAG_IMU_HEALTHY;
+    if (f.dead_reckoning)  flags |= FUSED_FLAG_DEAD_RECKONING;
     if (f.sensor_degraded) flags |= FUSED_FLAG_SENSOR_DEGRADED;
-    if (f.dead_reckoning) flags |= FUSED_FLAG_DEAD_RECKONING;
-    if (sensors_retrying) flags |= FUSED_FLAG_SENSOR_DEGRADED;
-    if (sensors_retrying) {
-      flags |= FUSED_FLAG_IMU_HEALTHY;
-    }
-    if (f.dead_reckoning) flags |= FUSED_FLAG_DEAD_RECKONING;
     /* Level-based query - see note in beacon_transmit_gps_data_binary about
      * why launch_detect_is_launched() (one-shot) must NOT be used here. */
     if (launch_detect_get_state() == LAUNCH_STATE_CONFIRMED) {

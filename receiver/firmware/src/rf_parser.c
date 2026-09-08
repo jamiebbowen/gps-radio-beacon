@@ -479,10 +479,11 @@ uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
    * velocity from the TX-side EKF. Keeping them across GPS packets lets the
    * navigation display keep showing the last good ground speed instead of
    * flickering to 0.0 m/s each time a raw GPS packet lands. */
-  parsed_gps_data.is_fused          = 0;
-  parsed_gps_data.fused_dr          = 0;
-  parsed_gps_data.fused_gps_fresh   = 0;
-  parsed_gps_data.fused_imu_healthy = 0;
+  parsed_gps_data.is_fused             = 0;
+  parsed_gps_data.fused_dr             = 0;
+  parsed_gps_data.fused_gps_fresh      = 0;
+  parsed_gps_data.fused_imu_healthy    = 0;
+  parsed_gps_data.fused_sensor_degraded = 0;
   /* (fused_landed is deliberately NOT zeroed here: raw GPS packets carry
    * their own FLAG_LANDED, parsed above, so both streams drive it.) */
   parsed_gps_data.fused_age_ds      = 0;
@@ -570,12 +571,13 @@ uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length)
    * navigation_mode.c can render "FUS" vs "DR" without touching `fix`. */
   parsed_gps_data.launch_detected = (flags & FUSED_FLAG_LAUNCH_DETECTED) ? 1 : 0;
 
-  parsed_gps_data.is_fused          = 1;
-  parsed_gps_data.fused_dr          = (flags & FUSED_FLAG_DEAD_RECKONING) ? 1 : 0;
-  parsed_gps_data.fused_gps_fresh   = (flags & FUSED_FLAG_GPS_FRESH)      ? 1 : 0;
-  parsed_gps_data.fused_imu_healthy = (flags & FUSED_FLAG_IMU_HEALTHY)    ? 1 : 0;
-  parsed_gps_data.fused_landed      = (flags & FUSED_FLAG_LANDED)         ? 1 : 0;
-  parsed_gps_data.fused_age_ds      = age_ds;
+  parsed_gps_data.is_fused             = 1;
+  parsed_gps_data.fused_dr             = (flags & FUSED_FLAG_DEAD_RECKONING)  ? 1 : 0;
+  parsed_gps_data.fused_gps_fresh      = (flags & FUSED_FLAG_GPS_FRESH)       ? 1 : 0;
+  parsed_gps_data.fused_imu_healthy    = (flags & FUSED_FLAG_IMU_HEALTHY)     ? 1 : 0;
+  parsed_gps_data.fused_sensor_degraded = (flags & FUSED_FLAG_SENSOR_DEGRADED) ? 1 : 0;
+  parsed_gps_data.fused_landed         = (flags & FUSED_FLAG_LANDED)          ? 1 : 0;
+  parsed_gps_data.fused_age_ds         = age_ds;
 
   parsed_data_ready = 1;
   parse_successes++;
