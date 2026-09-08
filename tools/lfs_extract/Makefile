@@ -19,7 +19,17 @@ lfs_extract: lfs_extract.c $(LFS_CORE)
 lfs_format: lfs_format.c $(LFS_CORE)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $^ -o $@
 
-clean:
-	rm -f lfs_extract lfs_format
+# Host test: builds synthetic LFS images (clean, mid-file CRC corruption,
+# superblock corruption, claimed-overlap pair) and drives run_extract over
+# them. This tool is the ONLY way flight data leaves the SD card - "works
+# on the happy path" is not enough.
+test_lfs_extract: test_lfs_extract.c lfs_extract.c $(LFS_CORE)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DLFS_EXTRACT_NO_MAIN $^ -o $@
 
-.PHONY: all clean
+test: lfs_extract lfs_format test_lfs_extract
+	./test_lfs_extract
+
+clean:
+	rm -f lfs_extract lfs_format test_lfs_extract
+
+.PHONY: all clean test

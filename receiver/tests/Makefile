@@ -38,10 +38,16 @@ $(BUILD)/test_gps: test_gps.c $(SRC_DIR)/gps.c \
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< $(SRC_DIR)/gps_parser.c $(LDFLAGS)
 
 # sd_card.c runs on the REAL LittleFS over a RAM block device in the test
-LFS_DIR  := ../firmware/lib/littlefs
+#
+# Note on LFS_NO_ERROR: several suites intentionally mount blank/corrupted
+# images (that IS the test - the firmware's format-recovery path). LittleFS
+# confirms each such mount with an expected "Corrupted dir pair" diagnostic
+# on stderr; silencing it keeps real failures visible in the output.
+LFS_DIR  := ../../firmware/lib/littlefs
+LFS_CFLAGS := -I$(LFS_DIR) -DLFS_NO_MALLOC -DLFS_NO_DEBUG -DLFS_NO_WARN -DLFS_NO_ERROR
 $(BUILD)/test_sd_card: test_sd_card.c $(SRC_DIR)/sd_card.c \
                        $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c test_harness.h | $(BUILD)
-	$(CC) $(CFLAGS) $(COVFLAGS) -I$(LFS_DIR) -DLFS_NO_MALLOC -DLFS_NO_DEBUG -DLFS_NO_WARN \
+	$(CC) $(CFLAGS) $(COVFLAGS) $(LFS_CFLAGS) \
 	    -o $@ $< $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(LDFLAGS)
 
 .PHONY: all test coverage clean

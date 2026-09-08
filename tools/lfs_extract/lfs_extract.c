@@ -182,14 +182,8 @@ static off_t device_size(int fd) {
     return end;
 }
 
-int main(int argc, char **argv) {
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s <device> <output-dir>\n", argv[0]);
-        fprintf(stderr, "  e.g. %s /dev/sdb ./flight_data\n", argv[0]);
-        return 1;
-    }
-    const char *dev = argv[1];
-    const char *out = argv[2];
+int run_extract(const char *dev, const char *out)
+{
 
     dev_fd = open(dev, O_RDONLY);
     if (dev_fd < 0) {
@@ -230,7 +224,14 @@ int main(int argc, char **argv) {
     int err = lfs_mount(&lfs, &cfg);
     if (err) {
         fprintf(stderr, "lfs_mount failed: %d\n", err);
-        fprintf(stderr, "  (wrong device? or not a LittleFS image?)\n");
+        if (err == LFS_ERR_INVAL || err == LFS_ERR_CORRUPT) {
+            fprintf(stderr, "  no mountable superblock found - this card was\n"
+                            "  either never formatted for LittleFS or both\n"
+                            "  metadata pairs are damaged. If you accept losing\n"
+                            "  the (unreadable anyway) contents: `lfs_format`.\n");
+        } else {
+            fprintf(stderr, "  (wrong device? or not a LittleFS image?)\n");
+        }
         close(dev_fd);
         return 1;
     }
@@ -260,3 +261,14 @@ int main(int argc, char **argv) {
     close(dev_fd);
     return 0;
 }
+
+#ifndef LFS_EXTRACT_NO_MAIN
+int main(int argc, char **argv) {
+    if (argc != 3) {
+        fprintf(stderr, "usage: %s <device> <output-dir>\n", argv[0]);
+        fprintf(stderr, "  e.g. %s /dev/sdb ./flight_data\n", argv[0]);
+        return 1;
+    }
+    return run_extract(argv[1], argv[2]);
+}
+#endif
