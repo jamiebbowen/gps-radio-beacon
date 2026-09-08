@@ -60,7 +60,7 @@ Both transmitter and receiver use identical settings:
 | Spreading Factor | 9 | SF9 (range over airtime; fused cadence fits fine) |
 | Coding Rate | 4/7 | Forward error correction |
 | Sync Word | 0x12 | Private network; RX programs it explicitly (reg 0x0740 = `14 24`) |
-| TX Power | 22 dBm | SX1268 *chip* maximum; the E22-400M33S PA headroom is not driven (under evaluation) |
+| TX Power | 22 dBm | SX1268 chip output, which is exactly what drives the M33S's internal PA to its rated 33 dBm / 2W (verified module variant; chip drive past ~20 dBm only grows harmonics) |
 | Preamble Length | 16 symbols (TX) | Doubles CAD-scan catch odds; RX preamble setting is don't-care |
 | CRC | Enabled | Packet integrity check |
 
@@ -68,6 +68,14 @@ Receiver-specific radio tuning (lora.c): boosted RX gain (reg 0x08AC = 0x96,
 ~+3 dB vs default power-saving) and band-specific image calibration for
 430-440 MHz (CalibrateImage 0x6B/0x6F). Both were missing until the 2026-09
 range investigation and matter most at the marginal end of the link.
+
+Transmitter-specific tuning (radio.cpp): the PA over-current protection
+(LORA_TX_CURRENT_MA = 140 mA) must be raised after radio.begin() - both the
+chip reset default and RadioLib's begin() leave it at 60 mA, which clamps
+every 22 dBm burst mid-packet. Note the current budget consequence: at full
+PA drive the module can pull on the order of 1 A per packet; the ItsyBitsy
+M4's 600 mA 3.3 V rail should be checked for droop under TX before flight
+(scope or brown-out counter), or the module given its own heftier supply.
 
 ## Packet Format
 

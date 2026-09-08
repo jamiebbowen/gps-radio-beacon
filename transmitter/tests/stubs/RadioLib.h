@@ -29,6 +29,9 @@ extern int     radiolib_transmit_result;
 extern int     radiolib_transmit_calls;
 extern uint8_t radiolib_last_tx[256];
 extern size_t  radiolib_last_tx_len;
+extern int     radiolib_set_cl_calls;   /* setCurrentLimit() call count */
+extern float   radiolib_current_limit;  /* captured mA argument         */
+extern int     radiolib_set_cl_result;  /* scripted return value        */
 
 class SX1268 {
 public:
@@ -45,6 +48,13 @@ public:
     }
 
     int standby() { radiolib_standby_calls++; return RADIOLIB_ERR_NONE; }
+
+    int setCurrentLimit(float ma)
+    {
+        radiolib_set_cl_calls++;
+        radiolib_current_limit = ma;
+        return radiolib_set_cl_result;
+    }
 
     int transmit(uint8_t *data, size_t len)
     {

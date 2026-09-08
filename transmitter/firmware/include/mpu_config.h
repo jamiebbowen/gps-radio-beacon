@@ -104,7 +104,16 @@
 #define LORA_SPREADING      9           // Spreading Factor 9 (good range/speed balance)
 #define LORA_CODING_RATE    7           // Coding Rate 4/7
 #define LORA_SYNC_WORD      0x12        // Private sync word (0x12 = private, 0x34 = LoRaWAN)
-#define LORA_TX_POWER       22          // 22 dBm (~160mW - SX1268 chip maximum)
+#define LORA_TX_POWER       22          // 22 dBm (~160mW - SX1268 chip maximum,
+                                        //  which is also what drives the M33S
+                                        //  module's internal PA to its rated 33 dBm)
+/* SX1268 over-current protection limit for the PA, applied after begin().
+ * Both the power-on default AND RadioLib's begin() leave this register at
+ * 60 mA - but a 22 dBm burst draws ~120 mA through the chip's PA stage, so
+ * with the default in place the transmitter rails mid-packet: less power
+ * AND a dirtier spectrum. 140 mA is the Semtech-recommended value for
+ * full-power operation on the SX1268 (max encodable is 140). */
+#define LORA_TX_CURRENT_MA  140.0f
 // Preamble length: 16 symbols (~66 ms at SF9/BW125) instead of the LoRa
 // default 8. The receiver's boot scan sniffs each channel with CAD
 // (~20 ms) in a ~0.3 s lap over all 8 channels; a longer preamble roughly

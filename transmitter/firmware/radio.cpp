@@ -91,7 +91,17 @@ void radio_init(void) {
         radio_initialized = true;
         init_retry_count = 0;   /* re-arm the radio_enable() retry ladder */
         tx_fail_streak = 0;
-        
+
+        /* RadioLib begin() leaves the PA over-current limit at 60 mA; a
+         * 22 dBm burst needs roughly double that. See LORA_TX_CURRENT_MA in
+         * mpu_config.h. Failure is a warning, not an init failure: the radio
+         * still works at the clamped power. */
+        int16_t lim_state = radio.setCurrentLimit(LORA_TX_CURRENT_MA);
+        if (lim_state != RADIOLIB_ERR_NONE) {
+            Serial.print(F("[Radio] Warning: setCurrentLimit failed, code: "));
+            Serial.println(lim_state);
+        }
+
         // Set to standby mode initially
         radio.standby();
         radio_enabled = false;

@@ -60,6 +60,9 @@ int     radiolib_transmit_result = RADIOLIB_ERR_NONE;
 int     radiolib_transmit_calls = 0;
 uint8_t radiolib_last_tx[256];
 size_t  radiolib_last_tx_len = 0;
+int     radiolib_set_cl_calls = 0;
+float   radiolib_current_limit = 0;
+int     radiolib_set_cl_result = RADIOLIB_ERR_NONE;
 
 /* Include the module under test */
 #include "../firmware/radio.cpp"
@@ -76,6 +79,9 @@ static void reset_knobs(void)
     radiolib_transmit_result = RADIOLIB_ERR_NONE;
     radiolib_transmit_calls = 0;
     radiolib_last_tx_len = 0;
+    radiolib_set_cl_calls = 0;
+    radiolib_current_limit = 0;
+    radiolib_set_cl_result = RADIOLIB_ERR_NONE;
     jumper_level = HIGH;
     busy_level = LOW;
     txen_level = -1;
@@ -98,6 +104,24 @@ TEST(test_init_primary_channel)
     CHECK(radiolib_standby_calls == 1);        /* parked in standby */
     CHECK(radio_enabled == false);
     CHECK(strstr(Serial.log, "Initialized successfully") != NULL);
+
+    /* PA current limit raised off the 60 mA default (see LORA_TX_CURRENT_MA):
+     * without this, every 22 dBm burst clamps mid-packet. */
+    CHECK(radiolib_set_cl_calls == 1);
+    CHECK(radiolib_current_limit == LORA_TX_CURRENT_MA);
+}
+
+TEST(test_init_current_limit_failure_is_advisory)
+{
+    /* The OCP write failing must NOT fail init (radio still works, just
+     * power-clamped), but it must be loud on the serial console. */
+    reset_knobs();
+    radiolib_set_cl_result = -1;
+    radio_init();
+
+    CHECK(radio_initialized == true);
+    CHECK(radiolib_set_cl_calls == 1);
+    CHECK(strstr(Serial.log, "setCurrentLimit failed") != NULL);
 }
 
 TEST(test_init_backup_jumper)
@@ -270,6 +294,7 @@ TEST(test_dead_radio_keeps_retrying_reinit)
 int main(void)
 {
     run_test_init_primary_channel();
+    run_test_init_current_limit_failure_is_advisory();
     run_test_init_backup_jumper();
     run_test_init_failure_and_transmit_guard();
     run_test_enable_retries_then_gives_up();
