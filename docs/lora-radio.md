@@ -56,8 +56,8 @@ Both transmitter and receiver use identical settings:
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | Frequency | 433.0 MHz | ISM band (8-channel plan, 433.00-434.75 MHz) |
-| Bandwidth | 125 kHz | Standard LoRa BW |
-| Spreading Factor | 10 | SF10 (range over airtime; ~0.56 s/fused packet) |
+| Bandwidth | 62.5 kHz | Narrow: +3 dB sensitivity, ~1.1 s/fused packet, LDRO on |
+| Spreading Factor | 10 | SF10 (range over airtime) |
 | Coding Rate | 4/8 | Forward error correction |
 | Sync Word | 0x12 | Private network; RX programs it explicitly (reg 0x0740 = `14 24`) |
 | TX Power | 22 dBm | SX1268 chip output, which is exactly what drives the M33S's internal PA to its rated 33 dBm / 2W (verified module variant; chip drive past ~20 dBm only grows harmonics) |
@@ -109,19 +109,19 @@ Before deploying, verify:
 
 ### Range Expectations
 - **Previous (300 baud UART):** ~500m line-of-sight
-- **LoRa SF10/CR4-8 @ 433MHz, boosted RX gain:** datasheet floor ~-131 dBm; real-world
+- **LoRa SF10/CR4-8/BW62.5k @ 433MHz, boosted RX gain:** datasheet floor ~-134 dBm; real-world
   range depends mostly on antenna installation and the receiver-side noise
   floor (park walk tests 2026-09: ~2.8 km through trees at ~6 dB above the
   local -70 dBm ambient floor)
 
 ### Link Budget
 - TX Power: +22 dBm (chip max; module PA not driven)
-- RX Sensitivity (SF10, BW125): ~-131 dBm datasheet, before local noise floor
+- RX Sensitivity (SF10, BW62.5): ~-134 dBm datasheet, before local noise floor
 - Link Budget: ~150 dB on paper; in practice capped by the RX ambient floor
 
 ### Data Rate
-- SF10/CR4-8 @ 125kHz: ~0.98 kbps effective (fused packet ~0.56 s airtime)
-- Flight phase streams fused updates every 0.6 s (FUSED_TX_INTERVAL_MS);
+- SF10/CR4-8 @ 62.5kHz: ~0.49 kbps effective (fused packet ~1.1 s airtime)
+- Flight phase streams fused updates every 1.2 s (FUSED_TX_INTERVAL_MS);
   the raw GPS backup stream interleaves continuously
 - Much better edge-of-range behavior than previous 300 baud implementation
 

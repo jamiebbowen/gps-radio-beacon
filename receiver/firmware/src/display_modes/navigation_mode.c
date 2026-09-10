@@ -38,8 +38,8 @@ extern Compass_Data compass_data;
  * Only two knobs:
  *   LORA_SENSITIVITY_DBM  - the RSSI at which packets stop decoding. Depends
  *                           on SF/BW. SX1268 datasheet: ~-137 dBm at SF12/BW125,
- *                           ~-131 dBm at SF10/BW125, ~-124 dBm at SF9/BW125.
- *                           Default -130 dBm is a reasonable midpoint; tighten
+ *                           ~-134 dBm at SF10/BW62.5, ~-131 dBm at SF10/BW125.
+ *                           Default -134 dBm matches the current config; tighten
  *                           it to match your actual radio config.
  *   LORA_PATH_LOSS_N      - 2.0 for pure free-space LOS (max-case ceiling),
  *                           2.5-3.0 for realistic outdoor with ground bounce
@@ -47,7 +47,7 @@ extern Compass_Data compass_data;
  *                           for the "max predicted" range.
  * -------------------------------------------------------------------------*/
 #ifndef LORA_SENSITIVITY_DBM
-#define LORA_SENSITIVITY_DBM   -130.0f
+#define LORA_SENSITIVITY_DBM   -134.0f
 #endif
 #ifndef LORA_PATH_LOSS_N
 #define LORA_PATH_LOSS_N          2.0f
@@ -101,8 +101,8 @@ static uint32_t LoRa_RemainingRangeMeters(float d_now_m, int16_t rssi)
  *   => 20*log10(d_max) = Pt - sens - 20*log10(f_MHz) + 27.55
  *   => d_max_m = 10 ^ ((Pt - sens - 20*log10(f_MHz) + 27.55) / 20)
  *
- * For current config (22 dBm TX, -130 dBm sens, 433 MHz) this evaluates to
- * roughly 2200 km. That's the Friis ceiling with 0 dBi antennas, no
+ * For current config (22 dBm TX, -134 dBm sens, 433 MHz) this evaluates to
+ * roughly 4400 km. That's the Friis ceiling with 0 dBi antennas, no
  * fading; practice is always below it, but it's a physically meaningful
  * cap for "don't show more than this".
  *

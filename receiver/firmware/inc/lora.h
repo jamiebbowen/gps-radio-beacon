@@ -19,8 +19,8 @@ extern "C" {
 /* Multi-rocket channel plan: 8 channels at 250 kHz spacing, 433.00-434.75
  * MHz. Sits in the 70cm auxiliary/link segment (433-435 MHz): full
  * Technician privileges, clear of the 432-433 weak-signal/EME segment and
- * the 435-438 amateur-satellite segment. 250 kHz spacing leaves one full
- * signal bandwidth (125 kHz) of guard between adjacent channels, and all
+ * the 435-438 amateur-satellite segment. 250 kHz spacing gives ~4x the
+ * 62.5 kHz signal bandwidth of guard between adjacent channels, and all
  * channels sit in the same SX1268 image-calibration band (430-440 MHz), so
  * no recalibration is needed when hopping.
  * Each transmitter is flashed with one channel (LORA_CHANNEL, independent
@@ -35,11 +35,17 @@ extern "C" {
 
 /* LoRa Configuration - Match transmitter settings */
 #define LORA_FREQUENCY_MHZ      LORA_CHANNEL_FREQ_MHZ(0)  // Boot channel (CH0)
-#define LORA_BANDWIDTH_KHZ      125.0f      // 125 kHz bandwidth
+#define LORA_BANDWIDTH_KHZ      62.5f       // 62.5 kHz - must match the transmitter;
+                                            // 250 kHz channel spacing now covers 4x the
+                                            // occupied bandwidth (adjacent-channel room)
 #define LORA_SPREADING_FACTOR   10          // SF10 - must match the transmitter (mpu_config.h)
 /* Human-readable coding rate (8 = 4/8); the register wants 0x01..0x04 and
  * gets LORA_CODING_RATE-4 at write time - same convention as RadioLib. */
 #define LORA_CODING_RATE        8           // 4/8 - must match the transmitter
+/* Low-data-rate optimize: REQUIRED once symbol time >= 16 ms, i.e. SF>=11 at
+ * any BW or SF10 at 62.5 kHz. Computed so a later SF/BW change can't ship
+ * a silent demod bug (SX1268 misses packets when this is wrong). */
+#define LORA_LDRO               (((1u << LORA_SPREADING_FACTOR) / (unsigned)LORA_BANDWIDTH_KHZ) >= 16 ? 1 : 0)
 #define LORA_SYNC_WORD          0x12        // Private sync word
 #define LORA_TX_POWER_DBM       22          // 22 dBm (~160mW - SX1268 chip maximum)
 #define LORA_PREAMBLE_LENGTH    8           // Preamble length
@@ -139,14 +145,14 @@ extern "C" {
 /* Channel Activity Detection (CAD): the modem samples the channel for a few
  * symbol periods and reports whether a LoRa preamble is on the air - a ~35 ms
  * sniff versus a 6.5 s listen, which is what makes a fast channel scan
- * possible. Detection parameters follow Semtech AN1200.48 for SF10/BW125.
+ * possible. Detection parameters per Semtech AN1200.48 (SF10).
  * Exit mode CAD_RX: on detection the chip drops straight into RX and captures
  * the packet whose preamble it just sniffed. */
-#define LORA_CAD_SYMBOLS        0x02    /* 4 symbols (~32.8 ms at SF10/125) */
+#define LORA_CAD_SYMBOLS        0x02    /* 4 symbols (~65.5 ms at SF10/62.5k) */
 #define LORA_CAD_DET_PEAK       24      /* AN1200.48 recommendation, SF10 */
 #define LORA_CAD_DET_MIN        10
 #define LORA_CAD_EXIT_RX        0x01    /* enter RX on detection */
-#define LORA_CAD_RX_TIMEOUT_MS  1200    /* > max packet airtime at SF10/125 (~0.6 s) */
+#define LORA_CAD_RX_TIMEOUT_MS  2000    /* > max packet airtime at SF10/62.5k (~1.2 s) */
 
 /* LoRa_CadResult() return values */
 #define LORA_CAD_PENDING        0       /* CAD still running */

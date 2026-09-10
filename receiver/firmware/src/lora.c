@@ -158,6 +158,13 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
         return 0xB2;  // Standby command failed
     }
     HAL_Delay(10);
+
+    /* Regulator: DC-DC + LDO (matches RadioLib's default), lower RX current
+     * than the chip-default LDO-only path. Must be written in standby. */
+    uint8_t regulator_dcdc = 0x01;
+    if (LoRa_SendCommand(SX1268_CMD_SET_REGULATORMODE, &regulator_dcdc, 1) != LORA_OK) {
+        return 0xCC;  // Regulator mode command failed
+    }
     
     /* Set packet type to LoRa */
     uint8_t packet_type = SX1268_PACKET_TYPE_LORA;
@@ -210,10 +217,11 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     
     // Bandwidth encoding
     uint8_t bw_param;
-    if (LORA_BANDWIDTH_KHZ == 125.0f) bw_param = 0x04;
+    if (LORA_BANDWIDTH_KHZ == 62.5f) bw_param = 0x03;
+    else if (LORA_BANDWIDTH_KHZ == 125.0f) bw_param = 0x04;
     else if (LORA_BANDWIDTH_KHZ == 250.0f) bw_param = 0x05;
     else if (LORA_BANDWIDTH_KHZ == 500.0f) bw_param = 0x06;
-    else bw_param = 0x04; // Default to 125kHz
+    else bw_param = 0x03; // Default to 62.5 kHz
     mod_params[1] = bw_param;
     
     /* CR register encoding is 0x01..0x04 for 4/5..4/8, NOT the plain 5-8
@@ -223,7 +231,7 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
      * worth not trusting at the noise floor. RadioLib does the same cr-4
      * mapping on the TX side.) */
     mod_params[2] = (uint8_t)(LORA_CODING_RATE - 4);
-    mod_params[3] = 0x00; // Low data rate optimize off
+    mod_params[3] = LORA_LDRO; // Low data rate optimize: required >= 16 ms symbols
     
     if (LoRa_SendCommand(SX1268_CMD_SET_MODULATIONPARAMS, mod_params, 4) != LORA_OK) {
         return 0xC3;  // Modulation params command failed
@@ -738,10 +746,11 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
             /* Start TX (timeout field 0x000000 = no timeout) */
             uint8_t tx_params[3] = {0x00, 0x00, 0x00};
             if (LoRa_SendCommand(SX1268_CMD_SET_TX, tx_params, 3) == LORA_OK) {
-                /* Wait for TX_DONE; a full SF10/125kHz packet is well under 1s */
+                /* Wait for TX_DONE; a full SF10/62.5kHz 21-byte packet is
+                 * ~1.2 s - give it 3 s of headroom. */
                 uint32_t start = HAL_GetTick();
                 result = LORA_TIMEOUT;
-                while ((HAL_GetTick() - start) < 1000) {
+                while ((HAL_GetTick() - start) < 3000) {
                     uint16_t irq = 0;
                     if (LoRa_GetIRQStatus(&irq) == LORA_OK &&
                         (irq & SX1268_IRQ_TX_DONE)) {

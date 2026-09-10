@@ -36,9 +36,9 @@ EARTH_RADIUS_M = 6_371_000.0
 LAUNCH_DETECT_AGL_M = 10.0   # altitude above ground to register launch
 SOUND_SPEED_MPS = 343.0      # for Mach number (nominal, sea-level 20 C)
 
-# LoRa SX1268 sensitivity floor (dBm) for common spreading factors @ 125 kHz BW.
+# LoRa SX1268 sensitivity floor (dBm) for common spreading factors.
 # Override with --sensitivity if your radio config differs.
-DEFAULT_SENSITIVITY_DBM = -131.0  # SF10, 125 kHz (matches current radio config)
+DEFAULT_SENSITIVITY_DBM = -134.0  # SF10, 62.5 kHz (matches current radio config)
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -607,7 +607,7 @@ def analyze(log_path, sensitivity_dbm=DEFAULT_SENSITIVITY_DBM,
     print()
     print("--- PREDICTED RANGE  (FSPL extrapolation, line-of-sight) ---")
     print(f"  Assumed sensitivity:  {sensitivity_dbm:.0f} dBm  "
-          f"(LoRa SF10 / 125 kHz default; override with --sensitivity)")
+          f"(LoRa SF10 / 62.5 kHz default; override with --sensitivity)")
     if anchor and max_range_m is not None:
         print(f"  Anchor sample:        RSSI {anchor['rssi']} dBm at "
               f"slant range {anchor['slant_m']:.0f} m  "
@@ -659,7 +659,7 @@ def main():
     ap.add_argument("log", help="Path to NAV log file (Lxxxxxxx.TXT)")
     ap.add_argument("--sensitivity", type=float, default=DEFAULT_SENSITIVITY_DBM,
                     help=f"Receiver sensitivity floor in dBm for range prediction "
-                         f"(default {DEFAULT_SENSITIVITY_DBM} = LoRa SF10 @ 125 kHz)")
+                         f"(default {DEFAULT_SENSITIVITY_DBM} = LoRa SF10 @ 62.5 kHz)")
     ap.add_argument("--kml", metavar="PATH",
                     help="Write a Google-Earth KML of the flight to PATH "
                          "(includes time-animated rocket track for Movie Maker)")

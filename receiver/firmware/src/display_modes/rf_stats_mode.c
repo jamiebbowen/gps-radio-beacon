@@ -19,7 +19,7 @@
  *
  * Layout (8 rows x 21 cols):
  *   RF STATS   CH0 433.0
- *   SF10 BW125k CR4/8
+ *   SF10 BW62.5k CR4/8
  *   Pkts:12345 IRQ:12350
  *   RSSI:-102  SNR:-5
  *   Last pkt: 12s ago

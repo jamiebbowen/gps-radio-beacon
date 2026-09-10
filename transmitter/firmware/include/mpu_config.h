@@ -62,7 +62,7 @@
 // The plan sits in the 70cm auxiliary/link segment (433-435 MHz): full
 // Technician privileges, clear of the 432-433 weak-signal/EME segment and
 // the 435-438 amateur-satellite segment. 250 kHz spacing leaves one full
-// signal bandwidth (125 kHz) of guard between adjacent channels, and every
+// signal bandwidth (62.5 kHz) as guard between adjacent channels, and every
 // channel is inside one SX1268 image-calibration band (430-440 MHz).
 // Must match the receiver's plan in receiver/firmware/inc/lora.h.
 //
@@ -100,7 +100,12 @@
 // Primary-channel frequency, for reference only: radio.cpp resolves the
 // active channel (primary vs backup jumper) at boot.
 #define LORA_FREQUENCY      LORA_CHANNEL_FREQ(LORA_CHANNEL)
-#define LORA_BANDWIDTH      125.0       // 125 kHz bandwidth
+#define LORA_BANDWIDTH      62.5        // 62.5 kHz: half BW = +3 dB sensitivity, 2x airtime.
+                                        // Both ends are TCXO so frequency offset stays tiny
+                                        // vs the narrower channel. RX RadioLib-independent
+                                        // constant must match (receiver/firmware/inc/lora.h).
+                                        // NOTE: SF10 @ 62.5k -> 16.4 ms symbols -> the chip
+                                        // turns LDRO on automatically; the RX mirrors that.
 #define LORA_SPREADING      10          // SF10: ~+4 dB link budget vs SF9 (2026-09 range work).
                                         // Costs 2x airtime - see FUSED_TX_INTERVAL_MS in config.h,
                                         // which must exceed the ~0.56 s fused-packet airtime.
@@ -116,7 +121,7 @@
  * AND a dirtier spectrum. 140 mA is the Semtech-recommended value for
  * full-power operation on the SX1268 (max encodable is 140). */
 #define LORA_TX_CURRENT_MA  140.0f
-// Preamble length: 16 symbols (~132 ms at SF10/BW125) instead of the LoRa
+// Preamble length: 16 symbols (~264 ms at SF10/BW62.5k) instead of the LoRa
 // default 8. The receiver's boot scan sniffs each channel with CAD
 // (~20 ms) in a ~0.3 s lap over all 8 channels; a longer preamble roughly
 // doubles the chance a lap catches a transmission mid-preamble, at a cost

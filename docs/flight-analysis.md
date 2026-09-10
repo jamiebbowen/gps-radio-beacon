@@ -30,7 +30,7 @@ python3 receiver/tools/analyze_flight.py /path/to/Lxxxxxxx.TXT [OPTIONS]
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--sensitivity DBM` | `-131` | Receiver sensitivity floor for range prediction (LoRa SF10 / 125 kHz). Use `-123` for SF7-era logs. |
+| `--sensitivity DBM` | `-134` | Receiver sensitivity floor for range prediction (LoRa SF10 / 62.5 kHz). Use `-131` for the SF10 / 125 kHz era, `-123` for SF7-era logs. |
 | `--kml PATH` | off | Write a Google-Earth KML of the flight (trajectory + animated rocket + pad/apogee/landing placemarks). |
 | `--mp4 PATH` | off | Render a 3-D animated MP4 directly. Requires `matplotlib` + `ffmpeg`. |
 | `--fps N` | 30 | MP4 frame rate. |

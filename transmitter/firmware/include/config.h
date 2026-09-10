@@ -95,12 +95,11 @@
 #define POST_LAUNCH_PACKET_INTERVAL_SEC 2
 
 /* Fused-packet transmit cadence in LAUNCH state. Must exceed the fused
- * packet's air time (SF10/BW125/CR4-8, 21 bytes + 16-symbol preamble ≈
- * 0.56 s); 600 ms gives ~1.7 fused updates/s in flight. Faster is
- * impossible without raising the airtime beyond the interval, which just
- * converts the "rate" into back-to-back blocking transmissions of the
- * same 21 bytes. */
-#define FUSED_TX_INTERVAL_MS            600
+ * packet's air time (SF10/BW62.5k/CR4-8, 21 bytes + 16-symbol preamble ≈
+ * 1.12 s); 1200 ms gives ~0.8 fused updates/s in flight. Faster is
+ * impossible without airtime exceeding the interval, which just converts
+ * the "rate" into back-to-back blocking transmissions of the same bytes. */
+#define FUSED_TX_INTERVAL_MS            1200
 
 /* Fused-packet cadence in every non-flight state (pad idle, post-landing
  * battery-save). Was 1 Hz: at full PA drive that ~170 ms-every-second

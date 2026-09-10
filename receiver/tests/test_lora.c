@@ -341,12 +341,13 @@ TEST(test_init_success)
     CHECK(chip_img_freq1 == 0x6B && chip_img_freq2 == 0x6F);
 
     /* Modulation must match the transmitter on the air (RadioLib writes
-     * SF raw, BW=0x04 for 125k, CR register-encoded as (rate-4), LDRO off
-     * for the 8.192 ms symbol). A nibble-level drift here = deaf link. */
+     * SF raw, BW=0x03 for 62.5k, CR register-encoded as (rate-4), LDRO on
+     * for the 16.4 ms symbol - the chip mandates it at >=16 ms). A
+     * nibble-level drift here = deaf link. */
     CHECK(chip_mod[0] == LORA_SPREADING_FACTOR);
-    CHECK(chip_mod[1] == 0x04);
+    CHECK(chip_mod[1] == 0x03);
     CHECK(chip_mod[2] == (uint8_t)(LORA_CODING_RATE - 4));
-    CHECK(chip_mod[3] == 0x00);
+    CHECK(chip_mod[3] == 0x01);
 }
 
 TEST(test_init_failure_paths)
@@ -385,6 +386,7 @@ TEST(test_init_failure_paths)
         0xB3,       /* TCXO busy-timeout */
         0xB2, 0xB4, 0xB5, 0xC1, 0xC2, 0xC3, 0xC4, 0xC6, 0xC7, 0xC8,
         0xC9, 0xCA, 0xCB,  /* image cal, sync word, RX gain boost */
+        0xCC,       /* regulator mode (DC-DC) */
         0xB9, 0xBA  /* the two SetRx steps */
     };
     for (size_t i = 0; i < sizeof(expected); i++) {

@@ -75,7 +75,7 @@ uint8_t RF_Receiver_GetLastHeartbeat(HeartbeatPacket_t *hb, uint32_t *age_ms);
 /* Ambient noise-floor monitor. The floor is the 25th percentile of ~1 Hz
  * GetRssiInst samples taken while the radio idles in continuous RX; the
  * alert engages at RF_NOISE_ALERT_DBM and clears at RF_NOISE_CLEAR_DBM.
- * A clean 433 MHz channel at BW125 reads around -110..-125 dBm; a floor
+ * A clean 433 MHz channel at BW62.5 reads around -113..-128 dBm; a floor
  * at -100 dBm or above eats ~20 dB of link budget. */
 #define RF_NOISE_ALERT_DBM  -100  /* engage alert at/above this floor */
 #define RF_NOISE_CLEAR_DBM  -105  /* release alert at/below this floor */
