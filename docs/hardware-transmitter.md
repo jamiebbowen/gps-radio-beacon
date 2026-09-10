@@ -51,7 +51,7 @@
 **LoRa Configuration:**
 - Frequency: **433.0 MHz** (ISM band; 8-channel plan 433.00-434.75 MHz)
 - Bandwidth: **125 kHz**
-- Spreading Factor: **7** (SF7 - fast airtime for the 10 Hz fused stream)
+- Spreading Factor: **10** (SF10 - range-first; fused stream at ~1.7 Hz in flight)
 - Coding Rate: **4/7**
 - Sync Word: **0x12** (private network)
 - TX Power: **22 dBm** (~158mW at 3.3V, ~2W at 5V)

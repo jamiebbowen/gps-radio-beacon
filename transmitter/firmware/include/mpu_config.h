@@ -101,8 +101,10 @@
 // active channel (primary vs backup jumper) at boot.
 #define LORA_FREQUENCY      LORA_CHANNEL_FREQ(LORA_CHANNEL)
 #define LORA_BANDWIDTH      125.0       // 125 kHz bandwidth
-#define LORA_SPREADING      9           // Spreading Factor 9 (good range/speed balance)
-#define LORA_CODING_RATE    7           // Coding Rate 4/7
+#define LORA_SPREADING      10          // SF10: ~+4 dB link budget vs SF9 (2026-09 range work).
+                                        // Costs 2x airtime - see FUSED_TX_INTERVAL_MS in config.h,
+                                        // which must exceed the ~0.56 s fused-packet airtime.
+#define LORA_CODING_RATE    8           // Coding Rate 4/8 (+~1 dB vs 4/7 at this SF)
 #define LORA_SYNC_WORD      0x12        // Private sync word (0x12 = private, 0x34 = LoRaWAN)
 #define LORA_TX_POWER       22          // 22 dBm (~160mW - SX1268 chip maximum,
                                         //  which is also what drives the M33S
@@ -114,7 +116,7 @@
  * AND a dirtier spectrum. 140 mA is the Semtech-recommended value for
  * full-power operation on the SX1268 (max encodable is 140). */
 #define LORA_TX_CURRENT_MA  140.0f
-// Preamble length: 16 symbols (~66 ms at SF9/BW125) instead of the LoRa
+// Preamble length: 16 symbols (~132 ms at SF10/BW125) instead of the LoRa
 // default 8. The receiver's boot scan sniffs each channel with CAD
 // (~20 ms) in a ~0.3 s lap over all 8 channels; a longer preamble roughly
 // doubles the chance a lap catches a transmission mid-preamble, at a cost

@@ -81,7 +81,7 @@ the continuous-transmit state.
 Thresholds (in `receiver/firmware/inc/rf_receiver.h`):
 
 ```c
-#define RF_MIN_RSSI_DBM   -120   /* LoRa SF7 sensitivity ~-123 dBm */
+#define RF_MIN_RSSI_DBM   -120   /* below SF10/BW125 sensitivity ~-131 dBm */
 #define RF_MIN_SNR_DB      -10   /* LoRa can decode down to -20 dB */
 ```
 
@@ -141,11 +141,11 @@ data is stale, because an out-of-date bearing is still useful for recovery.
 ### 4.1 Current configuration
 
 ```c
-Frequency:        433 MHz       /* US 70 cm amateur band */
+Frequency:        433 MHz       /* US 70 cm amateur band (8-channel plan) */
 Bandwidth:        125 kHz
-Spreading factor: SF7           /* fast airtime for the 10 Hz fused stream */
-Coding rate:      4/7
-TX power:         22 dBm        /* E22-400M33S module maximum */
+Spreading factor: SF10          /* chosen for range; fused cadence 0.6 s */
+Coding rate:      4/8
+TX power:         22 dBm chip   /* drives the M33S module PA (rated 33 dBm) */
 Preamble:         16 symbols (TX) / 8 (RX; longer TX preamble is safe)
 Sync word:        0x12
 ```
@@ -161,13 +161,18 @@ Sync word:        0x12
 
 - RX antenna gain: **+2 dBi**
 - RX cable loss: **-0.5 dB**
-- RX sensitivity (SF7, BW125): **-123 dBm**
+- RX sensitivity (SF10, BW125, boosted gain): **~-131 dBm** (datasheet; the
+  local ambient floor measured in field logs (~-70..-75 dBm) is the real cap)
 
 ```
 Received power = EIRP + RX antenna + RX cable - path loss
                = 23.5 + 2 - 0.5 - 132 = -107 dBm
-Link margin    = -107 - (-123) = ~16 dB at 10 km
+Link margin    = -107 - (-131) = ~24 dB at 10 km (datasheet floor)
 ```
+
+**~24 dB of headroom** at 10 km on paper covers typical fading (10-20 dB);
+in practice the measured receiver noise environment eats roughly 40 dB of
+it - see 4.4 and the 2026-09 range investigation.
 
 **~16 dB of headroom** at 10 km covers typical fading (10-20 dB) at the
 edge of practical range; closer in, the margin grows ~6 dB per halving of
@@ -181,9 +186,9 @@ margin** at SF7 -- consistent with the budget above.
 
 | Setting | Range | Air time | Data rate | Use case |
 |---|---|---|---|---|
-| SF7, 125 kHz (default) | ~4-6 km | 60 ms | 5.5 kbps | Fast updates, 10 Hz fused stream |
+| SF7, 125 kHz | ~4-6 km | 60 ms | 5.5 kbps | Fast updates (10 Hz fused era) |
 | SF9, 125 kHz | ~8-12 km | 370 ms | 1.8 kbps | Balanced rocket tracking |
-| SF10, 125 kHz | ~12-18 km | 660 ms | 980 bps | Max-range stationary |
+| SF10, 125 kHz (default, 2026-09) | ~12-18 km | 660 ms | 980 bps | Range-first tracking |
 | SF12, 125 kHz | ~15-25 km | 2.6 s | 290 bps | Not useful for flight |
 
 **Preamble**: default 8 symbols is a good compromise. Increasing to 12-16

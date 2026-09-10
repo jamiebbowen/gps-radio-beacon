@@ -33,7 +33,8 @@
  * which guarantees a lock within one 52 s lap of a transmitting beacon. */
 #define RF_SCAN_CAD_PHASE_MS       30000U  /* fast phase length (~6 heartbeats) */
 #define RF_SCAN_CAD_TIMEOUT_MS     150U    /* CAD itself must finish in ~20 ms */
-#define RF_SCAN_CAD_RX_WAIT_MS     800U    /* detection -> packet grace period */
+#define RF_SCAN_CAD_RX_WAIT_MS     1200U   /* detection -> packet grace period
+                                            * (> max packet airtime at SF10/125) */
 #define RF_SCAN_CAD_MAX_STRIKES    3U      /* timed-out CADs before fallback */
 
 /* Auto re-scan after contact loss. Two differences from the boot scan:

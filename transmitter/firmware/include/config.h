@@ -86,9 +86,13 @@
  * radius of each other: a lone glitch fix can't anchor the EKF wrong. */
 #define NAV_ANCHOR_CONFIRM_M            30.0f
 
-/* Fused-packet transmit cadence in LAUNCH state. Set to 10 Hz so we get
- * smoothed interpolation between 1 Hz GPS fixes. */
-#define FUSED_TX_INTERVAL_MS            100
+/* Fused-packet transmit cadence in LAUNCH state. Must exceed the fused
+ * packet's air time (SF10/BW125/CR4-8, 21 bytes + 16-symbol preamble ≈
+ * 0.56 s); 600 ms gives ~1.7 fused updates/s in flight. Faster is
+ * impossible without raising the airtime beyond the interval, which just
+ * converts the "rate" into back-to-back blocking transmissions of the
+ * same 21 bytes. */
+#define FUSED_TX_INTERVAL_MS            600
 
 /* Fused-packet cadence in every non-flight state (pad idle, post-landing
  * battery-save). Was 1 Hz: at full PA drive that ~170 ms-every-second

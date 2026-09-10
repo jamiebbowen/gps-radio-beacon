@@ -426,7 +426,7 @@ TEST(test_channel_scan_cad_fast_phase)
     RF_Receiver_StartScan();
     CHECK(RF_Receiver_ScanUpdate() == 0);    /* start CAD */
     CHECK(RF_Receiver_ScanUpdate() == 0);    /* DETECTED -> RX wait */
-    now_ms += 900;                           /* > RX-wait grace (800 ms) */
+    now_ms += RF_SCAN_CAD_RX_WAIT_MS + 100;  /* > RX-wait grace */
     Test_SetTick(now_ms);
     CHECK(RF_Receiver_ScanUpdate() == 0);
     CHECK(RF_Receiver_GetChannel() == 1);    /* hopped on, still scanning */

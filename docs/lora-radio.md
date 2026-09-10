@@ -57,8 +57,8 @@ Both transmitter and receiver use identical settings:
 |-----------|-------|-------------|
 | Frequency | 433.0 MHz | ISM band (8-channel plan, 433.00-434.75 MHz) |
 | Bandwidth | 125 kHz | Standard LoRa BW |
-| Spreading Factor | 9 | SF9 (range over airtime; fused cadence fits fine) |
-| Coding Rate | 4/7 | Forward error correction |
+| Spreading Factor | 10 | SF10 (range over airtime; ~0.56 s/fused packet) |
+| Coding Rate | 4/8 | Forward error correction |
 | Sync Word | 0x12 | Private network; RX programs it explicitly (reg 0x0740 = `14 24`) |
 | TX Power | 22 dBm | SX1268 chip output, which is exactly what drives the M33S's internal PA to its rated 33 dBm / 2W (verified module variant; chip drive past ~20 dBm only grows harmonics) |
 | Preamble Length | 16 symbols (TX) | Doubles CAD-scan catch odds; RX preamble setting is don't-care |
@@ -109,21 +109,21 @@ Before deploying, verify:
 
 ### Range Expectations
 - **Previous (300 baud UART):** ~500m line-of-sight
-- **LoRa SF9 @ 433MHz, boosted RX gain:** datasheet floor ~-128 dBm; real-world
+- **LoRa SF10/CR4-8 @ 433MHz, boosted RX gain:** datasheet floor ~-131 dBm; real-world
   range depends mostly on antenna installation and the receiver-side noise
   floor (park walk tests 2026-09: ~2.8 km through trees at ~6 dB above the
   local -70 dBm ambient floor)
 
 ### Link Budget
 - TX Power: +22 dBm (chip max; module PA not driven)
-- RX Sensitivity (SF9, BW125): ~-128 dBm datasheet, before local noise floor
+- RX Sensitivity (SF10, BW125): ~-131 dBm datasheet, before local noise floor
 - Link Budget: ~150 dB on paper; in practice capped by the RX ambient floor
 
 ### Data Rate
-- SF7 @ 125kHz: ~5.5 kbps effective (GPS packet ~56 ms airtime)
-- Binary packets (13-16 bytes): ~40-56 ms airtime; the 10 Hz fused
-  telemetry stream fits comfortably on one channel
-- Much faster than previous 300 baud implementation
+- SF10/CR4-8 @ 125kHz: ~0.98 kbps effective (fused packet ~0.56 s airtime)
+- Flight phase streams fused updates every 0.6 s (FUSED_TX_INTERVAL_MS);
+  the raw GPS backup stream interleaves continuously
+- Much better edge-of-range behavior than previous 300 baud implementation
 
 ## Benefits of LoRa
 

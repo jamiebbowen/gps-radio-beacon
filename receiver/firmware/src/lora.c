@@ -732,7 +732,7 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
             /* Start TX (timeout field 0x000000 = no timeout) */
             uint8_t tx_params[3] = {0x00, 0x00, 0x00};
             if (LoRa_SendCommand(SX1268_CMD_SET_TX, tx_params, 3) == LORA_OK) {
-                /* Wait for TX_DONE; a full SF9/125kHz packet is well under 1s */
+                /* Wait for TX_DONE; a full SF10/125kHz packet is well under 1s */
                 uint32_t start = HAL_GetTick();
                 result = LORA_TIMEOUT;
                 while ((HAL_GetTick() - start) < 1000) {

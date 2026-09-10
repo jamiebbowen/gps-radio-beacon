@@ -36,8 +36,8 @@ extern "C" {
 /* LoRa Configuration - Match transmitter settings */
 #define LORA_FREQUENCY_MHZ      LORA_CHANNEL_FREQ_MHZ(0)  // Boot channel (CH0)
 #define LORA_BANDWIDTH_KHZ      125.0f      // 125 kHz bandwidth
-#define LORA_SPREADING_FACTOR   9           // SF9 (good range/speed balance)
-#define LORA_CODING_RATE        7           // 4/7
+#define LORA_SPREADING_FACTOR   10          // SF10 - must match the transmitter (mpu_config.h)
+#define LORA_CODING_RATE        8           // 4/8 - must match the transmitter
 #define LORA_SYNC_WORD          0x12        // Private sync word
 #define LORA_TX_POWER_DBM       22          // 22 dBm (~160mW - SX1268 chip maximum)
 #define LORA_PREAMBLE_LENGTH    8           // Preamble length
@@ -135,16 +135,16 @@ extern "C" {
 #define LORA_NO_DATA            5
 
 /* Channel Activity Detection (CAD): the modem samples the channel for a few
- * symbol periods and reports whether a LoRa preamble is on the air - a ~20 ms
+ * symbol periods and reports whether a LoRa preamble is on the air - a ~35 ms
  * sniff versus a 6.5 s listen, which is what makes a fast channel scan
- * possible. Detection parameters follow Semtech AN1200.48 for SF9/BW125.
+ * possible. Detection parameters follow Semtech AN1200.48 for SF10/BW125.
  * Exit mode CAD_RX: on detection the chip drops straight into RX and captures
  * the packet whose preamble it just sniffed. */
-#define LORA_CAD_SYMBOLS        0x02    /* 4 symbols (~16.4 ms at SF9/125) */
-#define LORA_CAD_DET_PEAK       23      /* AN1200.48 recommendation, SF9 */
+#define LORA_CAD_SYMBOLS        0x02    /* 4 symbols (~32.8 ms at SF10/125) */
+#define LORA_CAD_DET_PEAK       24      /* AN1200.48 recommendation, SF10 */
 #define LORA_CAD_DET_MIN        10
 #define LORA_CAD_EXIT_RX        0x01    /* enter RX on detection */
-#define LORA_CAD_RX_TIMEOUT_MS  600     /* > max packet airtime at SF9/125 */
+#define LORA_CAD_RX_TIMEOUT_MS  1200    /* > max packet airtime at SF10/125 (~0.6 s) */
 
 /* LoRa_CadResult() return values */
 #define LORA_CAD_PENDING        0       /* CAD still running */

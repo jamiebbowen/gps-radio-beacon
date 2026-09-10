@@ -38,7 +38,7 @@ extern Compass_Data compass_data;
  * Only two knobs:
  *   LORA_SENSITIVITY_DBM  - the RSSI at which packets stop decoding. Depends
  *                           on SF/BW. SX1268 datasheet: ~-137 dBm at SF12/BW125,
- *                           ~-124 dBm at SF9/BW125, ~-118 dBm at SF7/BW125.
+ *                           ~-131 dBm at SF10/BW125, ~-124 dBm at SF9/BW125.
  *                           Default -130 dBm is a reasonable midpoint; tighten
  *                           it to match your actual radio config.
  *   LORA_PATH_LOSS_N      - 2.0 for pure free-space LOS (max-case ceiling),

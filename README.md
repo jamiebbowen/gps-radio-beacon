@@ -12,7 +12,7 @@ Tested on a Mach-0.99 / 2 km AGL flight with a 37 dB link margin — see
 ```
 +-------------------------+           LoRa 433 MHz          +-------------------------+
 |       TRANSMITTER       |  - - - - - - - - - - - - - ->  |         RECEIVER        |
-|  (flies with the rocket)|        ~4-6 km LoS (SF7)        |   (handheld ground)     |
+|  (flies with the rocket)|       ~10+ km LoS (SF10/CR4-8)  |   (handheld ground)     |
 +-------------------------+                                 +-------------------------+
   - ItsyBitsy M4 (SAMD51)                                     - STM32F401 Black Pill
   - u-blox GPS (UART)                                         - NEO-6M GPS (UART)
