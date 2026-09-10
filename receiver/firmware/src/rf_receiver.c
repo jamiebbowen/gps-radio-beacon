@@ -814,6 +814,42 @@ uint32_t RF_Receiver_GetWedgesRecovered(void)
 }
 
 /**
+ * @brief Boot-time per-channel noise sweep (see rf_receiver.h)
+ */
+uint8_t RF_Receiver_NoiseSweep(int16_t *nf_dbm_out)
+{
+  if (nf_dbm_out == NULL) return 0;
+
+  uint8_t home = LoRa_GetChannel();
+  uint8_t measured = 0;
+  for (uint8_t ch = 0; ch < LORA_CHANNEL_COUNT; ch++) {
+    if (LoRa_SetChannel(ch) != LORA_OK) continue;
+    HAL_Delay(50);              /* retune + AGC/DC-offset settle */
+
+    int16_t samples[5];
+    uint8_t got = 0;
+    for (uint8_t i = 0; i < 5; i++) {
+      int16_t inst = 0;
+      if (LoRa_GetRssiInst(&inst) == LORA_OK) samples[got++] = inst;
+      HAL_Delay(10);
+    }
+    if (got == 0) continue;
+
+    /* Median (insertion sort on <=5 samples) */
+    for (uint8_t i = 1; i < got; i++) {
+      int16_t t = samples[i];
+      uint8_t j = i;
+      while (j > 0 && samples[j - 1] > t) { samples[j] = samples[j - 1]; j--; }
+      samples[j] = t;
+    }
+    nf_dbm_out[ch] = samples[got / 2];
+    measured++;
+  }
+  (void)LoRa_SetChannel(home);
+  return measured;
+}
+
+/**
  * @brief Start scanning across all rocket channels
  * @note The scan dwells RF_SCAN_DWELL_MS per channel starting from the
  *       current one, hopping until any CRC-valid LoRa packet is received.

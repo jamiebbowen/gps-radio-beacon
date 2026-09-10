@@ -57,7 +57,27 @@ uint8_t LoRa_GetDeviceStatus(uint8_t *status)
     return LORA_OK;
 }
 uint8_t LoRa_GetIRQStatus(uint16_t *irq) { *irq = fake_irq_value; return LORA_OK; }
-uint8_t LoRa_GetRssiInst(int16_t *rssi) { *rssi = fake_rssi_inst; return LORA_OK; }
+/* GetRssiInst scripting: scalar (default), per-channel table, or a global
+ * sequence consumed one value per call (seq repeats its last value). */
+static uint8_t       fake_rssi_use_table = 0;
+static int16_t       fake_rssi_table[LORA_CHANNEL_COUNT];
+static const int16_t *fake_rssi_seq = NULL;
+static uint8_t       fake_rssi_seq_len = 0;
+static uint32_t      fake_rssi_seq_idx = 0;
+
+uint8_t LoRa_GetRssiInst(int16_t *rssi)
+{
+    int16_t v = fake_rssi_use_table ? fake_rssi_table[fake_channel]
+                                    : fake_rssi_inst;
+    if (fake_rssi_seq_len > 0) {
+        uint32_t i = (fake_rssi_seq_idx < fake_rssi_seq_len)
+                   ? fake_rssi_seq_idx : (fake_rssi_seq_len - 1);
+        v = fake_rssi_seq[i];
+        fake_rssi_seq_idx++;
+    }
+    *rssi = v;
+    return LORA_OK;
+}
 uint8_t LoRa_PacketAvailable(void) { return fake_pkt_pending; }
 uint8_t LoRa_ReadPacket(LoRa_Packet_t *pkt)
 {
@@ -744,6 +764,53 @@ TEST(test_cad_timeout_strikes_then_fallback)
     fake_cad_result = LORA_CAD_NONE;
 }
 
+TEST(test_noise_sweep_per_channel)
+{
+    /* Distinct floor per channel: the sweep reports each channel's median
+     * and leaves the radio parked on the channel it started from. */
+    static const int16_t floors[LORA_CHANNEL_COUNT] = {-98, -97, -96, -95,
+                                                       -94, -93, -92, -91};
+    fake_rssi_use_table = 1;
+    memcpy(fake_rssi_table, floors, sizeof(fake_rssi_table));
+    (void)LoRa_SetChannel(5);
+
+    int16_t out[LORA_CHANNEL_COUNT] = {0};
+    CHECK(RF_Receiver_NoiseSweep(out) == LORA_CHANNEL_COUNT);
+    for (uint8_t ch = 0; ch < LORA_CHANNEL_COUNT; ch++) {
+        CHECK(out[ch] == floors[ch]);
+    }
+    CHECK(LoRa_GetChannel() == 5);           /* restored */
+
+    fake_rssi_use_table = 0;                 /* restore scalar default */
+    (void)LoRa_SetChannel(0);
+}
+
+TEST(test_noise_sweep_median_rejects_spike)
+{
+    /* One hot transient per 5-sample window must NOT lift the channel's
+     * reported value (median of {-40,-90,-90,-90,-90} is -90, mean would
+     * be -80). */
+    static const int16_t seq[] = {-40, -90, -90, -90, -90};
+    fake_rssi_seq = seq;
+    fake_rssi_seq_len = sizeof(seq) / sizeof(seq[0]);
+    fake_rssi_seq_idx = 0;
+    fake_rssi_inst = -90;
+
+    int16_t out[LORA_CHANNEL_COUNT] = {0};
+    CHECK(RF_Receiver_NoiseSweep(out) == LORA_CHANNEL_COUNT);
+    for (uint8_t ch = 0; ch < LORA_CHANNEL_COUNT; ch++) {
+        CHECK(out[ch] == -90);
+    }
+
+    fake_rssi_seq = NULL;                    /* tear down the script */
+    fake_rssi_seq_len = 0;
+}
+
+TEST(test_noise_sweep_null_guard)
+{
+    CHECK(RF_Receiver_NoiseSweep(NULL) == 0);
+}
+
 TEST(test_diagnostics_getters)
 {
     uint32_t bytes = 0; uint8_t matches = 0; uint8_t last4[4] = {0};
@@ -899,6 +966,9 @@ int main(void)
     run_test_cad_timeout_strikes_then_fallback();
     run_test_noise_floor_estimation_and_alert();
     run_test_noise_alert_suppressed_while_link_active();
+    run_test_noise_sweep_per_channel();
+    run_test_noise_sweep_median_rejects_spike();
+    run_test_noise_sweep_null_guard();
     run_test_diagnostics_getters();
     run_test_auto_rescan_after_prolonged_silence();
 

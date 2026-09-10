@@ -354,6 +354,28 @@ int main(void)
       snprintf(rf_msg, sizeof(rf_msg), "RF scan start CH%u %.2fMHz",
                (unsigned)boot_ch, LORA_CHANNEL_FREQ_MHZ(boot_ch));
       SD_Card_LogEvent(rf_msg);
+
+      /* Per-channel ambient noise sweep (SD-logged). Substitutes for a
+       * spectrum analyzer when hunting the RX noise floor: one or two hot
+       * channels = narrowband junk (move the beacon); everything lifted
+       * equally = broadband/front-end overload (move the receiver itself).
+       * Runs only while the boot scan is still hunting - a locked link's
+       * own traffic would bias every channel it touches. */
+      if (RF_Receiver_IsScanning()) {
+        int16_t nf_ch[LORA_CHANNEL_COUNT];
+        for (uint8_t i = 0; i < LORA_CHANNEL_COUNT; i++) nf_ch[i] = 1;  /* "n/a" */
+        if (RF_Receiver_NoiseSweep(nf_ch) > 0) {
+          char nf_msg[48];
+          for (uint8_t ch = 0; ch < LORA_CHANNEL_COUNT; ch++) {
+            if (nf_ch[ch] == 1) continue;
+            snprintf(nf_msg, sizeof(nf_msg), "NF sweep CH%u %.2fMHz nf=%ddBm",
+                     (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)nf_ch[ch]);
+            SD_Card_LogEvent(nf_msg);
+          }
+        }
+        /* Sweeping hopped the radio; restart the boot scan cleanly. */
+        RF_Receiver_StartScan();
+      }
     }
 
     /* Load last known beacon location so navigation works immediately on boot */

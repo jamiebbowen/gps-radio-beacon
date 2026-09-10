@@ -83,6 +83,17 @@ uint8_t RF_Receiver_GetNoiseFloor(int16_t *nf_dbm);
 uint8_t RF_Receiver_NoiseAlert(void);
 uint32_t RF_Receiver_GetWedgesRecovered(void);
 
+/* Boot-time per-channel noise sweep: tunes every rocket channel, takes a
+ * handful of GetRssiInst samples, and reports the per-channel median via
+ * nf_dbm_out[LORA_CHANNEL_COUNT] (untouched entries are left at the
+ * caller's init value; 1 is a good "invalid" sentinel). Discriminates
+ * narrowband junk (one hot channel) from broadband/front-end overload
+ * (everything lifted) - the distinction that decides whether the fix is
+ * "move the beacon's channel" or "move the receiver". Radio is left on
+ * the channel it started on; returns channels measured (0 on total
+ * failure). The caller re-arms any in-flight channel scan afterwards. */
+uint8_t RF_Receiver_NoiseSweep(int16_t *nf_dbm_out);
+
 /* Boot-time channel scan: hop channels until a CRC-valid packet is heard */
 void    RF_Receiver_StartScan(void);
 void    RF_Receiver_StopScan(void);     /* Cancel (e.g. manual channel pick) */
