@@ -345,7 +345,9 @@ int main(void)
     }
 
     /* Log file is created lazily on the first RF packet (see
-     * SD_Card_LogNavigation in sd_card.c) so no-RF boots leave no artifact. */
+     * SD_Card_LogNavigation in sd_card.c) - with one current exception:
+     * the boot noise sweep below ensures the file when the scan is still
+     * hunting, since that no-beacon case is where NF diagnostics live. */
 
     /* Record the RF starting point (boot scan begins at this channel) */
     if (rf_initialized) {
@@ -353,6 +355,18 @@ int main(void)
       uint8_t boot_ch = RF_Receiver_GetChannel();
       snprintf(rf_msg, sizeof(rf_msg), "RF scan start CH%u %.2fMHz",
                (unsigned)boot_ch, LORA_CHANNEL_FREQ_MHZ(boot_ch));
+
+      /* The log file is otherwise created lazily on first beacon contact,
+       * and SD_Card_LogEvent silently drops anything earlier - the
+       * scan-start line above and the NF sweep below would vanish. A boot
+       * with the scan still running (no beacon heard yet) is exactly the
+       * diagnostic case the sweep exists for, so open the file now when
+       * we're about to write the sweep. A lock that already happened
+       * creates the file itself via the scan-lock path. */
+      if (RF_Receiver_IsScanning()) {
+        (void)SD_Card_EnsureLogFile();
+      }
+
       SD_Card_LogEvent(rf_msg);
 
       /* Per-channel ambient noise sweep (SD-logged). Substitutes for a
