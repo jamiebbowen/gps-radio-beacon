@@ -37,6 +37,8 @@ extern "C" {
 #define LORA_FREQUENCY_MHZ      LORA_CHANNEL_FREQ_MHZ(0)  // Boot channel (CH0)
 #define LORA_BANDWIDTH_KHZ      125.0f      // 125 kHz bandwidth
 #define LORA_SPREADING_FACTOR   10          // SF10 - must match the transmitter (mpu_config.h)
+/* Human-readable coding rate (8 = 4/8); the register wants 0x01..0x04 and
+ * gets LORA_CODING_RATE-4 at write time - same convention as RadioLib. */
 #define LORA_CODING_RATE        8           // 4/8 - must match the transmitter
 #define LORA_SYNC_WORD          0x12        // Private sync word
 #define LORA_TX_POWER_DBM       22          // 22 dBm (~160mW - SX1268 chip maximum)

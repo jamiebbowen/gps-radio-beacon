@@ -216,7 +216,13 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     else bw_param = 0x04; // Default to 125kHz
     mod_params[1] = bw_param;
     
-    mod_params[2] = LORA_CODING_RATE;
+    /* CR register encoding is 0x01..0x04 for 4/5..4/8, NOT the plain 5-8
+     * value: the chip is fed LORA_CODING_RATE-4. (Explicit-header mode means
+     * the payload CR comes from the packet header, so a mismatch here never
+     * broke reception - but an out-of-range nibble is out-of-spec input and
+     * worth not trusting at the noise floor. RadioLib does the same cr-4
+     * mapping on the TX side.) */
+    mod_params[2] = (uint8_t)(LORA_CODING_RATE - 4);
     mod_params[3] = 0x00; // Low data rate optimize off
     
     if (LoRa_SendCommand(SX1268_CMD_SET_MODULATIONPARAMS, mod_params, 4) != LORA_OK) {

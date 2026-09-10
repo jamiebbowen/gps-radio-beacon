@@ -52,6 +52,7 @@ static uint8_t  chip_sync_word[2] = {0, 0}; /* last write to reg 0x0740 */
 static uint8_t  chip_rx_gain     = 0;       /* last write to reg 0x08AC */
 static uint8_t  chip_img_freq1   = 0;       /* CalibrateImage params     */
 static uint8_t  chip_img_freq2   = 0;
+static uint8_t  chip_mod[4]      = {0};     /* SetModulationParams: SF/BW/CR/LDRO */
 
 /* Fault knobs */
 static uint8_t  fake_busy_pin    = 0;      /* BUSY stuck high         */
@@ -83,6 +84,7 @@ static void chip_reset_state(void)
     chip_rx_gain = 0;
     chip_img_freq1 = 0;
     chip_img_freq2 = 0;
+    memset(chip_mod, 0, sizeof(chip_mod));
     fake_busy_pin = 0;
     fake_status_byte = 0x42;
     fail_after_txns = -1;
@@ -135,6 +137,9 @@ static void chip_handle_txn(void)
                 chip_img_freq1 = txn[1];
                 chip_img_freq2 = txn[2];
             }
+            break;
+        case SX1268_CMD_SET_MODULATIONPARAMS:
+            if (txn_len >= 5) memcpy(chip_mod, &txn[1], 4);
             break;
         default: break;
     }
@@ -334,6 +339,14 @@ TEST(test_init_success)
     CHECK(chip_sync_word[0] == 0x14 && chip_sync_word[1] == 0x24);
     CHECK(chip_rx_gain == 0x96);
     CHECK(chip_img_freq1 == 0x6B && chip_img_freq2 == 0x6F);
+
+    /* Modulation must match the transmitter on the air (RadioLib writes
+     * SF raw, BW=0x04 for 125k, CR register-encoded as (rate-4), LDRO off
+     * for the 8.192 ms symbol). A nibble-level drift here = deaf link. */
+    CHECK(chip_mod[0] == LORA_SPREADING_FACTOR);
+    CHECK(chip_mod[1] == 0x04);
+    CHECK(chip_mod[2] == (uint8_t)(LORA_CODING_RATE - 4));
+    CHECK(chip_mod[3] == 0x00);
 }
 
 TEST(test_init_failure_paths)
