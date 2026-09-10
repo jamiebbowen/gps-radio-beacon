@@ -68,12 +68,17 @@ typedef struct __attribute__((packed)) {
 #define FUSED_FLAG_SENSOR_DEGRADED   0x04  /* Bit 2: 1 = BNO085 dead or in retry          */
 #define FUSED_FLAG_RESERVED_MASK     0x03  /* Bits 1-0: reserved                          */
 
-/* Fused packet: 21 bytes. See transmitter include for full field semantics. */
+/* Fused packet: 19 bytes. See transmitter include for full field semantics
+ * (this file intentionally carries the same defines - the two copies must
+ * never drift; the host tests pin the literals on both sides). */
+#define FUSED_ALT_FLOOR_M   500.0f   /* subtracted from alt_m when encoding */
+#define FUSED_ALT_SCALE     4.0f     /* quarter-meters per count            */
+
 typedef struct __attribute__((packed)) {
     uint8_t  packet_type;    // PACKET_TYPE_FUSED
     int32_t  latitude;       // deg * 10^7
     int32_t  longitude;      // deg * 10^7
-    int32_t  altitude_cm;    // cm MSL
+    uint16_t alt_qm;         // (alt_m + 500) * 4, quarter-meters
     int16_t  v_n_cms;        // cm/s
     int16_t  v_e_cms;        // cm/s
     int16_t  v_d_cms;        // cm/s
@@ -81,7 +86,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  flags;          // FUSED_FLAG_*
 } FusedPosPacket_t;
 
-#define FUSED_PACKET_SIZE       21
+#define FUSED_PACKET_SIZE       19
 
 // Helper macros for encoding/decoding
 #define GPS_COORD_SCALE         10000000.0  // Scale factor for lat/lon (10^7)

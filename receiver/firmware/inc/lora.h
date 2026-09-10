@@ -41,7 +41,7 @@ extern "C" {
 #define LORA_SPREADING_FACTOR   10          // SF10 - must match the transmitter (mpu_config.h)
 /* Human-readable coding rate (8 = 4/8); the register wants 0x01..0x04 and
  * gets LORA_CODING_RATE-4 at write time - same convention as RadioLib. */
-#define LORA_CODING_RATE        8           // 4/8 - must match the transmitter
+#define LORA_CODING_RATE        6           // 4/6 - must match the transmitter
 /* Low-data-rate optimize: REQUIRED once symbol time >= 16 ms, i.e. SF>=11 at
  * any BW or SF10 at 62.5 kHz. Computed so a later SF/BW change can't ship
  * a silent demod bug (SX1268 misses packets when this is wrong). */

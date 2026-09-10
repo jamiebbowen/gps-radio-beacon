@@ -376,7 +376,12 @@ uint8_t beacon_transmit_fused_data(uint32_t system_time_seconds, uint8_t transmi
     p.packet_type = PACKET_TYPE_FUSED;
     p.latitude    = ENCODE_COORD(f.lat_deg);
     p.longitude   = ENCODE_COORD(f.lon_deg);
-    p.altitude_cm = (int32_t)lroundf(f.alt_m * 100.0f);
+    /* Quarter-meter resolution with a 500 m MSL floor offset. Negative
+     * altitudes below the floor clamp to 0 rather than wrap. */
+    float alt_qm_f = (f.alt_m + FUSED_ALT_FLOOR_M) * FUSED_ALT_SCALE;
+    if (alt_qm_f < 0.0f) alt_qm_f = 0.0f;
+    if (alt_qm_f > 65535.0f) alt_qm_f = 65535.0f;
+    p.alt_qm      = (uint16_t)lroundf(alt_qm_f);
     p.v_n_cms     = clamp_i16(f.v_n);
     p.v_e_cms     = clamp_i16(f.v_e);
     p.v_d_cms     = clamp_i16(f.v_d);
@@ -404,9 +409,9 @@ uint8_t beacon_transmit_fused_data(uint32_t system_time_seconds, uint8_t transmi
         delay(10);
     }
 
-    /* One-shot diagnostic: sizeof should be 21. If the compiler added any
+    /* One-shot diagnostic: sizeof should be 19. If the compiler added any
      * padding despite __attribute__((packed)) the RX parser (which assumes
-     * 21 bytes) will reject the packet - loud log helps us notice. */
+     * 19 bytes) will reject the packet - loud log helps us notice. */
     static bool size_logged = false;
     if (!size_logged) {
         Serial.print(F("[Beacon] sizeof(FusedPosPacket_t)="));
@@ -427,7 +432,7 @@ uint8_t beacon_transmit_fused_data(uint32_t system_time_seconds, uint8_t transmi
         }
         Serial.print(F("  vn_cms=")); Serial.print((int)p.v_n_cms);
         Serial.print(F(" ve_cms=")); Serial.print((int)p.v_e_cms);
-        Serial.print(F(" alt_cm=")); Serial.print((long)p.altitude_cm);
+        Serial.print(F(" alt_qm=")); Serial.print((unsigned)p.alt_qm);
         Serial.print(F(" flags=0x")); Serial.println(p.flags, HEX);
     }
 

@@ -746,8 +746,8 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
             /* Start TX (timeout field 0x000000 = no timeout) */
             uint8_t tx_params[3] = {0x00, 0x00, 0x00};
             if (LoRa_SendCommand(SX1268_CMD_SET_TX, tx_params, 3) == LORA_OK) {
-                /* Wait for TX_DONE; a full SF10/62.5kHz 21-byte packet is
-                 * ~1.2 s - give it 3 s of headroom. */
+                /* Wait for TX_DONE; a full SF10/62.5k/CR4-6 19-byte packet
+                 * is ~0.9 s - give it 3 s of headroom. */
                 uint32_t start = HAL_GetTick();
                 result = LORA_TIMEOUT;
                 while ((HAL_GetTick() - start) < 3000) {

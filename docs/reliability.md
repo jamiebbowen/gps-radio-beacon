@@ -81,7 +81,7 @@ the continuous-transmit state.
 Thresholds (in `receiver/firmware/inc/rf_receiver.h`):
 
 ```c
-#define RF_MIN_RSSI_DBM   -120   /* below SF10/BW62.5 sensitivity ~-134 dBm */
+#define RF_MIN_RSSI_DBM   -120   /* below SF10/BW62.5 sensitivity ~-133 dBm */
 #define RF_MIN_SNR_DB      -10   /* LoRa can decode down to -20 dB */
 ```
 
@@ -144,7 +144,7 @@ data is stale, because an out-of-date bearing is still useful for recovery.
 Frequency:        433 MHz       /* US 70 cm amateur band (8-channel plan) */
 Bandwidth:        62.5 kHz      /* +3 dB sensitivity; LDRO on at SF10 */
 Spreading factor: SF10          /* chosen for range; fused cadence 1.2 s */
-Coding rate:      4/8
+Coding rate:      4/6           /* shorter packets; <1 dB margin cost */
 TX power:         22 dBm chip   /* drives the M33S module PA (rated 33 dBm) */
 Preamble:         16 symbols (TX) / 8 (RX; longer TX preamble is safe)
 Sync word:        0x12

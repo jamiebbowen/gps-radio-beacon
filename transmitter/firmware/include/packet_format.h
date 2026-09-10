@@ -67,20 +67,26 @@ typedef struct __attribute__((packed)) {
 #define FUSED_FLAG_SENSOR_DEGRADED   0x04  // Bit 2: 1 = BNO085 (the EKF's only inertial source) dead or in retry
 #define FUSED_FLAG_RESERVED_MASK     0x03  // Bits 1-0: reserved
 
-/* Fused packet: 21 bytes. Transmitted with PACKET_TYPE_FUSED.
+/* Fused packet: 19 bytes. Transmitted with PACKET_TYPE_FUSED.
  *
  *   lat/lon       : same scaling as BinaryGPSPacket_t (deg * 10^7)
- *   altitude_cm   : centimeters MSL (int32 gives ±21 km at 1 cm resolution)
+ *   alt_qm        : altitude in 0.25 m units with a 500 m MSL floor offset,
+ *                   uint16: covers -500.0 m to +15883.75 m - centimeter
+ *                   precision was 4 bytes for a sensor that lies ~10x worse.
  *   v_n/v_e/v_d   : NED velocity in cm/s (int16 gives ±327 m/s per axis)
  *   age_ds        : deciseconds since last GPS update (0..255 -> 0..25.5 s,
  *                   saturates at 255 meaning "GPS lost long ago")
  *   flags         : FUSED_FLAG_* bits above
  */
+#define FUSED_ALT_FLOOR_M   500.0f   /* subtracted from alt_m when encoding */
+#define FUSED_ALT_SCALE     4.0f     /* quarter-meters per count            */
+#define FUSED_PACKET_SIZE   19
+
 typedef struct __attribute__((packed)) {
     uint8_t  packet_type;    // PACKET_TYPE_FUSED
     int32_t  latitude;       // deg * 10^7
     int32_t  longitude;      // deg * 10^7
-    int32_t  altitude_cm;    // cm MSL
+    uint16_t alt_qm;         // (alt_m + 500) * 4, quarter-meters
     int16_t  v_n_cms;        // North velocity, cm/s
     int16_t  v_e_cms;        // East  velocity, cm/s
     int16_t  v_d_cms;        // Down  velocity, cm/s

@@ -496,18 +496,18 @@ uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
 }
 
 /**
- * @brief Parse a PACKET_TYPE_FUSED payload (21 bytes)
+ * @brief Parse a PACKET_TYPE_FUSED payload (19 bytes)
  *
- * Layout (little-endian):
+ * Layout (little-endian, 19 bytes):
  *   [0]      packet_type (0x04)
  *   [1..4]   latitude  (int32, deg*1e7)
  *   [5..8]   longitude (int32, deg*1e7)
- *   [9..12]  altitude  (int32, centimeters MSL)
- *   [13..14] v_n       (int16, cm/s)
- *   [15..16] v_e       (int16, cm/s)
- *   [17..18] v_d       (int16, cm/s)
- *   [19]     age_ds    (uint8, deciseconds since TX-side last GPS fix)
- *   [20]     flags     (FUSED_FLAG_*)
+ *   [9..10]  altitude  (uint16, (alt_m + 500) * 4 - quarter-meters MSL)
+ *   [11..12] v_n       (int16, cm/s)
+ *   [13..14] v_e       (int16, cm/s)
+ *   [15..16] v_d       (int16, cm/s)
+ *   [17]     age_ds    (uint8, deciseconds since TX-side last GPS fix)
+ *   [18]     flags     (FUSED_FLAG_*)
  *
  * Populates parsed_gps_data with decoded values, including the v_north /
  * v_east / v_down m/s fields and the is_fused / fused_* metadata so the UI
@@ -532,13 +532,12 @@ uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length)
                              | ((uint32_t)data[3]  << 16) | ((uint32_t)data[4]  << 24));
   int32_t lon_enc  = (int32_t)((uint32_t)data[5]  | ((uint32_t)data[6]  << 8)
                              | ((uint32_t)data[7]  << 16) | ((uint32_t)data[8]  << 24));
-  int32_t alt_cm   = (int32_t)((uint32_t)data[9]  | ((uint32_t)data[10] << 8)
-                             | ((uint32_t)data[11] << 16) | ((uint32_t)data[12] << 24));
-  int16_t v_n_cms  = (int16_t)((uint16_t)data[13] | ((uint16_t)data[14] << 8));
-  int16_t v_e_cms  = (int16_t)((uint16_t)data[15] | ((uint16_t)data[16] << 8));
-  int16_t v_d_cms  = (int16_t)((uint16_t)data[17] | ((uint16_t)data[18] << 8));
-  uint8_t age_ds   = data[19];
-  uint8_t flags    = data[20];
+  uint16_t alt_qm  = (uint16_t)((uint16_t)data[9] | ((uint16_t)data[10] << 8));
+  int16_t v_n_cms  = (int16_t)((uint16_t)data[11] | ((uint16_t)data[12] << 8));
+  int16_t v_e_cms  = (int16_t)((uint16_t)data[13] | ((uint16_t)data[14] << 8));
+  int16_t v_d_cms  = (int16_t)((uint16_t)data[15] | ((uint16_t)data[16] << 8));
+  uint8_t age_ds   = data[17];
+  uint8_t flags    = data[18];
 
   double lat = (double)lat_enc / 10000000.0;
   double lon = (double)lon_enc / 10000000.0;
@@ -550,7 +549,8 @@ uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length)
 
   parsed_gps_data.latitude  = (float)lat;
   parsed_gps_data.longitude = (float)lon;
-  parsed_gps_data.altitude  = (float)alt_cm * 0.01f;  /* cm -> m */
+  /* quarter-meters above the -500 m MSL floor -> meters */
+  parsed_gps_data.altitude  = (float)alt_qm / FUSED_ALT_SCALE - FUSED_ALT_FLOOR_M;
   parsed_gps_data.v_north   = (float)v_n_cms * 0.01f; /* cm/s -> m/s */
   parsed_gps_data.v_east    = (float)v_e_cms * 0.01f;
   parsed_gps_data.v_down    = (float)v_d_cms * 0.01f;

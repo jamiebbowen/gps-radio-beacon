@@ -9,7 +9,7 @@
  *   - Binary GPS packets      (13 bytes, altitude clamping, flag bits)
  *   - Heartbeats              (rate limiting, uptime saturation)
  *   - Callsign strings        ("KE0MZS-<id> CH<n>")
- *   - Fused EKF packets       (21 bytes, velocity clamping, flag bits)
+ *   - Fused EKF packets       (19 bytes, velocity clamping, flag bits)
  * plus every GPS-rejection path (no fix, <4 sats, bad altitude).
  *
  * Build & run:  make -C transmitter/tests
@@ -286,7 +286,7 @@ TEST(test_landed_flag_both_packet_types)
     fake_fused.gps_fresh = true;
     CHECK(beacon_transmit_fused_data(100, 1) == 1);
     CHECK(tx_buf[0] == PACKET_TYPE_FUSED);
-    CHECK((tx_buf[20] & FUSED_FLAG_LANDED) != 0);
+    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_LANDED) != 0);
     fake_landed = false;
 }
 
@@ -427,16 +427,17 @@ TEST(test_fused_packet_fields)
     fake_fused.imu_healthy = true;
 
     CHECK(beacon_transmit_fused_data(100, 0) == 1);
-    CHECK(tx_len == 21);
+    CHECK(tx_len == 19);
     CHECK(tx_buf[0] == PACKET_TYPE_FUSED);
     CHECK(get_i32_le(&tx_buf[1]) > 398900000);
     CHECK(get_i32_le(&tx_buf[5]) < -1048851000);
-    CHECK(get_i32_le(&tx_buf[9]) == 165543);       /* alt in cm */
-    CHECK(get_i16_le(&tx_buf[13]) == 1234);        /* vN cm/s */
-    CHECK(get_i16_le(&tx_buf[15]) == -321);        /* vE cm/s */
-    CHECK(get_i16_le(&tx_buf[17]) == -5500);       /* vD cm/s */
-    CHECK(tx_buf[19] == 7);                        /* age ds */
-    CHECK(tx_buf[20] == (FUSED_FLAG_GPS_FRESH | FUSED_FLAG_IMU_HEALTHY));
+    /* alt: 1655.43 m -> (1655.43 + 500) * 4 = 8621.72 -> 8622 quarter-m */
+    CHECK((uint16_t)(tx_buf[9] | (tx_buf[10] << 8)) == 8622);
+    CHECK(get_i16_le(&tx_buf[11]) == 1234);        /* vN cm/s */
+    CHECK(get_i16_le(&tx_buf[13]) == -321);        /* vE cm/s */
+    CHECK(get_i16_le(&tx_buf[15]) == -5500);       /* vD cm/s */
+    CHECK(tx_buf[17] == 7);                        /* age ds */
+    CHECK(tx_buf[18] == (FUSED_FLAG_GPS_FRESH | FUSED_FLAG_IMU_HEALTHY));
 }
 
 TEST(test_fused_velocity_clamps_and_flags)
@@ -449,11 +450,11 @@ TEST(test_fused_velocity_clamps_and_flags)
     fake_launch_state = LAUNCH_STATE_CONFIRMED;
 
     CHECK(beacon_transmit_fused_data(100, 1) == 1);
-    CHECK(get_i16_le(&tx_buf[13]) == 32700);
-    CHECK(get_i16_le(&tx_buf[15]) == -32700);
-    CHECK((tx_buf[20] & FUSED_FLAG_DEAD_RECKONING) != 0);
-    CHECK((tx_buf[20] & FUSED_FLAG_LAUNCH_DETECTED) != 0);
-    CHECK((tx_buf[20] & FUSED_FLAG_GPS_FRESH) == 0);
+    CHECK(get_i16_le(&tx_buf[11]) == 32700);
+    CHECK(get_i16_le(&tx_buf[13]) == -32700);
+    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_DEAD_RECKONING) != 0);
+    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_LAUNCH_DETECTED) != 0);
+    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_GPS_FRESH) == 0);
     fake_launch_state = LAUNCH_STATE_IDLE;
 }
 
@@ -471,7 +472,7 @@ TEST(test_fused_sensor_degraded_flag)
     /* Exact byte: ONLY bit 2 may be set. SENSOR_DEGRADED is the wire-format
      * pin for the IMU-dead signal - the receiver decodes it at the same
      * offset (see its mirror test in receiver/tests/test_rf_parser.c). */
-    CHECK(tx_buf[20] == FUSED_FLAG_SENSOR_DEGRADED);
+    CHECK(tx_buf[FUSED_PACKET_SIZE - 1] == FUSED_FLAG_SENSOR_DEGRADED);
 }
 
 TEST(test_fused_wire_format_pin)
@@ -480,9 +481,9 @@ TEST(test_fused_wire_format_pin)
      * the two files breaks the link silently. These literal CHECKs (and the
      * identical block in receiver/tests/test_rf_parser.c) make a drift a
      * red test on whichever side changed without updating the other. */
-    CHECK(sizeof(FusedPosPacket_t) == 21);
-    CHECK(offsetof(FusedPosPacket_t, age_ds) == 19);
-    CHECK(offsetof(FusedPosPacket_t, flags)  == 20);
+    CHECK(sizeof(FusedPosPacket_t) == 19);
+    CHECK(offsetof(FusedPosPacket_t, age_ds) == 17);
+    CHECK(offsetof(FusedPosPacket_t, flags)  == 18);
 
     CHECK(FUSED_FLAG_LAUNCH_DETECTED == 0x80);
     CHECK(FUSED_FLAG_GPS_FRESH       == 0x40);

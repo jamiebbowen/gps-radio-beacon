@@ -27,7 +27,7 @@ make clean
 |---|---|---|
 | ASCII CSV (`lat,lon,alt[,sats]` / callsign) | `RF_Parser_ParseAsciiPacket` | variable |
 | Binary GPS fix | `RF_Parser_ParseBinaryPacket` | 13 bytes |
-| EKF fused position + velocity | `RF_Parser_ParseFusedPacket` | 21 bytes |
+| EKF fused position + velocity | `RF_Parser_ParseFusedPacket` | 19 bytes |
 
 Tests include NMEA→decimal-degree conversion accuracy, hemisphere signs,
 malformed/NULL/short packet rejection, coordinate range validation, flag

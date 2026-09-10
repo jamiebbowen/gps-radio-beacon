@@ -5,7 +5,7 @@
  * Exercises all three wire formats accepted from the transmitter:
  *   1. ASCII CSV packets  (RF_Parser_ParseAsciiPacket)
  *   2. Binary GPS packets (RF_Parser_ParseBinaryPacket, 13 bytes)
- *   3. Fused EKF packets  (RF_Parser_ParseFusedPacket, 21 bytes)
+ *   3. Fused EKF packets  (RF_Parser_ParseFusedPacket, 19 bytes)
  *
  * Build & run:  make -C receiver/tests          (see tests/Makefile)
  * Coverage:     make -C receiver/tests coverage
@@ -51,19 +51,20 @@ static void build_gps_packet(uint8_t *buf, double lat_deg, double lon_deg,
     buf[12] = flags;
 }
 
-/** Build a 21-byte fused EKF packet as the transmitter would. */
+/** Build a 19-byte fused EKF packet as the transmitter would.
+ *  alt_qm is the raw encoded altitude: (alt_m + 500) * 4 quarter-meters. */
 static void build_fused_packet(uint8_t *buf, double lat_deg, double lon_deg,
-                               int32_t alt_cm, int16_t vn_cms, int16_t ve_cms,
+                               uint16_t alt_qm, int16_t vn_cms, int16_t ve_cms,
                                int16_t vd_cms, uint8_t age_ds, uint8_t flags) {
     buf[0] = PACKET_TYPE_FUSED;
     put_i32_le(&buf[1], (int32_t)(lat_deg * 10000000.0));
     put_i32_le(&buf[5], (int32_t)(lon_deg * 10000000.0));
-    put_i32_le(&buf[9], alt_cm);
-    put_i16_le(&buf[13], vn_cms);
-    put_i16_le(&buf[15], ve_cms);
-    put_i16_le(&buf[17], vd_cms);
-    buf[19] = age_ds;
-    buf[20] = flags;
+    put_i16_le(&buf[9], (int16_t)alt_qm);
+    put_i16_le(&buf[11], vn_cms);
+    put_i16_le(&buf[13], ve_cms);
+    put_i16_le(&buf[15], vd_cms);
+    buf[17] = age_ds;
+    buf[18] = flags;
 }
 
 /* ------------------------------------------------------------------ */
@@ -247,7 +248,7 @@ TEST(test_fused_valid_packet) {
     RF_Parser_Reset();
     uint8_t pkt[FUSED_PACKET_SIZE];
     build_fused_packet(pkt, 39.8900750, -105.1155100,
-                       167170,           /* 1671.70 m           */
+                       8687,             /* (1671.7 + 500) * 4  */
                        1234, -567, -89,  /* vN/vE/vD in cm/s    */
                        7,
                        FUSED_FLAG_LAUNCH_DETECTED | FUSED_FLAG_GPS_FRESH
@@ -259,7 +260,7 @@ TEST(test_fused_valid_packet) {
     CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
     CHECK_NEAR(gps.latitude, 39.8900750, 1e-5);
     CHECK_NEAR(gps.longitude, -105.1155100, 1e-5);
-    CHECK_NEAR(gps.altitude, 1671.70, 1e-2);
+    CHECK_NEAR(gps.altitude, 1671.75, 0.3);   /* quarter-meter quantization */
     CHECK_NEAR(gps.v_north, 12.34, 1e-3);
     CHECK_NEAR(gps.v_east, -5.67, 1e-3);
     CHECK_NEAR(gps.v_down, -0.89, 1e-3);
@@ -276,7 +277,7 @@ TEST(test_fused_valid_packet) {
 TEST(test_fused_sensor_degraded_flag) {
     RF_Parser_Reset();
     uint8_t pkt[FUSED_PACKET_SIZE];
-    build_fused_packet(pkt, 39.89, -105.11, 100000, 0, 0, 0, 3,
+    build_fused_packet(pkt, 39.89, -105.11, 6000, 0, 0, 0, 3,
                        FUSED_FLAG_SENSOR_DEGRADED);
 
     CHECK(RF_Parser_ParseFusedPacket(pkt, sizeof(pkt)) == RF_PARSER_OK);
@@ -298,7 +299,7 @@ TEST(test_sensor_degraded_cleared_by_raw_gps) {
      * clearing discipline as fused_dr / fused_gps_fresh). */
     RF_Parser_Reset();
     uint8_t fused_pkt[FUSED_PACKET_SIZE], gps_pkt[13];
-    build_fused_packet(fused_pkt, 39.89, -105.11, 100000, 0, 0, 0, 3,
+    build_fused_packet(fused_pkt, 39.89, -105.11, 6000, 0, 0, 0, 3,
                        FUSED_FLAG_SENSOR_DEGRADED);
     CHECK(RF_Parser_ParseFusedPacket(fused_pkt, FUSED_PACKET_SIZE) == RF_PARSER_OK);
 
@@ -315,7 +316,7 @@ TEST(test_fused_reserved_bits_ignored) {
      * until then the parser must not misattribute them to known flags. */
     RF_Parser_Reset();
     uint8_t pkt[FUSED_PACKET_SIZE];
-    build_fused_packet(pkt, 39.89, -105.11, 10000, 0, 0, 0, 3,
+    build_fused_packet(pkt, 39.89, -105.11, 2400, 0, 0, 0, 3,
                        FUSED_FLAG_RESERVED_MASK);
     CHECK(RF_Parser_ParseFusedPacket(pkt, sizeof(pkt)) == RF_PARSER_OK);
 
@@ -332,7 +333,7 @@ TEST(test_fused_wire_format_constants_pin) {
      * this repo's two copies of packet_format.h must never drift. Keep the
      * literal expectations in sync on both sides. */
     CHECK(sizeof(FusedPosPacket_t) == FUSED_PACKET_SIZE);
-    CHECK(FUSED_PACKET_SIZE == 21);
+    CHECK(FUSED_PACKET_SIZE == 19);
     CHECK(FUSED_FLAG_LAUNCH_DETECTED == 0x80);
     CHECK(FUSED_FLAG_GPS_FRESH       == 0x40);
     CHECK(FUSED_FLAG_IMU_HEALTHY     == 0x20);
@@ -345,7 +346,7 @@ TEST(test_fused_wire_format_constants_pin) {
 TEST(test_fused_dead_reckoning_flag) {
     RF_Parser_Reset();
     uint8_t pkt[FUSED_PACKET_SIZE];
-    build_fused_packet(pkt, 39.89, -105.11, 100000, 0, 0, 0, 255,
+    build_fused_packet(pkt, 39.89, -105.11, 6000, 0, 0, 0, 255,
                        FUSED_FLAG_DEAD_RECKONING);
 
     CHECK(RF_Parser_ParseFusedPacket(pkt, sizeof(pkt)) == RF_PARSER_OK);
@@ -364,7 +365,7 @@ TEST(test_fused_landed_flag_both_streams) {
      * interleave (same bug class as the fix-clobber regression above). */
     RF_Parser_Reset();
     uint8_t fused_pkt[FUSED_PACKET_SIZE], gps_pkt[13];
-    build_fused_packet(fused_pkt, 39.89, -105.11, 10000, 0, 0, 0, 3,
+    build_fused_packet(fused_pkt, 39.89, -105.11, 2400, 0, 0, 0, 3,
                        FUSED_FLAG_GPS_FRESH | FUSED_FLAG_LANDED);
     CHECK(RF_Parser_ParseFusedPacket(fused_pkt, FUSED_PACKET_SIZE) == RF_PARSER_OK);
     GPS_Data gps;
@@ -411,7 +412,7 @@ TEST(test_fused_does_not_clobber_gps_fix) {
     RF_Parser_Reset();
     uint8_t gps_pkt[13], fused_pkt[FUSED_PACKET_SIZE];
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x43);  /* fix = 3 */
-    build_fused_packet(fused_pkt, 39.90, -105.12, 10000, 100, 0, 0, 3,
+    build_fused_packet(fused_pkt, 39.90, -105.12, 2400, 100, 0, 0, 3,
                        FUSED_FLAG_GPS_FRESH);
 
     CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
@@ -427,7 +428,7 @@ TEST(test_gps_does_not_clobber_fused_velocity) {
      * GPS packets so the nav display doesn't flicker to 0.0 m/s. */
     RF_Parser_Reset();
     uint8_t gps_pkt[13], fused_pkt[FUSED_PACKET_SIZE];
-    build_fused_packet(fused_pkt, 39.90, -105.12, 10000, 1500, -250, 40, 3, 0);
+    build_fused_packet(fused_pkt, 39.90, -105.12, 2400, 1500, -250, 40, 3, 0);
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x41);
 
     CHECK(RF_Parser_ParseFusedPacket(fused_pkt, FUSED_PACKET_SIZE) == RF_PARSER_OK);
