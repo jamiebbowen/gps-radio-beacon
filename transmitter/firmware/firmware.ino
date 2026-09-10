@@ -32,7 +32,9 @@
  * 
  * 3. POST_LAUNCH (Recovery Mode):
  *    - Purpose: High-frequency recovery transmissions
- *    - Behavior: Continuous transmission for maximum recovery chances
+ *    - Behavior: Full GPS packet every POST_LAUNCH_PACKET_INTERVAL_SEC +
+ *      fused packets at FUSED_TX_INTERVAL_MS (the PA duty cycle at SF10
+ *      doesn't tolerate free-running both streams for 10 minutes)
  *    - Data Format: Full GPS packet (lat, lon, alt, satellites)
  *    - Duration: POST_LAUNCH_RECOVERY_DURATION_SEC, then BATTERY_SAVE
  * 
@@ -52,7 +54,7 @@
 typedef enum {
     BEACON_STATE_PRE_LAUNCH,      // Pre-launch: interval TX, full packets
     BEACON_STATE_LAUNCH,          // Launch: continuous fast packets
-    BEACON_STATE_POST_LAUNCH,     // Post-launch: continuous full packets
+    BEACON_STATE_POST_LAUNCH,     // Post-launch: paced full + fast fused packets
     BEACON_STATE_BATTERY_SAVE     // Extended recovery: interval TX, full packets
 } beacon_state_t;
 
@@ -116,12 +118,16 @@ void timer_isr_handler(void) {
                 break;
                 
             case BEACON_STATE_POST_LAUNCH:
-                // Post-launch mode - continuous sending
-                transmit_beacon_flag = 1;
+                // Post-launch recovery: paced raw-GPS packets (see
+                // POST_LAUNCH_PACKET_INTERVAL_SEC - the fused stream
+                // already carries high-rate updates)
+                if (time_since_last_tx >= POST_LAUNCH_PACKET_INTERVAL_SEC) {
+                    transmit_beacon_flag = 1;
+                }
                 break;
                 
             case BEACON_STATE_BATTERY_SAVE:
-                // Battery save mode - transmit every 30 seconds
+                // Battery save mode - transmit every BATTERY_SAVE_INTERVAL_SEC
                 if (time_since_last_tx >= BATTERY_SAVE_INTERVAL_SEC) {
                     transmit_beacon_flag = 1;
                 }

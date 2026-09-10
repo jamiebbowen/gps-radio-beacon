@@ -86,6 +86,14 @@
  * radius of each other: a lone glitch fix can't anchor the EKF wrong. */
 #define NAV_ANCHOR_CONFIRM_M            30.0f
 
+/* Post-launch recovery-mode pacing between raw GPS packets (seconds).
+ * Fused packets interleave at FUSED_TX_INTERVAL_MS, so position updates
+ * land roughly every 0.6 s anyway - the raw stream here is the audit
+ * copy. Free-running BOTH streams at SF10 would key the M33S PA at ~100%
+ * duty for the entire POST_LAUNCH recovery window: thermal stress the
+ * module class isn't rated for, plus needless current. */
+#define POST_LAUNCH_PACKET_INTERVAL_SEC 2
+
 /* Fused-packet transmit cadence in LAUNCH state. Must exceed the fused
  * packet's air time (SF10/BW125/CR4-8, 21 bytes + 16-symbol preamble ≈
  * 0.56 s); 600 ms gives ~1.7 fused updates/s in flight. Faster is
