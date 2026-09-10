@@ -464,7 +464,7 @@ SD_Card_Status SD_Card_LogCompass(float heading, int16_t x, int16_t y, int16_t z
  * file to its last-synced state: a header and nothing else. Field cards
  * showed exactly that - header-only L000N.TXT files from sessions where
  * the beacon was demonstrably heard (the log file is only created on
- * proof of beacon). Events are rare (<=1 per 5 s heartbeat), so the
+ * proof of beacon). Events are rare (<=1 per 30 s heartbeat), so the
  * ~50 ms commit is trivial. */
 SD_Card_Status SD_Card_LogEvent(const char *msg)
 {

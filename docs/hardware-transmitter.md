@@ -429,9 +429,9 @@ Transmitted every 5 minutes for FCC compliance.
 | Frequency | 433.0 MHz | ✅ YES |
 | Bandwidth | 125 kHz | ✅ YES |
 | Spreading Factor | 7 | ✅ YES |
-| Coding Rate | 4/7 | ✅ YES |
+| Coding Rate | 4/6 | ✅ YES |
 | Sync Word | 0x12 | ✅ YES |
-| Packet Format | Binary typed packets (GPS 13 B / fused 16 B / heartbeat 8 B) | ✅ YES |
+| Packet Format | Binary typed packets (GPS 13 B / fused 19 B / heartbeat 8 B) | ✅ YES |
 
 **TX Power does NOT need to match** (transmitter can use higher power)
 

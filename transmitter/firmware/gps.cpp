@@ -36,7 +36,7 @@ static uint8_t  gps_recovery_attempts = 0; // watchdog resets issued
 
 /* Grace periods before declaring a fault. The module emits NMEA in 1 Hz
  * bursts, so multi-second silence is already abnormal; kept well below the
- * 5 s heartbeat interval so the very first heartbeat carries a verdict. */
+ * heartbeat interval (30 s) so the very first heartbeat carries a verdict. */
 #define GPS_HEALTH_SILENT_MS   3000UL   // no bytes at all -> wiring/power
 #define GPS_HEALTH_NO_NMEA_MS  5000UL   // bytes but no GGA/RMC -> baud/noise
 

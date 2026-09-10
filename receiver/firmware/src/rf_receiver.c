@@ -15,13 +15,13 @@
 /* Private defines */
 #define RF_ASCII_BUFFER_SIZE       128
 
-/* Channel-scan dwell time. Exceeds the no-fix heartbeat cadence (5 s) so
- * a beacon that can't see the sky is still caught deterministically. A
- * beacon WITH a fix beaconed less predictably ever since PRE_LAUNCH went
- * to 20 s + fused at 10 s (GPS-desense fix): each 6.5 s dwell on the right
- * channel now has ~65% odds of catching a fused packet, so lock lands
- * statistically within one or two 52 s laps instead of one. Lock still
- * fires on the first CRC-valid packet from any channel. */
+/* Channel-scan dwell time. Since the pad went 30 s cadence (GPS-desense
+ * work), NOTHING exceeds the beacon's packet spacing anymore: each 6.5 s
+ * dwell on the right channel has ~22% odds of landing on a heartbeat /
+ * fused packet, so lock is statistical - typically 1-4 laps of ~52 s.
+ * (Lock still fires on the first CRC-valid packet from any channel, and
+ * the re-acquire path's 62 s sticky dwell on the last channel is immune
+ * to any of this below the 60 s battery-save cadence.) */
 #define RF_SCAN_DWELL_MS           6500U
 
 /* CAD fast-scan phase: sniff each channel for a LoRa preamble (~20 ms per
@@ -31,7 +31,7 @@
  * mid-preamble. If nothing is caught (beacon idle, weak signal, or CAD
  * config rejected by the chip), the scan falls back to the dwell phase,
  * which guarantees a lock within one 52 s lap of a transmitting beacon. */
-#define RF_SCAN_CAD_PHASE_MS       30000U  /* fast phase length (~6 heartbeats) */
+#define RF_SCAN_CAD_PHASE_MS       30000U  /* fast phase length */
 #define RF_SCAN_CAD_TIMEOUT_MS     150U    /* CAD itself must finish in ~20 ms */
 #define RF_SCAN_CAD_RX_WAIT_MS     2000U   /* detection -> packet grace period
                                             * (> max packet airtime at SF10/62.5k) */
@@ -114,7 +114,9 @@ static uint32_t last_heartbeat_time = 0;   /* 0 = never heard one */
  * A live beacon's own 1 Hz transmissions pin the receiver AGC and every
  * GetRssiInst sample reads the beacon's shadow, not the ambient floor -
  * park AND backyard logs both latched a false "RF NOISE HIGH" at nf~-72 dBm
- * with the beacon 2 m away. 10 s > 2x heartbeat cadence, << auto-rescan. */
+ * with the beacon 2 m away. 10 s > heartbeat-cadence-era assumption,
+ * << auto-rescan. (Heartbeat is 30 s now; sampling can happen between
+ * heartbeats - the packets still pin down the window edges.) */
 #define RF_NOISE_LINK_QUIET_MS 10000U
 static int16_t  noise_samples[RF_NOISE_WINDOW];
 static uint8_t  noise_sample_idx = 0;

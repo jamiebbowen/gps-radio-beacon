@@ -1082,25 +1082,26 @@ int main(void)
 
     case DISPLAY_MODE_PREFLIGHT: {
       /* Link freshness: the gate must EXCEED the pre-launch cadence
-       * (PRE_LAUNCH_INTERVAL_SEC = 20 s), otherwise the check flaps CHK
-       * for the last 5 s of every pad cycle. 25 s covers one full cycle
-       * plus margin; heartbeats (5 s) fill the gap in no-fix state. */
+       * (PRE_LAUNCH_INTERVAL_SEC = 30 s), otherwise the check flaps CHK
+       * for the tail of every pad cycle. 35 s covers one full cycle
+       * plus margin; heartbeats (30 s) fill the gap in no-fix state. */
       uint8_t pf_link_ok = 0;
       uint32_t pf_link_age_s = 0;
       if (last_rf_packet_time > 0) {
         pf_link_age_s = (current_time - last_rf_packet_time) / 1000;
-        pf_link_ok = (pf_link_age_s <= 25);
+        pf_link_ok = (pf_link_age_s <= 35);
       }
       int16_t pf_rssi = 0;
       int8_t pf_snr = 0;
       RF_Receiver_GetSignalQuality(&pf_rssi, &pf_snr);
 
       /* Heartbeat health is only meaningful when the heartbeat is fresh;
-       * once position packets flow it goes quiet by design. */
+       * once position packets flow it goes quiet by design. 35 s gate
+       * tracks the 30 s heartbeat cadence. */
       HeartbeatPacket_t pf_hb;
       uint32_t pf_hb_age = 0;
       uint8_t pf_hb_state = 0xFF;
-      if (RF_Receiver_GetLastHeartbeat(&pf_hb, &pf_hb_age) && pf_hb_age < 15000) {
+      if (RF_Receiver_GetLastHeartbeat(&pf_hb, &pf_hb_age) && pf_hb_age < 35000) {
         pf_hb_state = HB_GPS_STATE(pf_hb.gps_health);
       }
 

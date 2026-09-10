@@ -74,10 +74,10 @@ integrated path length, not straight-line displacement.
 
 ### RF link
 
-Pre-launch cadence is 20 s for raw GPS packets plus a fused packet every
-10 s (kept sparse on purpose: full-power pad bursts nearby desense GPS
-front ends); post-launch is continuous. The "TX rate boost" column shows
-how much faster the in-flight data comes in.
+Pre-launch cadence is 30 s across all packet types (heartbeats included -
+kept sparse on purpose: full-power pad bursts nearby desense GPS
+front ends); post-launch is paced (raw every 2 s, fused every 1.2 s).
+The "TX rate boost" column shows how much faster in-flight data comes in.
 
 ### Predicted range
 
