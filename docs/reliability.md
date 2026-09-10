@@ -190,6 +190,7 @@ margin** at SF7 -- consistent with the budget above.
 | SF9, 125 kHz | ~8-12 km | 370 ms | 1.8 kbps | Balanced rocket tracking |
 | SF10, 125 kHz | ~12-18 km | 660 ms | 980 bps | Range-first tracking |
 | SF10, 62.5 kHz (default, 2026-09) | ~16-25 km | 1.1 s | 490 bps | + narrowband channel |
+| SF11, 62.5 kHz | +3 dB over SF10 | 2.2 s | ~250 bps | Rejected: halves update rate + scan agility for +3 dB |
 | SF12, 125 kHz | ~15-25 km | 2.6 s | 290 bps | Not useful for flight |
 
 **Preamble**: default 8 symbols is a good compromise. Increasing to 12-16
@@ -213,14 +214,24 @@ broken antenna can cost **10-20 dB** (50-90% range reduction). Checklist:
 ### 5.1 US (FCC)
 
 - 433.05-434.79 MHz is a secondary allocation inside the 70 cm amateur band
-- Max power: 1 W (30 dBm) -- current default is legal
-- Beacon transmits its callsign every 5 minutes (FCC identification requirement)
+- No 1 W cap: Part 97 allows up to 1500 W PEP on 70 cm. The practical
+  ceiling here is the M33S module (~33 dBm / 2 W claimed) - but actual
+  radiated power has never been bench-measured; treat that with suspicion
+  until a power meter says otherwise
+- Beacon self-identifies with the callsign every 5 minutes, twice as often
+  as §97.119's 10-minute requirement - including in battery-save state,
+  so "end of transmission" ID is covered by the ongoing stream
+- No amateur duty-cycle cap exists; throttle anyway: pad pace is sparse for
+  GPS-desense reasons, POST_LAUNCH pacing is for PA thermal reasons
 - An amateur radio license (Technician class or higher) is required
 
 ### 5.2 EU (ETSI)
 
-- 433 MHz ISM is limited to **10 mW (10 dBm)** with duty-cycle limits
-- Change `LORA_TX_POWER` to `10` before operating in the EU
+- **This configuration cannot be made EU-legal by a power change.**
+  EU ISM at 433 MHz (EN 300 220) caps power at 10 mW, channels at 25 kHz,
+  and duty cycle at 10% - versus this design's ~33 dBm, 62.5 kHz channels,
+  and flight-phase streaming. An EU variant would need LPD433 channeling,
+  a slow sparse telemetry profile, and the PA disabled.
 
 ### 5.3 Other regions
 
