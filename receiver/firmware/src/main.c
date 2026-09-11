@@ -873,11 +873,24 @@ int main(void)
               int8_t  pkt_snr;
               RF_Receiver_GetSignalQuality(&pkt_rssi, &pkt_snr);
 
-              /* Log navigation snapshot (uses current calculated values) */
-              GPS_Data *base_ptr = has_valid_local_gps ? &local_gps_data : 
+              /* Log navigation snapshot. Compute distance/bearing from THIS
+               * packet's coordinates - distance_to_tx tracks the live fused
+               * state, which diverges from the packet on the wire exactly at
+               * the moments that matter (2026-09-11: fused-DR rows logged
+               * 20 km while the same row's lat/lon showed the packet truth
+               * meters away). */
+              GPS_Data *base_ptr = has_valid_local_gps ? &local_gps_data :
                                    (has_last_good_local_gps ? &last_good_local_gps : NULL);
+              float row_dist_km = -1.0f, row_bearing = -1.0f;
+              if (base_ptr) {
+                float d = calculate_distance(base_ptr->latitude, base_ptr->longitude,
+                                             rf_gps_data.latitude, rf_gps_data.longitude);
+                if (d >= 0.0f) row_dist_km = d / 1000.0f;
+                row_bearing = calculate_bearing(base_ptr->latitude, base_ptr->longitude,
+                                                rf_gps_data.latitude, rf_gps_data.longitude);
+              }
               SD_Card_LogNavigation(&rf_gps_data, base_ptr,
-                                    distance_to_tx, direction_to_tx,
+                                    row_dist_km, row_bearing,
                                     compass_heading, pkt_rssi, pkt_snr);
             }
           } else {
