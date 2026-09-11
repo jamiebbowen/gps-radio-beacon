@@ -281,6 +281,81 @@ TEST(test_innovation_gate_rejects_gps_glitch)
     CHECK(f.lat_deg > ANCHOR_LAT);                  /* pulled north */
 }
 
+TEST(test_survives_random_gps_holes_and_glitches)
+{
+    /* Bench-in-a-box for the 2026-09-11 failure class: a wandering track,
+     * random radio-shadow holes (up to ~2 min), occasional 300 m glitch
+     * fixes, IMU always healthy. The old code could leave holes rejecting
+     * every honest fix forever; with the rescue policy the filter must
+     * always re-converge once fixes return. Deterministic PRNG so this
+     * stays reproducible across runs. */
+    nav_init();
+    fake_has_quat = true;
+    fake_quat[0] = 1.0f; fake_quat[1] = fake_quat[2] = fake_quat[3] = 0.0f;
+
+    double true_lat = ANCHOR_LAT, true_lon = ANCHOR_LON;
+    float walk_n = 0.0f, walk_e = 0.0f;
+    nav_update_from_gps(true_lat, true_lon, ANCHOR_ALT, 8, 1);
+    now_ms += 1000; fake_accel_ms = now_ms;
+    nav_update_from_gps(true_lat, true_lon, ANCHOR_ALT, 8, 1);
+    CHECK(nav_is_valid() == true);
+
+    uint32_t lcg = 0xC0FFEE09u;
+    auto rnd = [&]() -> uint32_t {
+        lcg = lcg * 1664525u + 1013904223u;
+        return (lcg >> 8) & 0xFFFFFFu;
+    };
+
+    const double M_PER_DEG_LON = 111320.0f * 0.7661f;  /* cos(39.89 deg) */
+    int hole_left = 0, good_streak = 99;
+    uint32_t fixes_sent = 0, glitches = 0;
+
+    for (int t = 0; t < 1600; t++) {
+        now_ms += 1000;
+        fake_accel_ms = now_ms;
+
+        /* slow wander, ~1 m/s-ish */
+        walk_n = 0.9f * walk_n + ((float)(rnd() % 100) - 50.0f) * 0.01f;
+        walk_e = 0.9f * walk_e + ((float)(rnd() % 100) - 50.0f) * 0.01f;
+        true_lat += walk_n / 111320.0f;
+        true_lon += walk_e / M_PER_DEG_LON;
+
+        if (hole_left == 0 && good_streak > 10 && (rnd() % 100) < 6) {
+            hole_left = 5 + (int)(rnd() % 120);   /* 5-124 s hole */
+        }
+
+        if (hole_left > 0) {
+            hole_left--;
+            good_streak = 0;
+        } else {
+            good_streak++;
+            double lat = true_lat + ((float)(rnd() % 60) - 30.0f) / 1113200.0f;
+            double lon = true_lon + ((float)(rnd() % 60) - 30.0f) / (M_PER_DEG_LON * 10.0f);
+            if ((rnd() % 33) == 0) {
+                lat += 0.003f;                     /* ~330 m glitch fix */
+                glitches++;
+            }
+            nav_update_from_gps(lat, lon, ANCHOR_ALT, 8, 1);
+            fixes_sent++;
+        }
+    }
+
+    /* The verdicts that used to fail:
+     *  - the filter is alive and tracking at the end (not locked out),
+     *  - rescue pathway actually fired at least once over 900 s,
+     *  - occasional glitches got rejected, but not everything did. */
+    NavFused_t f;
+    nav_get_fused(&f);
+    double err_m = fabs(f.lat_deg - true_lat) * 111320.0f
+                 + fabs(f.lon_deg - true_lon) * M_PER_DEG_LON;
+    CHECK(err_m < 150.0);
+    CHECK(strstr(Serial.log, "RESCUE") != NULL);
+    CHECK(glitches > 0);
+    CHECK(fixes_sent > 400);
+    CHECK(nav_get_gps_rejects() < fixes_sent);   /* rejecting FOREVER was
+                                                    * the park-test bug  */
+}
+
 TEST(test_innovation_gate_fails_open_when_imu_dead)
 {
     fresh_nav_with_anchor();
@@ -513,6 +588,7 @@ int main(void)
     run_test_anchor_and_roundtrip();
     run_test_gps_updates_pull_position();
     run_test_innovation_gate_rejects_gps_glitch();
+    run_test_survives_random_gps_holes_and_glitches();
     run_test_innovation_gate_fails_open_when_imu_dead();
     run_test_rescue_fails_open_after_starvation();
     run_test_rescue_reanchors_when_far();

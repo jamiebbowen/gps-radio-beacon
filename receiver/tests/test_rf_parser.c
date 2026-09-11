@@ -19,6 +19,7 @@
 #include "rf_parser.h"
 #include "packet_format.h"
 #include "test_harness.h"
+#include "airlink_golden.h"
 
 /* Include the module under test directly (not linked - see tests/Makefile)
  * so tests can reach static helpers and exercise their defensive guards. */
@@ -386,6 +387,28 @@ TEST(test_fused_landed_flag_both_streams) {
     CHECK(gps.fused_landed == 1);
 }
 
+TEST(test_airlink_golden_fused_decode) {
+    /* Decode the same golden bytes the TX encoder test emits
+     * (receiver/tests/airlink_golden.h) - the two suites share one
+     * authoritative byte stream so wire-format drift is unmissable. */
+    RF_Parser_Reset();   /* last_raw_gps_ms=0 so the stale-override can't gate */
+    CHECK(RF_Parser_ParseFusedPacket(AIRLINK_FUSED_GOLDEN,
+                                     sizeof(AIRLINK_FUSED_GOLDEN)) == RF_PARSER_OK);
+
+    GPS_Data gps;
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK_NEAR(gps.latitude,  AIRLINK_FUSED_LAT_DEG, 1e-4);
+    CHECK_NEAR(gps.longitude, AIRLINK_FUSED_LON_DEG, 1e-4);
+    CHECK_NEAR(gps.altitude,  1655.5, 0.3);       /* quarter-meter rounding */
+    CHECK_NEAR(gps.v_north, 12.34, 1e-3);
+    CHECK_NEAR(gps.v_east,  -3.21, 1e-3);
+    CHECK_NEAR(gps.v_down,  -55.0,  1e-3);
+    CHECK(gps.fused_age_ds == 7);
+    CHECK(gps.fused_gps_fresh == 1 && gps.fused_imu_healthy == 1);
+    CHECK(gps.fused_dr == 0 && gps.fused_landed == 0);
+    CHECK(gps.fused_sensor_degraded == 0);
+}
+
 TEST(test_stale_fused_does_not_override_fresh_raw) {
     /* 2026-09-11 field failure: a diverged TX-side EKF drifted the fused
      * position ~22 km off while honest raw GPS packets kept arriving -
@@ -617,6 +640,7 @@ int main(void) {
     run_test_sensor_degraded_cleared_by_raw_gps();
     run_test_fused_reserved_bits_ignored();
     run_test_fused_wire_format_constants_pin();
+    run_test_airlink_golden_fused_decode();
     run_test_stale_fused_does_not_override_fresh_raw();
     run_test_fresh_fused_always_updates_position();
     run_test_fused_landed_flag_both_streams();

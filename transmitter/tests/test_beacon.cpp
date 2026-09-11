@@ -29,6 +29,7 @@
 #include "include/launch_detect.h"
 #include "include/packet_format.h"
 #include "test_harness.h"
+#include "airlink_golden.h"
 
 /* ------------------------------------------------------------------ */
 /* Arduino core fakes                                                  */
@@ -494,6 +495,31 @@ TEST(test_fused_wire_format_pin)
     CHECK(FUSED_FLAG_RESERVED_MASK   == 0x03);
 }
 
+TEST(test_airlink_golden_fused_encode)
+{
+    /* Byte-exact encode pin: the production beacon encoder must emit
+     * exactly the bytes in airlink_golden.h, which the production RX
+     * parser decodes on the other side (receiver/tests/test_rf_parser.c).
+     * This is the end-to-end "TX bit4 vs RX bit3" tripwire: any drift on
+     * either side fails exactly one suite. */
+    reset_tx();
+    memset(&fake_fused, 0, sizeof(fake_fused));
+    fake_fused.valid       = true;
+    fake_fused.lat_deg     = AIRLINK_FUSED_LAT_DEG;
+    fake_fused.lon_deg     = AIRLINK_FUSED_LON_DEG;
+    fake_fused.alt_m       = AIRLINK_FUSED_ALT_M;
+    fake_fused.v_n         = AIRLINK_FUSED_VN_CMS / 100.0f;
+    fake_fused.v_e         = AIRLINK_FUSED_VE_CMS / 100.0f;
+    fake_fused.v_d         = AIRLINK_FUSED_VD_CMS / 100.0f;
+    fake_fused.age_ds      = AIRLINK_FUSED_AGE_DS;
+    fake_fused.gps_fresh   = true;
+    fake_fused.imu_healthy = true;
+
+    CHECK(beacon_transmit_fused_data(100, 1) == 1);
+    CHECK(tx_len == sizeof(AIRLINK_FUSED_GOLDEN));
+    CHECK(memcmp(tx_buf, AIRLINK_FUSED_GOLDEN, sizeof(AIRLINK_FUSED_GOLDEN)) == 0);
+}
+
 TEST(test_fused_hexdump_cadence_and_tx_failure)
 {
     reset_tx();
@@ -531,6 +557,7 @@ int main(void)
     run_test_fused_velocity_clamps_and_flags();
     run_test_fused_sensor_degraded_flag();
     run_test_fused_wire_format_pin();
+    run_test_airlink_golden_fused_encode();
     run_test_fused_hexdump_cadence_and_tx_failure();
 
     return TEST_SUMMARY();

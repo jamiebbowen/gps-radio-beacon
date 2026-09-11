@@ -733,6 +733,37 @@ int main(void)
       }
     }
 
+    /* RF health breadcrumb every 60 s: packets read vs DIO1 IRQs, wedge
+     * recoveries, and the current ambient floor - post-flight forensics for
+     * link implosions that the page-by-page noise alerts alone can't
+     * reconstruct. Same lazy-file policy as the noise events: no file until
+     * a real beacon packet/stream exists. */
+    if (rf_initialized && sd_card_ok) {
+      static uint32_t last_rfstats_ms = 0;
+      uint32_t now_stats_ms = HAL_GetTick();
+      if (now_stats_ms - last_rfstats_ms >= 60000u) {
+        last_rfstats_ms = now_stats_ms;
+        uint32_t irqs = 0, pkts = 0, dups = 0;
+        RF_Receiver_GetPacketLossDiagnostics(&irqs, &pkts, &dups);
+        int16_t nf = 0;
+        if (RF_Receiver_GetNoiseFloor(&nf)) {
+          char st_msg[64];
+          snprintf(st_msg, sizeof(st_msg),
+                   "RFSTATS pkts=%lu irq=%lu wedges=%lu nf=%ddBm",
+                   (unsigned long)pkts, (unsigned long)irqs,
+                   (unsigned long)RF_Receiver_GetWedgesRecovered(), (int)nf);
+          SD_Card_LogEvent(st_msg);
+        } else {
+          char st_msg[64];
+          snprintf(st_msg, sizeof(st_msg),
+                   "RFSTATS pkts=%lu irq=%lu wedges=%lu nf=n/a",
+                   (unsigned long)pkts, (unsigned long)irqs,
+                   (unsigned long)RF_Receiver_GetWedgesRecovered());
+          SD_Card_LogEvent(st_msg);
+        }
+      }
+    }
+
     /* Auto-return to navigation screen after 120s of no button presses */
     if (current_display_mode != DISPLAY_MODE_NAVIGATION &&
         HAL_GetTick() - mode_change_time > 120000) {
