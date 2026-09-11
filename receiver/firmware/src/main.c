@@ -922,7 +922,8 @@ int main(void)
               }
               SD_Card_LogNavigation(&rf_gps_data, base_ptr,
                                     row_dist_km, row_bearing,
-                                    compass_heading, pkt_rssi, pkt_snr);
+                                    compass_heading, compass_data.pitch,
+                                    compass_data.roll, pkt_rssi, pkt_snr);
             }
           } else {
             /* Invalid coordinates despite receiving a packet */

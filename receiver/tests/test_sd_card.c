@@ -241,7 +241,7 @@ TEST(test_log_file_lazy_creation_and_sequencing)
     beacon.latitude = 39.891f; beacon.longitude = -105.112f;
     beacon.altitude = 1800.0f; beacon.satellites = 9;
     CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.25f, 270.0f, 45.0f,
-                                -92, 6) == SD_CARD_OK);
+                                5.0f, -2.0f, -92, 6) == SD_CARD_OK);
 
     char big[2048];
     CHECK(read_file("L0001.TXT", big, sizeof(big)) > 0);  /* seq starts at 1 */
@@ -297,7 +297,7 @@ TEST(test_all_log_row_formats)
     GPS_Data base; memset(&base, 0, sizeof(base));
     base.latitude = 39.7f; base.longitude = -105.0f; base.altitude = 1650.0f;
     CHECK(SD_Card_LogNavigation(&fused, &base, 2.5f, 180.0f, 90.0f,
-                                -88, 8) == SD_CARD_OK);
+                                12.0f, -4.0f, -88, 8) == SD_CARD_OK);
 
     char big[4096];
     CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
@@ -324,7 +324,7 @@ TEST(test_apis_reject_when_uninitialized)
     CHECK(SD_Card_LogCompass(0, 0, 0, 0) == SD_CARD_ERROR);
     CHECK(SD_Card_LogEvent("x") == SD_CARD_ERROR);
     CHECK(SD_Card_LogError("x") == SD_CARD_ERROR);
-    CHECK(SD_Card_LogNavigation(&gps, NULL, 0, 0, 0, 0, 0) == SD_CARD_ERROR);
+    CHECK(SD_Card_LogNavigation(&gps, NULL, 0, 0, 0, 0, 0, 0, 0) == SD_CARD_ERROR);
     CHECK(SD_Card_EnsureLogFile() == SD_CARD_ERROR);
     CHECK(SD_Card_Flush() == SD_CARD_ERROR);
     CHECK(SD_Card_SaveLastBeacon(1, 2, 3) == SD_CARD_ERROR);
@@ -481,13 +481,13 @@ TEST(test_rotation_launchflag_and_write_failure)
     GPS_Data beacon; memset(&beacon, 0, sizeof(beacon));
     beacon.latitude = 39.9f; beacon.longitude = -105.1f;
     beacon.launch_detected = 1;                            /* is_fused = 0 */
-    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 10.0f, 20.0f, -90, 5)
-          == SD_CARD_OK);
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 10.0f, 20.0f,
+                                0.0f, 0.0f, -90, 5) == SD_CARD_OK);
 
     /* Landed latch on the raw (non-fused) stream adds 0x20 to the flags */
     beacon.fused_landed = 1;
-    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 11.0f, 20.0f, -90, 5)
-          == SD_CARD_OK);
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 11.0f, 20.0f,
+                                0.0f, 0.0f, -90, 5) == SD_CARD_OK);
 
     CHECK(SD_Card_Flush() == SD_CARD_OK);
     char big[2048];
@@ -517,8 +517,8 @@ TEST(test_write_recovers_lost_mount)
 
     GPS_Data beacon; memset(&beacon, 0, sizeof(beacon));
     beacon.latitude = 39.9f; beacon.longitude = -105.1f;
-    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 10.0f, 20.0f, -90, 5)
-          == SD_CARD_OK);
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 10.0f, 20.0f,
+                                0.0f, 0.0f, -90, 5) == SD_CARD_OK);
     CHECK(SD_Card_Flush() == SD_CARD_OK);
 
     /* Simulate a recovered contact bounce: mount + handle gone, block
@@ -534,7 +534,7 @@ TEST(test_write_recovers_lost_mount)
 
     /* Next write climbs the recovery ladder (mount + append reopen) and lands */
     Test_SetTick(60000);
-    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 11.0f, 21.0f, -88, 6)
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 11.0f, 21.0f, 0.0f, 0.0f, -88, 6)
           == SD_CARD_OK);
     CHECK(lfs_mounted == 1 && log_file_open == 1);
 
@@ -546,13 +546,13 @@ TEST(test_write_recovers_lost_mount)
     CHECK(lfs_unmount(&lfs) == 0);
     lfs_mounted = 0;
     sd_info.is_mounted = 0;
-    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 12.0f, 22.0f, -88, 6)
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 12.0f, 22.0f, 0.0f, 0.0f, -88, 6)
           == SD_CARD_ERROR);
     CHECK(lfs_mounted == 0);
 
     /* ...and recovers once the backoff has elapsed */
     Test_SetTick(60000 + SD_RECOVERY_BACKOFF_MS + 1000);
-    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 13.0f, 23.0f, -88, 6)
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 13.0f, 23.0f, 0.0f, 0.0f, -88, 6)
           == SD_CARD_OK);
     CHECK(lfs_mounted == 1 && log_file_open == 1);
 

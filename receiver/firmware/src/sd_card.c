@@ -87,16 +87,19 @@ static struct lfs_file_config adhoc_file_cfg = {
  *   11  FusedAge_ds                     12  FusedFlags (hex byte)
  *   13-15 Base lat/lon/alt              16  Distance_km
  *   17-18 Bearing/Heading deg           19-20 RSSI dBm / SNR dB
+ *   21-22 RX antenna Pitch/Roll deg     (pointing diagnostics for the
+ *                                        directional antenna: fused with
+ *                                        Heading to reconstruct boresight)
  */
 static const char SD_LOG_HEADER[] =
     "Timestamp,Type,PktSrc,BeaconLat,BeaconLon,BeaconAlt_m,BeaconSats,"
     "VN_ms,VE_ms,VD_ms,FusedAge_ds,FusedFlags,"
     "BaseLat,BaseLon,BaseAlt_m,Distance_km,Bearing_deg,Heading_deg,"
-    "RSSI_dBm,SNR_dB\n";
+    "RSSI_dBm,SNR_dB,Pitch_deg,Roll_deg\n";
 static const char SD_NAV_ROW_FMT[] =
     "%s,NAV,%s,%.6f,%.6f,%.1f,%d,"
     "%.2f,%.2f,%.2f,%d,%02X,"
-    "%.6f,%.6f,%.1f,%.3f,%.1f,%.1f,%d,%d\n";
+    "%.6f,%.6f,%.1f,%.3f,%.1f,%.1f,%d,%d,%.1f,%.1f\n";
 
 /* Private function prototypes -----------------------------------------------*/
 static SD_Card_Status SD_Card_WriteLogEntry(const char *entry);
@@ -528,7 +531,8 @@ SD_Card_Status SD_Card_EnsureLogFile(void)
 
 SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
                                      float distance_km, float bearing_deg,
-                                     float heading_deg, int16_t rssi, int8_t snr)
+                                     float heading_deg, float pitch_deg,
+                                     float roll_deg, int16_t rssi, int8_t snr)
 {
     if (!sd_initialized) return SD_CARD_ERROR;
 
@@ -588,7 +592,8 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
              b_lat, b_lon, b_alt, b_sats,
              vn, ve, vd, age_ds, (unsigned)fused_flags,
              s_lat, s_lon, s_alt,
-             distance_km, bearing_deg, heading_deg, (int)rssi, (int)snr);
+             distance_km, bearing_deg, heading_deg, (int)rssi, (int)snr,
+             pitch_deg, roll_deg);
 
     SD_Card_Status status = SD_Card_WriteLogEntry(log_buffer);
 

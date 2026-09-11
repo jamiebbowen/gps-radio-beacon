@@ -155,13 +155,16 @@ SD_Card_Status SD_Card_LogError(const char *error_message);
  * @param distance_km Distance to beacon in km
  * @param bearing_deg Absolute bearing to beacon (degrees)
  * @param heading_deg Current compass heading (degrees)
+ * @param pitch_deg   Device pitch (antenna elevation proxy for a handheld yagi)
+ * @param roll_deg    Device roll
  * @param rssi RSSI of received packet in dBm
  * @param snr  SNR of received packet in dB
  * @retval SD_Card_Status
  */
 SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
                                      float distance_km, float bearing_deg,
-                                     float heading_deg, int16_t rssi, int8_t snr);
+                                     float heading_deg, float pitch_deg,
+                                     float roll_deg, int16_t rssi, int8_t snr);
 
 /**
  * @brief Save last known beacon location to BEACON.TXT for persistence across power cycles
