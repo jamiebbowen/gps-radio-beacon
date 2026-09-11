@@ -337,8 +337,8 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
     }
 
     /* Ready-to-fly verdict: the same checks as the PRE-FLIGHT page -
-     * fresh link (35 s gate, matching the 30 s prelaunch TX cadence +
-     * margin), TX fix with >=4 sats, local RX fix, live compass.
+     * fresh link (35 s gate > any current prelaunch cadence + margin),
+     * TX fix with >=4 sats, local RX fix, live compass.
      * SD card is advisory there and excluded here too. */
     uint8_t rtf_link = (last_rf_packet_time > 0) &&
                        (HAL_GetTick() - last_rf_packet_time) <= 35000u;

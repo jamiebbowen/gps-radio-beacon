@@ -17,12 +17,10 @@
 /* Minimum seconds between no-fix heartbeat packets. A heartbeat is sent when
  * a beacon TX was requested but no transmittable GPS fix exists, keeping the
  * receiver's channel scan and operator informed that the beacon is alive.
- * 30 s: equal to the pad packet cadence - on the pad the PA stays quiet so
- * nearby GPS front ends (incl. the beacon's own) get long clean windows.
- * Trade-off owned by the operator: a fix-less beacon's boot-scan lock is
- * statistical now (~22% per 6.5 s dwell on its channel), averaging a couple
- * of minutes rather than seconds to first lock. */
-#define HEARTBEAT_INTERVAL_SEC 30
+ * 5 s while range-testing (dense = fast scan lock + marginal-link evidence).
+ * For flight-prep benching, consider 30 s so pad bursts leave the GPS
+ * front ends long clean windows (see git history / reliability.md). */
+#define HEARTBEAT_INTERVAL_SEC 5
 
 /**
  * Bench-test switch: when 1, the beacon boots directly into BEACON_STATE_LAUNCH
@@ -110,7 +108,7 @@
  * - field logs showed the beacon GPS needing three watchdog recovery rounds
  * before its first fix. Every 10 s cuts pad duty from ~17% to under 2%
  * while still refreshing the operator's display healthily. */
-#define FUSED_TX_INTERVAL_IDLE_MS       30000
+#define FUSED_TX_INTERVAL_IDLE_MS       5000   /* range-testing dense mode */
 
 #if TESTING_MODE
     // Testing Configuration - Fast intervals for development/testing
@@ -126,10 +124,9 @@
     
 #else
     // Production Configuration - Conservative intervals for flight
-    #define PRE_LAUNCH_INTERVAL_SEC         30    // 30 s between raw GPS packets on the pad
-                                                  // (was 5 s - full-power bursts at pad cadence
-                                                  //  desense nearby GPS front ends; the RX preflight
-                                                  //  link gate covers one full cycle + margin)
+    #define PRE_LAUNCH_INTERVAL_SEC         5     // 5 s between raw GPS packets on the pad
+                                                  // (dense for range testing; bench-quiet flight
+                                                  //  prep variant: 30 s, see git history)
     #define POST_LAUNCH_DURATION_SEC        1     // 1 second in LAUNCH state before POST_LAUNCH
     #define POST_LAUNCH_RECOVERY_DURATION_SEC 600 // 10 minutes duration in post-launch state
     #define BATTERY_SAVE_INTERVAL_SEC       60    // 60 seconds between transmissions in battery save

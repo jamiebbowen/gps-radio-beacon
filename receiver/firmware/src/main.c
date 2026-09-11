@@ -1081,10 +1081,11 @@ int main(void)
       break;
 
     case DISPLAY_MODE_PREFLIGHT: {
-      /* Link freshness: the gate must EXCEED the pre-launch cadence
-       * (PRE_LAUNCH_INTERVAL_SEC = 30 s), otherwise the check flaps CHK
-       * for the tail of every pad cycle. 35 s covers one full cycle
-       * plus margin; heartbeats (30 s) fill the gap in no-fix state. */
+      /* Link freshness: the gate must EXCEED the pre-launch cadence,
+       * otherwise the check flaps CHK for the tail of every pad cycle.
+       * 35 s covers the sparser (30 s) flight-prep regime with margin and
+       * stays correct during the denser (5 s) range-testing regime;
+       * heartbeats fill the gap in no-fix state. */
       uint8_t pf_link_ok = 0;
       uint32_t pf_link_age_s = 0;
       if (last_rf_packet_time > 0) {

@@ -15,13 +15,13 @@
 /* Private defines */
 #define RF_ASCII_BUFFER_SIZE       128
 
-/* Channel-scan dwell time. Since the pad went 30 s cadence (GPS-desense
- * work), NOTHING exceeds the beacon's packet spacing anymore: each 6.5 s
- * dwell on the right channel has ~22% odds of landing on a heartbeat /
- * fused packet, so lock is statistical - typically 1-4 laps of ~52 s.
- * (Lock still fires on the first CRC-valid packet from any channel, and
- * the re-acquire path's 62 s sticky dwell on the last channel is immune
- * to any of this below the 60 s battery-save cadence.) */
+/* Channel-scan dwell time. Exceeds the current 5 s pad cadence
+ * (range-testing dense mode), so any beacon on the air is caught
+ * deterministically inside one ~52 s worst-case lap. If the flight-prep
+ * variant goes back to 30 s pad spacing the lock becomes statistical
+ * again - see the git history for the analysis. Lock always fires on the
+ * first CRC-valid packet from any channel, and the re-acquire path's 62 s
+ * sticky dwell covers up to the 60 s battery-save cadence. */
 #define RF_SCAN_DWELL_MS           6500U
 
 /* CAD fast-scan phase: sniff each channel for a LoRa preamble (~20 ms per
@@ -114,9 +114,8 @@ static uint32_t last_heartbeat_time = 0;   /* 0 = never heard one */
  * A live beacon's own 1 Hz transmissions pin the receiver AGC and every
  * GetRssiInst sample reads the beacon's shadow, not the ambient floor -
  * park AND backyard logs both latched a false "RF NOISE HIGH" at nf~-72 dBm
- * with the beacon 2 m away. 10 s > heartbeat-cadence-era assumption,
- * << auto-rescan. (Heartbeat is 30 s now; sampling can happen between
- * heartbeats - the packets still pin down the window edges.) */
+ * with the beacon 2 m away. 10 s covers the historical pad cadences
+ * (5-30 s), << auto-rescan. */
 #define RF_NOISE_LINK_QUIET_MS 10000U
 static int16_t  noise_samples[RF_NOISE_WINDOW];
 static uint8_t  noise_sample_idx = 0;
