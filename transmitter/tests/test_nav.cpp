@@ -294,6 +294,85 @@ TEST(test_innovation_gate_fails_open_when_imu_dead)
     CHECK(f.lat_deg > ANCHOR_LAT + 0.0003f);  /* one update, Kp=0.5: ~55 m */
 }
 
+TEST(test_rescue_fails_open_after_starvation)
+{
+    /* Regression for the 2026-09-11 drive-home divergence: with the coast
+     * state diverged, the gate rejected every honest fix forever and the
+     * fused stream wandered 22 km off. Past NAV_RESCUE_NOFIX_MS without an
+     * accepted fix, the gate itself becomes suspect. The rescue only takes
+     * a motion-consistent PAIR of fixes. */
+    fresh_nav_with_anchor();
+    fake_has_quat = true;
+    fake_quat[0] = 1.0f;
+    fake_accel_ms = now_ms;
+    now_ms += 100;
+    nav_predict();
+
+    /* Still armed below the rescue window: big jump rejected as usual */
+    now_ms += NAV_RESCUE_NOFIX_MS - 2000;
+    fake_accel_ms = now_ms;                  /* IMU fresh: gate stays armed */
+    nav_update_from_gps(ANCHOR_LAT + 0.01f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    CHECK(nav_get_gps_rejects() == 1);
+
+    /* Into the window: fix #1 arms the pair check, is NOT applied yet */
+    now_ms += 2100;
+    fake_accel_ms = now_ms;                       /* IMU still alive (gate
+                                                     * would otherwise already
+                                                     * be off) */
+    nav_update_from_gps(ANCHOR_LAT + 0.05f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    NavFused_t f;
+    nav_get_fused(&f);
+    CHECK(f.lat_deg < ANCHOR_LAT + 0.02f);        /* no snap on fix #1 */
+
+    /* Fix #2, 20 m further (motion-consistent): rescue accepts + snaps */
+    now_ms += 1000;
+    fake_accel_ms = now_ms;
+    nav_update_from_gps(ANCHOR_LAT + 0.0502f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    nav_get_fused(&f);
+    CHECK(fabsf(f.lat_deg - (ANCHOR_LAT + 0.0502f)) < 1e-5f);
+    CHECK(fabsf(f.lon_deg - ANCHOR_LON) < 1e-5f);
+    CHECK(fabsf(f.v_n) < 0.5f);                   /* phantom velocity gone */
+
+    /* Filter behaves again afterwards: small steps flow through the gate */
+    now_ms += 1000;
+    nav_update_from_gps(ANCHOR_LAT + 0.0504f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    nav_get_fused(&f);
+    CHECK(f.lat_deg > ANCHOR_LAT + 0.0502f);
+}
+
+TEST(test_rescue_reanchors_when_far)
+{
+    fresh_nav_with_anchor();
+    fake_has_quat = true;
+    fake_quat[0] = 1.0f;
+    fake_accel_ms = now_ms;
+    now_ms += 100;
+    nav_predict();
+
+    now_ms += NAV_RESCUE_NOFIX_MS + 1500;
+    fake_accel_ms = now_ms;
+
+    const float far_lat = ANCHOR_LAT + 0.5f;      /* ~55 km away */
+    nav_update_from_gps(far_lat, ANCHOR_LON, ANCHOR_ALT, 8, 1);   /* pair 1 */
+    now_ms += 1000;
+    fake_accel_ms = now_ms;
+    nav_update_from_gps(far_lat, ANCHOR_LON, ANCHOR_ALT, 8, 1);   /* pair 2 */
+    NavFused_t f;
+    nav_get_fused(&f);
+    CHECK(fabsf(f.lat_deg - far_lat) < 1e-5f);
+    CHECK(fabsf(f.alt_m - ANCHOR_ALT) < 1.0f);
+
+    /* Anchor itself moved: new fixes track in the new frame without
+     * phantom offsets (old bug: 22 km between latch and truth) */
+    now_ms += 1000;
+    fake_accel_ms = now_ms;
+    nav_update_from_gps(far_lat + 0.0001f, ANCHOR_LON + 0.0001f,
+                        ANCHOR_ALT + 2.0f, 8, 1);
+    nav_get_fused(&f);
+    CHECK(f.lat_deg > far_lat && f.lon_deg > ANCHOR_LON);
+    CHECK(fabsf(f.alt_m - (ANCHOR_ALT + 2.0f)) < 5.0f);
+}
+
 TEST(test_rotated_quaternion)
 {
     /* 90 deg yaw about Z: body +X maps to ENU +Y (north) */
@@ -435,6 +514,8 @@ int main(void)
     run_test_gps_updates_pull_position();
     run_test_innovation_gate_rejects_gps_glitch();
     run_test_innovation_gate_fails_open_when_imu_dead();
+    run_test_rescue_fails_open_after_starvation();
+    run_test_rescue_reanchors_when_far();
     run_test_predict_axis_mapping_enu_to_ned();
     run_test_rotated_quaternion();
     run_test_zero_dt_predict_is_noop();

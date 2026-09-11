@@ -18,6 +18,14 @@ static uint8_t parsed_data_ready;
 static char last_valid_packet[RF_PARSER_BUFFER_SIZE] = {0};
 static char last_raw_packet[RF_PARSER_BUFFER_SIZE]; /* Store the last raw packet for debugging */
 
+/* Freshness of the last raw GPS packet, for the stale-fused override:
+ * a fused packet that admits its TX-side GPS is stale would otherwise
+ * overwrite a good raw fix with EKF drift (field log 2026-09-11: diverged
+ * coast state walked the position 22 km off while honest raw packets
+ * kept landing next to it). */
+static uint32_t last_raw_gps_ms = 0;
+#define RF_FUSED_STALE_OVERRIDE_MS  10000UL
+
 /*  Diagnostic counters */
 static uint32_t parse_attempts = 0;
 static uint32_t parse_successes = 0;
@@ -479,11 +487,12 @@ uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
    * velocity from the TX-side EKF. Keeping them across GPS packets lets the
    * navigation display keep showing the last good ground speed instead of
    * flickering to 0.0 m/s each time a raw GPS packet lands. */
-  parsed_gps_data.is_fused             = 0;
-  parsed_gps_data.fused_dr             = 0;
-  parsed_gps_data.fused_gps_fresh      = 0;
-  parsed_gps_data.fused_imu_healthy    = 0;
+  parsed_gps_data.is_fused              = 0;
+  parsed_gps_data.fused_dr              = 0;
+  parsed_gps_data.fused_gps_fresh       = 0;
+  parsed_gps_data.fused_imu_healthy     = 0;
   parsed_gps_data.fused_sensor_degraded = 0;
+  last_raw_gps_ms                       = HAL_GetTick();
   /* (fused_landed is deliberately NOT zeroed here: raw GPS packets carry
    * their own FLAG_LANDED, parsed above, so both streams drive it.) */
   parsed_gps_data.fused_age_ds      = 0;
@@ -547,13 +556,26 @@ uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length)
     return RF_PARSER_ERROR;
   }
 
-  parsed_gps_data.latitude  = (float)lat;
-  parsed_gps_data.longitude = (float)lon;
-  /* quarter-meters above the -500 m MSL floor -> meters */
-  parsed_gps_data.altitude  = (float)alt_qm / FUSED_ALT_SCALE - FUSED_ALT_FLOOR_M;
-  parsed_gps_data.v_north   = (float)v_n_cms * 0.01f; /* cm/s -> m/s */
-  parsed_gps_data.v_east    = (float)v_e_cms * 0.01f;
-  parsed_gps_data.v_down    = (float)v_d_cms * 0.01f;
+  /* Stale-fused override: when the fused packet admits its TX-side GPS is
+   * stale (GPS_FRESH clear) - i.e. the position is pure dead-reckoning -
+   * and a raw GPS position landed within RF_FUSED_STALE_OVERRIDE_MS, the
+   * raw stream's view of position wins. Field log 2026-09-11: a diverged
+   * DR state dragged the reported track 22 km off while honest raw packets
+   * printed the real one; the nav page flicker "fixed itself" whenever a
+   * GPS packet arrived. Position AND velocity stay untouched in that case;
+   * the fused_* metadata still updates so the DR/SNS chips report truth. */
+  uint8_t fused_stale = (flags & FUSED_FLAG_GPS_FRESH) == 0;
+  uint8_t override_position = fused_stale && last_raw_gps_ms != 0 &&
+      (HAL_GetTick() - last_raw_gps_ms) < RF_FUSED_STALE_OVERRIDE_MS;
+  if (!override_position) {
+    parsed_gps_data.latitude  = (float)lat;
+    parsed_gps_data.longitude = (float)lon;
+    /* quarter-meters above the -500 m MSL floor -> meters */
+    parsed_gps_data.altitude  = (float)alt_qm / FUSED_ALT_SCALE - FUSED_ALT_FLOOR_M;
+    parsed_gps_data.v_north   = (float)v_n_cms * 0.01f; /* cm/s -> m/s */
+    parsed_gps_data.v_east    = (float)v_e_cms * 0.01f;
+    parsed_gps_data.v_down    = (float)v_d_cms * 0.01f;
+  }
 
   /* Satellites aren't carried in fused packets; leave whatever was last
    * seen.
@@ -594,6 +616,7 @@ void RF_Parser_Reset(void)
   memset(&parsed_gps_data, 0, sizeof(GPS_Data));
   memset(parsed_callsign, 0, sizeof(parsed_callsign));
   memset(last_valid_packet, 0, sizeof(last_valid_packet));
+  last_raw_gps_ms = 0;
   parsed_data_ready = 0;
   
   /* Reset diagnostic counters */

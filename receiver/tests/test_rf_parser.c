@@ -386,6 +386,59 @@ TEST(test_fused_landed_flag_both_streams) {
     CHECK(gps.fused_landed == 1);
 }
 
+TEST(test_stale_fused_does_not_override_fresh_raw) {
+    /* 2026-09-11 field failure: a diverged TX-side EKF drifted the fused
+     * position ~22 km off while honest raw GPS packets kept arriving -
+     * the nav page flickered between truth and fiction. Rule: a fused
+     * packet with GPS_FRESH clear must not overwrite a recent raw fix. */
+    RF_Parser_Reset();
+    Test_SetTick(100000);
+    uint8_t gps_pkt[13], fused_pkt[FUSED_PACKET_SIZE];
+    build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x43);
+    build_fused_packet(fused_pkt, 40.08, -105.39, 2400, 100, 0, 0, 255,
+                       FUSED_FLAG_DEAD_RECKONING);   /* GPS_FRESH clear */
+
+    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseFusedPacket(fused_pkt, sizeof(fused_pkt)) == RF_PARSER_OK);
+
+    GPS_Data gps;
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK_NEAR(gps.latitude,  39.89,   1e-4);   /* stayed on the raw fix  */
+    CHECK_NEAR(gps.longitude, -105.11, 1e-4);
+    CHECK(gps.is_fused == 1);                   /* metadata still tracked */
+    CHECK(gps.fused_dr == 1);
+
+    /* After the override window expires, the fused stream takes over:
+     * raw silence longer than the window means the fused estimate is all
+     * there is. */
+    Test_SetTick(HAL_GetTick() + RF_FUSED_STALE_OVERRIDE_MS + 1000);
+    CHECK(RF_Parser_ParseFusedPacket(fused_pkt, sizeof(fused_pkt)) == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK_NEAR(gps.latitude, 40.08, 1e-4);      /* free to drift again */
+
+    Test_SetTick(0);
+}
+
+TEST(test_fresh_fused_always_updates_position) {
+    /* Sibling contract: a fused packet WITH GPS_FRESH holds priority, as
+     * before - the override above only arms for self-admitted staleness. */
+    RF_Parser_Reset();
+    Test_SetTick(200000);
+    uint8_t gps_pkt[13], fused_pkt[FUSED_PACKET_SIZE];
+    build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x43);
+    build_fused_packet(fused_pkt, 40.08, -105.39, 2400, 0, 0, 0, 3,
+                       FUSED_FLAG_GPS_FRESH);
+
+    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseFusedPacket(fused_pkt, sizeof(fused_pkt)) == RF_PARSER_OK);
+
+    GPS_Data gps;
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK_NEAR(gps.latitude, 40.08, 1e-4);
+
+    Test_SetTick(0);
+}
+
 TEST(test_fused_malformed_rejected) {
     RF_Parser_Reset();
     uint8_t pkt[FUSED_PACKET_SIZE];
@@ -564,6 +617,8 @@ int main(void) {
     run_test_sensor_degraded_cleared_by_raw_gps();
     run_test_fused_reserved_bits_ignored();
     run_test_fused_wire_format_constants_pin();
+    run_test_stale_fused_does_not_override_fresh_raw();
+    run_test_fresh_fused_always_updates_position();
     run_test_fused_landed_flag_both_streams();
     run_test_fused_malformed_rejected();
     run_test_fused_does_not_clobber_gps_fix();

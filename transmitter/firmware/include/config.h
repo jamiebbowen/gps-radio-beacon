@@ -83,6 +83,20 @@
 #define NAV_NIS_REJECT                  16.0f  /* 3-dof chi2 99.9% ~= 16.3 */
 #define NAV_GATE_MIN_M                  20.0f  /* never reject sub-20 m steps */
 
+/* EKF rescue policy. The innovation gate is only trustworthy against a
+ * HEALTHY filter: after NAV_RESCUE_NOFIX_MS without an accepted fix the
+ * filter itself is the suspect (its coast state can be pure fiction and
+ * every honest fix looks like a glitch). Past that, the gate fails open
+ * and fixes must pass a motion-consistency pair check (two fixes within
+ * NAV_RESCUE_MAX_STEP_M and 5 s of each other). If the confirmed fix is
+ * more than NAV_REANCHOR_M from the tangent origin, the anchor itself is
+ * re-based and the filter hard-reset there. (2026-09-11 field log: a
+ * ~5 min GPS hole left 40 m/s of phantom velocity; the gate then rejected
+ * good fixes forever and the fused stream trailed off 22 km away.) */
+#define NAV_RESCUE_NOFIX_MS     15000UL /* fail the gate open past this   */
+#define NAV_REANCHOR_M          2000.0f /* rescue: re-base anchor past    */
+#define NAV_RESCUE_MAX_STEP_M   300.0f  /* pair-consistency radius        */
+
 /* The tangent-plane anchor requires two consecutive fixes within this
  * radius of each other: a lone glitch fix can't anchor the EKF wrong. */
 #define NAV_ANCHOR_CONFIRM_M            30.0f

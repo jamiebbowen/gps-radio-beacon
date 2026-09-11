@@ -280,6 +280,12 @@ tests (`transmitter/tests`, `receiver/tests`).
   silent for > `NAV_SENSOR_DEAD_MS` (2 s) - a level, not a latch, so it
   clears if the wasReset() re-enable brings the chip back. Distinct from
   `FUSED_FLAG_IMU_HEALTHY` (500 ms staleness window).
+- **EKF rescue after GPS holes**: 15 s without an accepted fix flips the
+  innovation gate (the filter's own coast state is then the suspect, not
+  the fixes); rescue acceptance requires a motion-consistent fix pair and,
+  past 2 km from the anchor, re-bases the tangent origin with a hard state
+  reset. Prevents the 2026-09-11 failure where 5 minutes of windshield
+  shadow left phantom velocity the gate then defended forever.
 
 ### Receiver
 
@@ -301,6 +307,10 @@ tests (`transmitter/tests`, `receiver/tests`).
   the unit runs with radio + SD + watchdog only.
 - **Error channel hygiene**: informational messages moved off
   `Compass_SetError(0, ...)` so real faults stay latched and visible.
+- **Stale-fused position override**: a fused packet with GPS_FRESH clear
+  (pure dead-reckoning) cannot overwrite the displayed position while a
+  raw GPS fix arrived within the last 10 s - DR is a hint, the raw stream
+  is the measurement. Velocities freeze too in that state.
 - **TX-IMU surfacing**: `FUSED_FLAG_SENSOR_DEGRADED` decodes into the nav
   page chip (`SNS!`), the preflight page (`TX IMU CHK dead!`, advisory
   only - a dead IMU still flies on raw GPS + altitude-climb fallback), and

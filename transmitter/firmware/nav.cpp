@@ -190,6 +190,56 @@ void nav_update_from_gps(float lat_deg, float lon_deg, float alt_m,
 
     float z[3];
     latlon_to_ned(lat_deg, lon_deg, alt_m, &z[0], &z[1], &z[2]);
+    uint32_t now = millis();
+
+    /* Rescue a starved/diverged filter. Observed 2026-09-11: a ~5 min GPS
+     * hole mid-drive left ~40 m/s of phantom velocity in the coast state;
+     * the innovation gate then rejected every honest fix forever and the
+     * fused stream trailed off 22 km away. Past NAV_RESCUE_NOFIX_MS the
+     * gate itself becomes suspect, so a fix is only let through in pairs
+     * that are motion-consistent (<= NAV_RESCUE_MAX_STEP_M, <= 5 s apart)
+     * - which a lone stale hot-start glitch also can't fake. */
+    bool starved = (now - s_last_gps_ms) > NAV_RESCUE_NOFIX_MS;
+    if (starved) {
+        static float    prev_lat, prev_lon, prev_alt;
+        static uint32_t prev_ms = 0;
+        bool consistent = false;
+        if (prev_ms != 0 && (now - prev_ms) <= 5000u) {
+            float dn = (lat_deg - prev_lat) * 111320.0f;
+            float de = (lon_deg - prev_lon) * 111320.0f
+                     * cosf(prev_lat * (float)M_PI / 180.0f);
+            float dd = alt_m - prev_alt;
+            consistent = (dn*dn + de*de + dd*dd)
+                       <= NAV_RESCUE_MAX_STEP_M * NAV_RESCUE_MAX_STEP_M;
+        }
+        prev_lat = lat_deg; prev_lon = lon_deg; prev_alt = alt_m;
+        prev_ms  = now;
+        if (!consistent) return;   /* wait for the confirming fix */
+    }
+
+    /* Re-anchor far-from-origin fixes while starved. Unstarved flight legs
+     * past NAV_REANCHOR_M of the anchor are completely normal, which is why
+     * this must stay gated on starved. A re-anchor hard-resets the filter
+     * (position = fix, velocity = 0, fresh small covariances) - also exactly
+     * what flushes a diverged coast state. */
+    float anchor_r2 = z[0]*z[0] + z[1]*z[1];
+    if (starved && anchor_r2 > NAV_REANCHOR_M*NAV_REANCHOR_M) {
+        anchor_set(lat_deg, lon_deg, alt_m);
+        ekf_init(&s_ekf, EKF_SIGMA_ACCEL_MS2,
+                 EKF_SIGMA_GPS_HORIZ_M, EKF_SIGMA_GPS_VERT_M,
+                 EKF_INIT_POS_VAR_M2, EKF_INIT_VEL_VAR_MS2);
+        Serial.println(F("[Nav] RESCUE: starved + far - anchor moved"));
+        latlon_to_ned(lat_deg, lon_deg, alt_m, &z[0], &z[1], &z[2]);
+    }
+    if (starved) {
+        /* Snap - don't blend: the coast state we are rescuing from is
+         * exactly the untrustworthy part. Zero velocity, fresh small
+         * covariances, position = the confirmed fix. */
+        ekf_set_position(&s_ekf, z[0], z[1], z[2]);
+        s_last_gps_ms = now;
+        Serial.println(F("[Nav] RESCUE: fix accepted, state snapped"));
+        return;
+    }
 
     /* Innovation gate: reject multipath jumps / stale-position glitches.
      * Armed only while the IMU is healthy - with live rotation+accel the
@@ -199,9 +249,8 @@ void nav_update_from_gps(float lat_deg, float lon_deg, float alt_m,
      * gating there would reject good fixes exactly when GPS is the only
      * position source, so fail open. A rejected fix does not refresh
      * s_last_gps_ms, so age/dead-reckoning flags reflect only accepted
-     * fixes. */
+     * fixes. Never reached in starved/rescue mode (handled above). */
     {
-        uint32_t now = millis();
         bool imu_ok = imu_has_quaternion()
                    && (imu_last_accel_ms() > 0)
                    && ((now - imu_last_accel_ms()) < 500u);
