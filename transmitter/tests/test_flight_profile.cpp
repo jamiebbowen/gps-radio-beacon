@@ -169,12 +169,30 @@ static void feed_gps(float lat, float lon, float alt)
 #define PAD_LON (-104.8850002f)
 #define PAD_ALT 1650.0f
 
-/* ------------------------------------------------------------------ */
-
-int main(void)
+/* Shared per-scenario reset - nav + launch-detect state reset cleanly,
+ * simulated clock rewound forward-never-rewind. */
+static void scenario_reset(void)
 {
+    bno_event_head = bno_event_tail = 0;
     launch_detect_init();
     nav_init();
+    tx_count = 0;
+    tx_len = 0;
+}
+
+/* One iteration of "main loop is healthy" while the GPS module reports
+ * NO fix (fix_quality 0 - the altitude/speed lockout mode) */
+static void tick_no_fix(uint32_t ms)
+{
+    refill_idle_sensors();
+    tick(ms);
+}
+
+/* ------------------------------------------------------------------ */
+
+TEST(test_profile_pad_to_landing)
+{
+    scenario_reset();
 
     /* ---- PAD: anchor + quiet healthy flag ------------------------- */
     feed_gps(PAD_LAT, PAD_LON, PAD_ALT);
@@ -247,7 +265,57 @@ int main(void)
     /* The recovery phases consumed the radio cleanly throughout */
     CHECK(tx_count > 0);
     CHECK(radio_disables == 0 && radio_enables == 0);   /* fast path used */
+}
 
-    (void)f; (void)fl;
+TEST(test_profile_gps_lockout_at_altitude)
+{
+    /* Launch-day failure: the GPS module's altitude/speed lockout (or a
+     * boost-phase flinch) means NMEA keeps 1 Hz flowing but fix_quality
+     * drops to 0 for the whole burn. Design behavior: stop sending raw GPS,
+     * fused continues as dead-reckoning, and when fixes come back the
+     * rescue pair re-acquires without a permanent wedge. */
+    scenario_reset();
+
+    /* Anchored on the pad */
+    feed_gps(PAD_LAT, PAD_LON, PAD_ALT);
+    tick(1000);
+    feed_gps(PAD_LAT, PAD_LON, PAD_ALT);
+    CHECK(nav_is_valid() == true);
+
+    /* Launch (quickly, via the accel path) */
+    now_ms += 2000;
+    for (int i = 0; i < 8; i++) { push_accel(0, 0, 25.0f); tick(50); }
+    CHECK(launch_detect_is_launched() == true);
+
+    /* Lockout: GPS keeps ticking at 1 Hz but fix is gone for a while */
+    refill_idle_sensors();
+    tick_no_fix(500);
+    NavFused_t f;
+    /* Actually update the nav view through the packet path so DR shows */
+    for (int i = 0; i < 60; i++) tick_no_fix(500);   /* 30 s without fix */
+    nav_get_fused(&f);
+    CHECK(f.dead_reckoning == true);
+    CHECK(f.gps_fresh == false);
+
+    /* Position telem continues (this is what saves a ballistic story) */
+    const uint8_t *fl = tick_and_fused_tx(600);
+    CHECK(fl != NULL);
+    CHECK((*fl & FUSED_FLAG_DEAD_RECKONING) != 0);
+    CHECK((*fl & FUSED_FLAG_GPS_FRESH) == 0);
+
+    /* Fixes return - rescue pair accepted, position snaps to truth */
+    feed_gps(PAD_LAT + 0.0002f, PAD_LON, PAD_ALT);
+    now_ms += 1000;
+    feed_gps(PAD_LAT + 0.0002f, PAD_LON, PAD_ALT);
+    nav_get_fused(&f);
+    CHECK(f.gps_fresh == true);
+    CHECK(fabsf(f.lat_deg - (PAD_LAT + 0.0002f)) < 1e-4f);
+    CHECK(f.v_n < 5.0f && f.v_e < 5.0f);   /* no phantom velocity survives */
+}
+
+int main(void)
+{
+    run_test_profile_pad_to_landing();
+    run_test_profile_gps_lockout_at_altitude();
     return TEST_SUMMARY();
 }

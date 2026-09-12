@@ -284,6 +284,77 @@ TEST(test_callsign_captured_in_binary_mode)
     CHECK(strcmp(heard, cs) == 0);              /* unchanged */
 }
 
+TEST(test_band_garbage_packets_are_ignored)
+{
+    /* Another transmitter on our channel with different sync is invisible
+     * at the modem; the dangerous case is same-modem garbage. Fire every
+     * shape and make sure nav state + channel discipline all survive. */
+    GPS_Data base_pos;
+    inject_gps_packet(39.89, -105.11);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetGPSData(&base_pos) == RF_OK);
+
+    uint32_t pkts_before = 0;
+    RF_Receiver_GetPacketLossDiagnostics(NULL, &pkts_before, NULL);
+    uint32_t wedges_before = RF_Receiver_GetWedgesRecovered();
+
+    /* Wrong length + wrong type (not 13/19/8B, not ASCII) */
+    memset(&fake_pkt, 0xAB, sizeof(fake_pkt));
+    fake_pkt.length = 40;
+    for (int i = 0; i < 6; i++) { fake_pkt_pending = 1; run_for(100, 100); }
+
+    /* Right size, wrong type byte */
+    fake_pkt.length = 13; fake_pkt.data[0] = 0x99;
+    fake_pkt_pending = 1; run_for(100, 100);
+    fake_pkt.length = FUSED_PACKET_SIZE; fake_pkt.data[0] = 0xAC;
+    fake_pkt_pending = 1; run_for(100, 100);
+
+    /* Valid fused shape, out-of-range coordinates: parser must drop it */
+    uint8_t badfused[FUSED_PACKET_SIZE];
+    memset(badfused, 0, sizeof(badfused));
+    badfused[0] = PACKET_TYPE_FUSED;
+    badfused[1] = 0xFF; badfused[2] = 0xFF; badfused[3] = 0xFF; badfused[4] = 0x7F;
+    memcpy(&fake_pkt.data, badfused, sizeof(badfused));
+    fake_pkt.length = FUSED_PACKET_SIZE;
+    fake_pkt_pending = 1; run_for(100, 100);
+
+    /* Position state never moved */
+    GPS_Data after;
+    uint8_t st = RF_Receiver_GetGPSData(&after);         /* parser keeps last good state */
+    CHECK(st == RF_OK);                                  /* ...but content unchanged: */
+
+    /* Nav view unchanged: same packet content retrievable */
+    GPS_Data cur;
+    CHECK(RF_Receiver_GetParsedData(&cur, NULL, 0, NULL) == 1);
+    CHECK(fabs(cur.latitude - base_pos.latitude) < 0.001f);
+    CHECK(fabs(cur.longitude - base_pos.longitude) < 0.001f);
+
+    /* No wedge churn from garbage */
+    CHECK(RF_Receiver_GetWedgesRecovered() == wedges_before);
+}
+
+TEST(test_final_packet_position_persists_through_blackout)
+{
+    /* Ballistic: one good packet at 1500 ft, then the link goes silent.
+     * The last-known position must not decay; the data-stale flag carries
+     * the warning instead. */
+    GPS_Data pos;
+    inject_gps_packet(39.76, -105.19);   /* whatever spot it fell at */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+    CHECK(fabs(pos.latitude - 39.76) < 0.001f);
+
+    /* Total silence for 30 minutes. DataAvailable returns nothing - and the
+     * parser/last-known state keeps the final good packet forever. */
+    run_for(30 * 60 * 1000UL, 5000);
+    uint8_t st = RF_Receiver_GetGPSData(&pos);
+    CHECK(st == RF_OK);
+    GPS_Data kept;
+    CHECK(RF_Receiver_GetParsedData(&kept, NULL, 0, NULL) == 1);
+    CHECK(fabs(kept.latitude - 39.76) < 0.001f);
+    CHECK(fabs(kept.longitude + 105.19) < 0.001f);
+}
+
 TEST(test_heartbeat_lifecycle)
 {
     HeartbeatPacket_t hb;
@@ -955,6 +1026,8 @@ int main(void)
     run_test_channel_cycling_covers_all_channels();
     run_test_callsign_captured_in_binary_mode();
     run_test_heartbeat_lifecycle();
+    run_test_band_garbage_packets_are_ignored();
+    run_test_final_packet_position_persists_through_blackout();
     run_test_position_packet_flow();
     run_test_fused_packet_flow();
     run_test_get_gps_data_without_packet();
