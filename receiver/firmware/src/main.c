@@ -1025,6 +1025,19 @@ int main(void)
                  (int)mc, hv ? "" : "IN", hs ? " stale" : "");
         SD_Card_LogEvent(c_msg);
       }
+
+      /* I2C fault breadcrumbs: compass.c self-heals with a bounded re-init
+       * ladder, which is exactly the behavior that makes bus glitches
+       * INVISIBLE at review time. Log each newly-latched fault code. */
+      static uint8_t prev_i2c_err = 0;
+      uint8_t i2c_err = Compass_GetErrorCode();
+      if (i2c_err != prev_i2c_err) {
+        prev_i2c_err = i2c_err;
+        char e_msg[48];
+        snprintf(e_msg, sizeof(e_msg), "COMPASS err 0x%02X %s", (unsigned)i2c_err,
+                 (i2c_err == 0) ? "cleared" : Compass_GetErrorMessage());
+        SD_Card_LogEvent(e_msg);
+      }
     }
 
     /* Page transitions get logged so pointing/display evidence later in
