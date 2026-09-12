@@ -59,6 +59,13 @@ static uint8_t       sd_initialized = 0;
 static uint8_t       lfs_mounted    = 0;
 static uint32_t      sd_max_write_ms = 0;
 
+static void sd_note_big_sync(uint32_t dur_ms)
+{
+    char msg[40];
+    snprintf(msg, sizeof(msg), "SD sync burst %lums", (unsigned long)dur_ms);
+    (void)SD_Card_LogEvent(msg);
+}
+
 /* Deferred-sync state. Per-row lfs_file_sync used to block the main loop
  * ~50 ms, except that about once a minute the metadata pair hits its
  * compaction threshold and the sync picks up a ~2 s GC burst (measured,
@@ -527,6 +534,13 @@ SD_Card_Status SD_Card_LogError(const char *msg)
  */
 static uint32_t sd_last_sync_ms = 0;
 static uint32_t sd_sync_count = 0;
+void SD_Card_ServiceSync(uint8_t rf_idle);
+
+/* Forward: big-sync events go through the same event path (defined below).
+ * The main-loop callsite for ServiceSync logs nothing, so bursts that
+ * escape the bounds are visible ONCE - an event, unlike a moving max. */
+static void sd_note_big_sync(uint32_t dur_ms);
+
 void SD_Card_ServiceSync(uint8_t rf_idle)
 {
     if (!sd_dirty || !log_file_open || !lfs_mounted) return;
@@ -545,6 +559,7 @@ void SD_Card_ServiceSync(uint8_t rf_idle)
         lfs_file_sync(&lfs, &log_file);
         uint32_t wd = HAL_GetTick() - wstart;
         if (wd > sd_max_write_ms) sd_max_write_ms = wd;
+        if (wd > 500u) sd_note_big_sync(wd);
     }
 }
 
