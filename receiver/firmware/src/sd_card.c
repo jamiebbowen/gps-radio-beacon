@@ -527,13 +527,16 @@ SD_Card_Status SD_Card_LogError(const char *msg)
  */
 static uint32_t sd_last_sync_ms = 0;
 static uint32_t sd_sync_count = 0;
-void SD_Card_ServiceSync(void)
+void SD_Card_ServiceSync(uint8_t rf_idle)
 {
     if (!sd_dirty || !log_file_open || !lfs_mounted) return;
     uint32_t now = HAL_GetTick();
-    if ((now - sd_last_write >= SD_IDLE_SYNC_MS) ||
-        (sd_dirty_rows >= SD_SYNC_ROW_CAP) ||
-        (now - sd_last_sync_ms >= 10000u)) {
+    /* Hard bounds first - they exist so pending data never starves in
+     * flight-dense traffic where no quiet RF moment arrives. */
+    uint8_t force = (sd_dirty_rows >= SD_SYNC_ROW_CAP)
+                 || (now - sd_last_sync_ms >= 10000u);
+    uint8_t idle  = (now - sd_last_write >= SD_IDLE_SYNC_MS) && rf_idle;
+    if (force || idle) {
         sd_last_sync_ms = now;
         sd_dirty = 0;
         sd_dirty_rows = 0;

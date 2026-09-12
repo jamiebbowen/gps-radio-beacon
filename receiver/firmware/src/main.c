@@ -662,9 +662,9 @@ int main(void)
     loop_iter_count++;
 
     /* Deferred SD sync at write-idle moments (see SD_Card_ServiceSync): the
-     * per-row lfs commit+metadata compaction could otherwise stall the loop
-     * ~2 s mid-packet. This call moves that burst to between-packet time. */
-    SD_Card_ServiceSync();
+     * commit+compaction burst prefers moments the RF link went quiet for a
+     * beat; hard row/time caps keep it honest during flight-dense traffic. */
+    SD_Card_ServiceSync((HAL_GetTick() - last_rf_packet_time) >= 150u);
 
     /* Main-loop iteration time tracking: the quiet forensic signal for
      * blocking bugs (SD commit stalls, radio wedges, display churn) that

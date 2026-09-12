@@ -246,10 +246,12 @@ uint32_t SD_Card_TakeMaxWriteMs(void);
 /** Syncs performed since last call (clears) - pairs with TakeMaxWriteMs. */
 uint32_t SD_Card_TakeSyncCount(void);
 
-/** Deferred-sync service - call once per main-loop iteration. Syncs the log
- *  at an idle window after the last write (or every 10 s under floods), so
- *  LittleFS commit+compact bursts don't land mid-packet-processing. */
-void SD_Card_ServiceSync(void);
+/** Deferred-sync service - call once per main-loop iteration.
+ *  rf_idle: link currently quiet - the caller decides what that means
+ *  (e.g. no beacon packet for ~150 ms). Idle-window syncs only fire when
+ *  the radio is quiet; hard bounds (row cap / 10 s) bypass the gate so
+ *  dense flight traffic still commits. */
+void SD_Card_ServiceSync(uint8_t rf_idle);
 
 #ifdef __cplusplus
 }
