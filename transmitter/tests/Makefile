@@ -20,7 +20,8 @@ LDFLAGS  := -lm
 BUILD    := build
 BINS     := $(BUILD)/test_ekf $(BUILD)/test_nmea_fields $(BUILD)/test_beacon \
             $(BUILD)/test_nav $(BUILD)/test_gps $(BUILD)/test_radio \
-            $(BUILD)/test_launch_detect $(BUILD)/test_uart
+            $(BUILD)/test_launch_detect $(BUILD)/test_uart \
+            $(BUILD)/test_flight_profile
 
 .PHONY: all test coverage clean
 
@@ -61,6 +62,12 @@ $(BUILD)/test_launch_detect: test_launch_detect.cpp ../firmware/launch_detect.cp
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
 
 $(BUILD)/test_uart: test_uart.cpp ../firmware/uart.cpp stubs/Arduino.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
+
+# Simulated flight: nav + launch_detect + beacon chained over stubbed IMU
+# events and scripted GPS fixes.
+$(BUILD)/test_flight_profile: test_flight_profile.cpp stubs/Arduino.h \
+                              stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
 
 test: $(BINS)

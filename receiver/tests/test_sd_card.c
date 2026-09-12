@@ -462,6 +462,50 @@ TEST(test_quatlock_persistence)
     CHECK(SD_Card_LoadQuatLock(&conv) == SD_CARD_ERROR);
 }
 
+TEST(test_deferred_sync_powercut_staleness_bound)
+{
+    /* Deferred-sync model contract (post-0e28d47): what survives a power
+     * cut is whatever was SYNCED, and the unsynced tail is bounded.
+     * Simulate the cut by unmounting the fs without a file close/flush -
+     * the lfs cache state is what the card physically holds at that
+     * moment. Pins both halves of the bound. */
+    wipe_card();
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+
+    GPS_Data beacon; memset(&beacon, 0, sizeof(beacon));
+    beacon.latitude = 39.9f; beacon.longitude = -105.1f;
+
+    /* Row 1 lands and is flushed (its tick value marks it) */
+    Test_SetTick(1000);
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 0.1f, 1.0f, 0.0f,
+                                0.0f, 0.0f, -90, 5) == SD_CARD_OK);
+    CHECK(SD_Card_Flush() == SD_CARD_OK);
+
+    /* Rows 2-6 go in with NO flush - the deferred-sync window */
+    for (int i = 0; i < 5; i++) {
+        Test_SetTick(2000 + (uint32_t)i * 100);
+        CHECK(SD_Card_LogNavigation(&beacon, NULL, 0.2f + (float)i, 2.0f,
+                                    0.0f, 0.0f, 0.0f, -90, 5) == SD_CARD_OK);
+    }
+
+    /* Power cut: unmount without close/flush */
+    CHECK(lfs_unmount(&lfs) == 0);
+    lfs_mounted = 0;
+    log_file_open = 0;
+    sd_initialized = 0;
+
+    /* Remount fresh module state over the surviving image (no close -
+     * the dirty cache was genuinely lost, like the power cut did). */
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+
+    /* The flushed row from BEFORE the cut lives in the original file
+     * (a new session-file would start a fresh L0002.TXT) */
+    char big[4096];
+    CHECK(read_file("L0001.TXT", big, sizeof(big)) > 0);
+    CHECK(strstr(big, ",0.100,") != NULL);    /* flushed row survives */
+    CHECK(strstr(big, ",0.200,") == NULL);    /* unsynced tail gone     */
+}
+
 TEST(test_format_wipes_everything)
 {
     wipe_card();
@@ -637,6 +681,7 @@ int main(void)
     run_test_beacon_persistence_validation();
     run_test_compass_cal_persistence();
     run_test_quatlock_persistence();
+    run_test_deferred_sync_powercut_staleness_bound();
     run_test_format_wipes_everything();
     run_test_self_test_pass_and_write_failure();
     run_test_rotation_launchflag_and_write_failure();
