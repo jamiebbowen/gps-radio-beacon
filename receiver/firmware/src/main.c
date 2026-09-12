@@ -849,9 +849,11 @@ int main(void)
     if (has_valid_local_gps && !local_fix_logged) {
       local_fix_logged = 1;
       if (sd_card_ok) {
-        char gps_msg[48];
-        snprintf(gps_msg, sizeof(gps_msg), "Local GPS first fix: sats=%d",
-                 (int)gps_data.satellites);
+        char gps_msg[56];
+        snprintf(gps_msg, sizeof(gps_msg),
+                 "Local GPS first fix: sats=%d utc=%02u:%02u:%02u",
+                 (int)gps_data.satellites, (unsigned)gps_data.hour,
+                 (unsigned)gps_data.minute, (unsigned)gps_data.second);
         SD_Card_LogEvent(gps_msg);
       }
     } else if (!has_valid_local_gps && !local_slow_logged &&
@@ -934,6 +936,18 @@ int main(void)
                  "COMPASS mag_cal=%d heading_%svalid%s",
                  (int)mc, hv ? "" : "IN", hs ? " stale" : "");
         SD_Card_LogEvent(c_msg);
+      }
+    }
+
+    /* Page transitions get logged so pointing/display evidence later in
+     * the log has screen context ("which page was the operator reading?"). */
+    if (sd_card_ok) {
+      static int8_t prev_page = -1;
+      if ((int8_t)current_display_mode != prev_page) {
+        prev_page = (int8_t)current_display_mode;
+        char p_msg[20];
+        snprintf(p_msg, sizeof(p_msg), "PAGE %d", (int)current_display_mode);
+        SD_Card_LogEvent(p_msg);
       }
     }
 
