@@ -89,6 +89,24 @@ static uint8_t scan_active = 0;
  * airframe - re-enter the scan instead of sitting deaf on a dead channel. */
 static uint32_t last_any_packet_ms = 0;
 #define RF_AUTO_RESCAN_SILENCE_MS  300000UL   /* 5 min = 5x slowest cadence */
+
+/* Airframe binding + foreign-beacon filter. Anyone running this same TX
+ * firmware on our channel sends binary packets that are byte-valid to us;
+ * without an airframe ID their position silently overwrites ours on the
+ * nav display. V2 position packets and heartbeats carry rocket_id: the
+ * FIRST ID-carrying packet heard on the tuned channel claims the binding,
+ * and later ID-carrying packets with a different ID are dropped before the
+ * parser sees them (counted in rf_foreign_drops for the diag screen).
+ * Legacy V1 position packets carry no ID, so they always pass - pollution
+ * protection requires V2 on both ends of the link.
+ *
+ * last_identified_ms tracks OWN (or unbound-bindable) packets only; it
+ * drives the auto re-scan so a co-channel foreign chatterbox cannot
+ * suppress the "our beacon went silent, go look for it" recovery. */
+#define RF_ROCKET_UNBOUND  0xFF
+static uint8_t  bound_rocket_id  = RF_ROCKET_UNBOUND;
+static uint32_t rf_foreign_drops = 0;
+static uint32_t last_identified_ms = 0;
 static uint32_t scan_dwell_start = 0;
 static uint32_t scan_dwell_pkt_count = 0;
 static uint32_t scan_dwell_len_ms = RF_SCAN_DWELL_MS;  /* current dwell length */
@@ -187,6 +205,30 @@ static void RF_EnsureRxMode(void) {
         LoRa_SetReceiveMode();
         rx_entered = 1;
     }
+}
+
+/**
+ * @brief Airframe filter gate for ID-carrying packets (V2 position packets,
+ *        heartbeats). Binds to the first ID heard on the tuned channel;
+ *        drops mismatches. Legacy V1 position packets (has_id == 0) carry
+ *        no identity and always pass.
+ * @retval 1 if the packet should be processed, 0 if it is foreign
+ */
+static uint8_t RF_RocketFilter(uint8_t has_id, uint8_t id)
+{
+    if (!has_id) {
+        last_identified_ms = HAL_GetTick();  /* V1: can't tell, assume ours */
+        return 1;
+    }
+    if (bound_rocket_id == RF_ROCKET_UNBOUND) {
+        bound_rocket_id = id;
+    }
+    if (bound_rocket_id == id) {
+        last_identified_ms = HAL_GetTick();
+        return 1;
+    }
+    rf_foreign_drops++;
+    return 0;
 }
 
 /**
@@ -337,18 +379,28 @@ uint8_t RF_Receiver_DataAvailable(void)
       
       /* Parse packet based on format */
 #if USE_BINARY_PACKETS
-      /* Binary packet format - dispatch by type + length */
-      if (last_packet.length == 13 && last_packet.data[0] == PACKET_TYPE_GPS) {
+      /* Binary packet format - dispatch by type + length. Both the legacy
+       * (V1, no rocket_id) and current (V2) layouts are accepted; V2
+       * packets pass through the airframe filter first so a foreign beacon
+       * on this channel can't touch our position state. */
+      if ((last_packet.length == GPS_PACKET_SIZE
+        || last_packet.length == GPS_PACKET_SIZE_V1)
+              && last_packet.data[0] == PACKET_TYPE_GPS) {
         /* Raw GPS fix */
-        if (RF_Parser_ParseBinaryPacket(last_packet.data, last_packet.length) == RF_PARSER_OK) {
+        if (RF_RocketFilter(last_packet.length == GPS_PACKET_SIZE,
+                            last_packet.data[13]) &&
+            RF_Parser_ParseBinaryPacket(last_packet.data, last_packet.length) == RF_PARSER_OK) {
           rf_packet_ready = 1;
           rf_header_matches++;
           last_packet_time = HAL_GetTick();
         }
-      } else if (last_packet.length == FUSED_PACKET_SIZE
+      } else if ((last_packet.length == FUSED_PACKET_SIZE
+               || last_packet.length == FUSED_PACKET_SIZE_V1)
               && last_packet.data[0] == PACKET_TYPE_FUSED) {
         /* EKF-fused position + velocity from TX nav layer */
-        if (RF_Parser_ParseFusedPacket(last_packet.data, last_packet.length) == RF_PARSER_OK) {
+        if (RF_RocketFilter(last_packet.length == FUSED_PACKET_SIZE,
+                            last_packet.data[FUSED_PACKET_SIZE - 1]) &&
+            RF_Parser_ParseFusedPacket(last_packet.data, last_packet.length) == RF_PARSER_OK) {
           rf_packet_ready = 1;
           rf_header_matches++;
           last_packet_time = HAL_GetTick();
@@ -361,9 +413,13 @@ uint8_t RF_Receiver_DataAvailable(void)
          * position data is fresh. It still counts toward
          * rf_lora_packets_received, which is what locks the channel scan.
          * V1 (7-byte) heartbeats from older beacons lack the trailing
-         * gps_health byte; zero-fill decodes it as HB_GPS_UNKNOWN. */
+         * gps_health byte; zero-fill decodes it as HB_GPS_UNKNOWN.
+         * Foreign heartbeats are still recorded (they are useful "someone
+         * else is on this channel" intel) - they just can't steal the
+         * binding and never touch position state. */
         memset(&last_heartbeat, 0, sizeof(last_heartbeat));
         memcpy(&last_heartbeat, last_packet.data, last_packet.length);
+        (void)RF_RocketFilter(1, last_heartbeat.rocket_id);
         heartbeat_pending = 1;
         last_heartbeat_time = HAL_GetTick();
       } else {
@@ -707,11 +763,14 @@ uint8_t RF_Receiver_IsSignalQualityGood(void)
 }
 
 /**
- * @brief Switch to a different rocket channel
- * @param channel Channel index (0..LORA_CHANNEL_COUNT-1)
- * @retval RF_OK on success, RF_ERROR otherwise
+ * @brief Common channel-switch path. new_context=1 means "deliberately
+ *        looking for a (possibly different) rocket" - drop the airframe
+ *        binding so the next ID heard can claim this channel. new_context=0
+ *        (auto re-scan hops) keeps the binding: a beacon lost mid-flight
+ *        does not change identities, and keeping it stops a foreign packet
+ *        from stealing the binding while we sweep.
  */
-uint8_t RF_Receiver_SetChannel(uint8_t channel)
+static uint8_t RF_SetChannelCtx(uint8_t channel, uint8_t new_context)
 {
   if (LoRa_SetChannel(channel) != LORA_OK) {
     return RF_ERROR;
@@ -725,7 +784,21 @@ uint8_t RF_Receiver_SetChannel(uint8_t channel)
   noise_alert_active = 0;
   heartbeat_pending = 0;
   last_heartbeat_time = 0;
+  if (new_context) {
+    bound_rocket_id = RF_ROCKET_UNBOUND;
+  }
   return RF_OK;
+}
+
+/**
+ * @brief Switch to a different rocket channel (manual pick: new airframe
+ *        context, airframe binding is dropped)
+ * @param channel Channel index (0..LORA_CHANNEL_COUNT-1)
+ * @retval RF_OK on success, RF_ERROR otherwise
+ */
+uint8_t RF_Receiver_SetChannel(uint8_t channel)
+{
+  return RF_SetChannelCtx(channel, 1);
 }
 
 /**
@@ -827,6 +900,25 @@ uint32_t RF_Receiver_GetWedgesRecovered(void)
 }
 
 /**
+ * @brief Airframe the receiver is bound to (first rocket_id heard on the
+ *        tuned channel), or 0xFF while unbound
+ */
+uint8_t RF_Receiver_GetBoundRocketId(void)
+{
+  return bound_rocket_id;
+}
+
+/**
+ * @brief Packets dropped because their rocket_id didn't match the binding
+ *        (foreign beacon on the same channel). A growing count on a channel
+ *        with no valid position means someone else is on the air here.
+ */
+uint32_t RF_Receiver_GetForeignDrops(void)
+{
+  return rf_foreign_drops;
+}
+
+/**
  * @brief Boot-time per-channel noise sweep (see rf_receiver.h)
  */
 uint8_t RF_Receiver_NoiseSweep(int16_t *nf_dbm_out)
@@ -878,6 +970,9 @@ uint32_t RF_Receiver_GetSweepTick(uint8_t ch)
  */
 void RF_Receiver_StartScan(void)
 {
+  /* Operator-initiated sweep ("find me a rocket"): new airframe context -
+   * the binding belongs to whatever channel we were parked on. */
+  bound_rocket_id = RF_ROCKET_UNBOUND;
   scan_active = 1;
   scan_dwell_start = HAL_GetTick();
   scan_dwell_pkt_count = rf_lora_packets_received;
@@ -894,6 +989,9 @@ void RF_Receiver_StartScan(void)
  */
 static void RF_Scan_StartReacquire(void)
 {
+  /* Deliberately keeps the airframe binding: the beacon we lost did not
+   * change identities, and foreign traffic we pass while sweeping must not
+   * be able to claim us. */
   scan_active = 1;
   scan_dwell_start = HAL_GetTick();
   scan_dwell_pkt_count = rf_lora_packets_received;
@@ -902,6 +1000,17 @@ static void RF_Scan_StartReacquire(void)
   scan_cad_state = RF_CAD_IDLE;
   scan_cad_strikes = 0;
   (void)LoRa_SetReceiveMode();        /* CAD never ran, but be explicit */
+}
+
+/**
+ * @brief Channel hop used by the scan state machine. Same effects as a
+ *        manual change but KEEPS the airframe binding (see
+ *        RF_SetChannelCtx / RF_Scan_StartReacquire).
+ */
+static void RF_ScanHop(void)
+{
+  uint8_t next = (uint8_t)((LoRa_GetChannel() + 1) % LORA_CHANNEL_COUNT);
+  (void)RF_SetChannelCtx(next, 0);
 }
 
 /**
@@ -948,9 +1057,11 @@ uint8_t RF_Receiver_ScanUpdate(void)
 {
   /* Auto re-scan on prolonged silence after contact: only fires once a
    * beacon has actually been heard (a manual channel pick with nothing on
-   * the air is a deliberate choice - don't override it). */
-  if (!scan_active && last_any_packet_ms != 0 &&
-      (HAL_GetTick() - last_any_packet_ms) > RF_AUTO_RESCAN_SILENCE_MS) {
+   * the air is a deliberate choice - don't override it). Keys off
+   * last_identified_ms (own/bindable packets), NOT last_any_packet_ms:
+   * foreign chatter on the channel must not suppress the recovery. */
+  if (!scan_active && last_identified_ms != 0 &&
+      (HAL_GetTick() - last_identified_ms) > RF_AUTO_RESCAN_SILENCE_MS) {
     RF_Scan_StartReacquire();
     return 0;
   }
@@ -1003,7 +1114,7 @@ uint8_t RF_Receiver_ScanUpdate(void)
           scan_cad_strikes = 0;
         } else if (res == LORA_CAD_NONE) {
           /* Quiet channel: hop and sniff the next one */
-          (void)RF_Receiver_NextChannel();
+          RF_ScanHop();
           scan_dwell_pkt_count = rf_lora_packets_received;
           scan_cad_state = RF_CAD_IDLE;
           scan_cad_strikes = 0;
@@ -1029,7 +1140,7 @@ uint8_t RF_Receiver_ScanUpdate(void)
       default:
         if ((int32_t)(now - scan_cad_deadline) >= 0) {
           /* False detection (noise burst): nothing decodable arrived */
-          (void)RF_Receiver_NextChannel();
+          RF_ScanHop();
           scan_dwell_pkt_count = rf_lora_packets_received;
           scan_cad_state = RF_CAD_IDLE;
         }
@@ -1049,7 +1160,7 @@ uint8_t RF_Receiver_ScanUpdate(void)
     if (LoRa_PacketAvailable()) {
       return 0;
     }
-    (void)RF_Receiver_NextChannel();
+    RF_ScanHop();
     scan_dwell_start = HAL_GetTick();
     scan_dwell_pkt_count = rf_lora_packets_received;
     /* The long re-acquire dwell applies to the FIRST channel only; after

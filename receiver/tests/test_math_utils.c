@@ -81,6 +81,46 @@ TEST(test_distance_never_nan_at_extremes) {
     CHECK(d_tiny >= 0.0f && d_tiny < 1.0f);
 }
 
+TEST(test_distance_antimeridian_crossing) {
+    /* Drift across the dateline: (39.5N, 179.999E) -> (39.5N, 179.999W)
+     * is 0.002 deg of longitude - ~172 m at that latitude - not 40,000 km.
+     * If a future refactor ever computes raw (lon2 - lon1) without the
+     * trig-identity safety of haversine, this is where it breaks. */
+    float d = calculate_distance(39.5f, 179.999f, 39.5f, -179.999f);
+    CHECK(d == d);                                     /* not NaN */
+    CHECK_NEAR(d, 171.7, 5.0);
+
+    /* Larger crossing at the equator: 0.02 deg ~ 2.2 km */
+    CHECK_NEAR(calculate_distance(0.0f, 179.99f, 0.0f, -179.99f), 2224.0, 25.0);
+}
+
+TEST(test_distance_recovery_walk_up_range) {
+    /* Final approach: walking the last few metres to the rocket. The
+     * answer must stay sane (no NaN, no zero-collapse, right ballpark).
+     * Note the physical floor: float32 coordinates at 40N quantize to
+     * ~0.33 m per ulp, and BOTH endpoints jitter, so sub-2 m readings are
+     * inherently +/-30%-ish - fine for "it's within arm's reach", which is
+     * all this test pins. (Measured: 1.5 m reads ~1.9 m.) An upgrade to
+     * double intermediates would help only if the display ever shows
+     * sub-metre distances. */
+    /* 1.5 m of latitude at 40N = 0.0000135 deg */
+    float d = calculate_distance(39.8900000f, -105.1155f,
+                                 39.8900135f, -105.1155f);
+    CHECK(d == d);
+    CHECK(d > 1.0f && d < 2.5f);
+
+    /* Same scale on longitude (~85 km/deg at 40N): 2 m = 0.0000235 deg */
+    float d_lon = calculate_distance(39.89f, -105.1155000f,
+                                     39.89f, -105.1154765f);
+    CHECK(d_lon > 1.2f && d_lon < 3.0f);
+
+    /* A comfortable recovery-display distance must be accurate, though:
+     * 50 m downrange at 40N = 0.0004492 deg lat */
+    float d_far = calculate_distance(39.8900000f, -105.1155f,
+                                     39.8904492f, -105.1155f);
+    CHECK_NEAR(d_far, 50.0, 1.5);
+}
+
 /* ------------------------------------------------------------------ */
 /* calculate_bearing                                                   */
 /* ------------------------------------------------------------------ */
@@ -112,6 +152,14 @@ TEST(test_bearing_always_in_range) {
     }
 }
 
+TEST(test_bearing_across_antimeridian) {
+    /* Due east across the dateline: 179.99E -> 179.99W is a 0.02 deg hop
+     * EAST, so the pointer must read ~90, not ~270. */
+    CHECK_NEAR(calculate_bearing(39.5f, 179.99f, 39.5f, -179.99f), 90.0f, 2.0);
+    /* And the reverse walk points back west */
+    CHECK_NEAR(calculate_bearing(39.5f, -179.99f, 39.5f, 179.99f), 270.0f, 2.0);
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void) {
@@ -122,9 +170,12 @@ int main(void) {
     run_test_distance_symmetry();
     run_test_distance_typical_rocket_flight();
     run_test_distance_never_nan_at_extremes();
+    run_test_distance_antimeridian_crossing();
+    run_test_distance_recovery_walk_up_range();
     run_test_bearing_cardinal_directions();
     run_test_bearing_diagonal();
     run_test_bearing_always_in_range();
+    run_test_bearing_across_antimeridian();
 
     return TEST_SUMMARY();
 }

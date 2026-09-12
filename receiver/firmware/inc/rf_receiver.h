@@ -83,6 +83,14 @@ uint8_t RF_Receiver_GetNoiseFloor(int16_t *nf_dbm);
 uint8_t RF_Receiver_NoiseAlert(void);
 uint32_t RF_Receiver_GetWedgesRecovered(void);
 
+/* Airframe binding / foreign-beacon filter. The receiver binds to the
+ * first rocket_id heard on the tuned channel and drops V2 position packets
+ * from any other airframe. The binding resets on a manual channel change;
+ * it survives the auto re-scan (a beacon lost mid-flight doesn't change
+ * identities). Legacy V1 packets carry no ID and always pass. */
+uint8_t  RF_Receiver_GetBoundRocketId(void);   /* 0xFF = unbound */
+uint32_t RF_Receiver_GetForeignDrops(void);
+
 /* Boot-time per-channel noise sweep: tunes every rocket channel, takes a
  * handful of GetRssiInst samples, and reports the per-channel median via
  * nf_dbm_out[LORA_CHANNEL_COUNT] (untouched entries are left at the

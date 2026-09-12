@@ -18,6 +18,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -148,14 +149,14 @@ static void refill_idle_sensors(void)
     push_rotvec(1.0f, 0.0f, 0.0f, 0.0f);
 }
 
-static const uint8_t* tick_and_fused_tx(uint32_t ms)   /* returns last flags byte */
+static const uint8_t* tick_and_fused_tx(uint32_t ms)   /* returns the flags byte */
 {
     refill_idle_sensors();
     tick(ms);
     tx_len = 0;
     beacon_transmit_fused_data((uint32_t)(now_ms/1000), 1);
     if (tx_len < FUSED_PACKET_SIZE) return NULL;
-    return &tx_buf[FUSED_PACKET_SIZE - 1];
+    return &tx_buf[offsetof(FusedPosPacket_t, flags)];   /* rocket_id trails flags */
 }
 
 static void feed_gps(float lat, float lon, float alt)
@@ -313,9 +314,92 @@ TEST(test_profile_gps_lockout_at_altitude)
     CHECK(f.v_n < 5.0f && f.v_e < 5.0f);   /* no phantom velocity survives */
 }
 
+TEST(test_profile_ballistic_terminal_lockout)
+{
+    /* The grim one: a COCOM-style lockout that NEVER resolves in flight.
+     * Boost, then the GPS module streams fix-less NMEA through apogee and
+     * the lawn-dart descent. Design behavior:
+     *   - the fused stream keeps flowing (DR + !GPS_FRESH) the whole way
+     *     down - the receiver-side "final packet at 1500 ft" blackout test
+     *     is the other half of this story;
+     *   - the impact shock must NOT false-land: with GPS dead, landing
+     *     detection never even evaluates (gps_valid gates the window);
+     *   - when the module recovers AT THE CRATER SITE, the rescue pair
+     *     re-anchors and a quiet minute later the landing latch finally
+     *     sets - the beacon drops to battery-save for the walk-out
+     *     instead of burning the battery beaconing at flight rate. */
+    scenario_reset();
+
+    /* Pad + boost, same choreography as the other profiles */
+    feed_gps(PAD_LAT, PAD_LON, PAD_ALT);
+    tick(1000);
+    feed_gps(PAD_LAT, PAD_LON, PAD_ALT);
+    CHECK(nav_is_valid() == true);
+    now_ms += 2000;
+    for (int i = 0; i < 8; i++) { push_accel(0, 0, 25.0f); tick(50); }
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
+
+    /* GPS dies at ignition and stays dead. Fused keeps transmitting DR. */
+    uint32_t tx_at_lockout = tx_count;
+    for (int i = 0; i < 60; i++) tick_no_fix(500);   /* 30 s to the ground */
+    NavFused_t f;
+    nav_get_fused(&f);
+    CHECK(f.dead_reckoning == true);
+    CHECK(f.gps_fresh == false);
+
+    const uint8_t *fl = tick_and_fused_tx(600);
+    CHECK(fl != NULL);
+    CHECK((*fl & FUSED_FLAG_DEAD_RECKONING) != 0);
+    CHECK((*fl & FUSED_FLAG_LANDED) == 0);
+    CHECK(tx_count > tx_at_lockout);           /* stream never went quiet */
+
+    /* Impact: violent tumble shock, then motionless in the crater. GPS
+     * still out, so the landing window must never even open. */
+    for (int i = 0; i < 10; i++) { push_accel(35.0f, -60.0f, 95.0f); tick(50); }
+    uint32_t s = (uint32_t)(now_ms/1000);
+    bool landed = false;
+    for (int i = 0; i < LAND_QUIET_S + 10; i++) {
+        landed = landing_detect_update(0.0f, false, ++s) || landed;  /* no fix */
+        tick(1000);
+    }
+    CHECK(!landed);
+    CHECK(launch_detect_has_landed() == false);
+
+    /* The recovery crew is already walking to the last DR packet. Minutes
+     * later the module recovers and returns fixes AT THE CRATER
+     * (1+ km from the pad anchor): rescue pair accepted... */
+    now_ms += 180000;
+    const float CRATER_LAT = PAD_LAT + 0.0110f;   /* ~1.2 km north */
+    const float CRATER_LON = PAD_LON + 0.0046f;   /* ~0.4 km east  */
+    feed_gps(CRATER_LAT, CRATER_LON, PAD_ALT - 30.0f);
+    now_ms += 1000;
+    feed_gps(CRATER_LAT, CRATER_LON, PAD_ALT - 30.0f);
+    nav_get_fused(&f);
+    CHECK(f.gps_fresh == true);
+    CHECK(fabsf(f.lat_deg - CRATER_LAT) < 1e-4f);
+    CHECK(fabsf(f.lon_deg - CRATER_LON) < 1e-4f);
+
+    /* ...and now, still and with a stable fix, the landing latch sets and
+     * appears on the wire. */
+    s = (uint32_t)(now_ms/1000);
+    for (int i = 0; i < LAND_QUIET_S + 5; i++) {
+        feed_gps(CRATER_LAT, CRATER_LON, PAD_ALT - 30.0f);
+        refill_idle_sensors();
+        landed = landing_detect_update(PAD_ALT - 30.0f, true, ++s) || landed;
+        tick(1000);
+    }
+    CHECK(landed);
+    CHECK(launch_detect_has_landed() == true);
+
+    fl = tick_and_fused_tx(600);
+    CHECK(fl != NULL);
+    CHECK((*fl & FUSED_FLAG_LANDED) != 0);
+}
+
 int main(void)
 {
     run_test_profile_pad_to_landing();
     run_test_profile_gps_lockout_at_altitude();
+    run_test_profile_ballistic_terminal_lockout();
     return TEST_SUMMARY();
 }

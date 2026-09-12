@@ -13,6 +13,10 @@
 
 // Checksum function removed - LoRa provides built-in CRC validation
 
+/* 255 is the receiver's "unbound" sentinel for the airframe filter; an
+ * airframe claiming it would be invisible to that filter. */
+static_assert(ROCKET_ID != 255, "ROCKET_ID 255 is reserved (RX unbound sentinel)");
+
 /**
  * Transmit GPS data via LoRa beacon with proper framing and checksum
  * @param coords Pointer to GPS coordinates structure
@@ -222,7 +226,10 @@ uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t
         packet.flags |= FLAG_FIX_QUALITY_GOOD;
     }
     packet.flags |= (coords->fix_quality & FLAG_FIX_TYPE_MASK);
-    
+    /* V2 wire byte: lets a co-channel foreign beacon (this same firmware,
+     * different airframe) be told apart and dropped at the receiver. */
+    packet.rocket_id = (uint8_t)ROCKET_ID;
+
     // Transmit binary packet
     Serial.print(F("[Beacon] Transmitting binary GPS packet ("));
     Serial.print(sizeof(packet));
@@ -411,6 +418,9 @@ uint8_t beacon_transmit_fused_data(uint32_t system_time_seconds, uint8_t transmi
      * to battery-save. */
     if (launch_detect_has_landed()) flags |= FUSED_FLAG_LANDED;
     p.flags = flags;
+    /* V2 wire byte: same airframe ID carried by the raw GPS stream and the
+     * heartbeat - the receiver's foreign-beacon filter keys off it. */
+    p.rocket_id = (uint8_t)ROCKET_ID;
 
     if (!transmit_fast) {
         radio_enable();

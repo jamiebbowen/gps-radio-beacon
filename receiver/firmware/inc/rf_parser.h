@@ -43,9 +43,10 @@ uint8_t RF_Parser_ParseAsciiPacket(const char *packet);
 uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length);
 
 /**
- * @brief Parse a PACKET_TYPE_FUSED payload (19 bytes) from the transmitter's EKF
+ * @brief Parse a PACKET_TYPE_FUSED payload from the transmitter's EKF
  * @param data   Pointer to raw packet bytes
- * @param length Length in bytes (must equal FUSED_PACKET_SIZE)
+ * @param length Length in bytes (FUSED_PACKET_SIZE for V2, FUSED_PACKET_SIZE_V1
+ *               for legacy beacons without the rocket_id byte)
  * @retval RF_PARSER_OK on success, RF_PARSER_ERROR on length/type/range errors
  */
 uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length);

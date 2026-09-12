@@ -6,7 +6,10 @@
 // Packet format selection (must match transmitter!)
 #define USE_BINARY_PACKETS  1  // Set to 1 for binary, 0 for ASCII
 
-// Binary GPS packet structure (13 bytes total)
+/* Binary GPS packet structure: V2 = 14 bytes, V1 (legacy, no rocket_id)
+ * = 13 bytes. rocket_id lets us drop a foreign beacon on the same channel
+ * running this same firmware (see the airframe binding in rf_receiver.c).
+ * Valid IDs are 0..254; 255 is the receiver's "unbound" sentinel. */
 typedef struct __attribute__((packed)) {
     uint8_t packet_type;     // 0x01 = GPS position packet
     int32_t latitude;        // Latitude * 10^7 (e.g., 39.890075° = 398900750)
@@ -14,7 +17,10 @@ typedef struct __attribute__((packed)) {
     int16_t altitude;        // Altitude in meters (range: -32768 to +32767)
     uint8_t satellites;      // Number of satellites (0-255)
     uint8_t flags;          // Status flags (see below)
+    uint8_t rocket_id;      // ROCKET_ID of the airframe (V2)
 } BinaryGPSPacket_t;
+#define GPS_PACKET_SIZE       14
+#define GPS_PACKET_SIZE_V1    13   // legacy layout without rocket_id
 
 // Packet types
 #define PACKET_TYPE_GPS         0x01
@@ -70,9 +76,10 @@ typedef struct __attribute__((packed)) {
                                                 * fused packet (delta, not latched)      */
 #define FUSED_FLAG_RESERVED_MASK     0x01  /* Bit 0: reserved                            */
 
-/* Fused packet: 19 bytes. See transmitter include for full field semantics
- * (this file intentionally carries the same defines - the two copies must
- * never drift; the host tests pin the literals on both sides). */
+/* Fused packet: V2 = 20 bytes, V1 (legacy, no rocket_id) = 19 bytes. See
+ * transmitter include for full field semantics (this file intentionally
+ * carries the same defines - the two copies must never drift; the host
+ * tests pin the literals on both sides). */
 #define FUSED_ALT_FLOOR_M   500.0f   /* subtracted from alt_m when encoding */
 #define FUSED_ALT_SCALE     4.0f     /* quarter-meters per count            */
 
@@ -86,9 +93,11 @@ typedef struct __attribute__((packed)) {
     int16_t  v_d_cms;        // cm/s
     uint8_t  age_ds;         // deciseconds since TX-side last GPS fix
     uint8_t  flags;          // FUSED_FLAG_*
+    uint8_t  rocket_id;      // ROCKET_ID of the airframe (V2)
 } FusedPosPacket_t;
 
-#define FUSED_PACKET_SIZE       19
+#define FUSED_PACKET_SIZE       20
+#define FUSED_PACKET_SIZE_V1    19   /* legacy layout without rocket_id   */
 
 // Helper macros for encoding/decoding
 #define GPS_COORD_SCALE         10000000.0  // Scale factor for lat/lon (10^7)

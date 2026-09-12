@@ -4,8 +4,8 @@
  *
  * Exercises all three wire formats accepted from the transmitter:
  *   1. ASCII CSV packets  (RF_Parser_ParseAsciiPacket)
- *   2. Binary GPS packets (RF_Parser_ParseBinaryPacket, 13 bytes)
- *   3. Fused EKF packets  (RF_Parser_ParseFusedPacket, 19 bytes)
+ *   2. Binary GPS packets (RF_Parser_ParseBinaryPacket, V2 14 bytes / legacy V1 13)
+ *   3. Fused EKF packets  (RF_Parser_ParseFusedPacket, V2 20 bytes / legacy V1 19)
  *
  * Build & run:  make -C receiver/tests          (see tests/Makefile)
  * Coverage:     make -C receiver/tests coverage
@@ -15,6 +15,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include "rf_parser.h"
 #include "packet_format.h"
@@ -41,7 +42,9 @@ static void put_i16_le(uint8_t *buf, int16_t v) {
     buf[1] = (uint8_t)((v >> 8) & 0xFF);
 }
 
-/** Build a 13-byte binary GPS packet as the transmitter would. */
+/** Build a 14-byte V2 binary GPS packet as the transmitter would.
+ *  buf must have GPS_PACKET_SIZE bytes (legacy V1 parsing is exercised by
+ *  passing GPS_PACKET_SIZE_V1 from the first part of the same buffer). */
 static void build_gps_packet(uint8_t *buf, double lat_deg, double lon_deg,
                              int16_t alt_m, uint8_t sats, uint8_t flags) {
     buf[0] = PACKET_TYPE_GPS;
@@ -50,9 +53,13 @@ static void build_gps_packet(uint8_t *buf, double lat_deg, double lon_deg,
     put_i16_le(&buf[9], alt_m);
     buf[11] = sats;
     buf[12] = flags;
+    buf[13] = 0;   /* rocket_id - the parser ignores it (the airframe filter
+                    * lives upstream in rf_receiver.c) */
 }
 
-/** Build a 19-byte fused EKF packet as the transmitter would.
+/** Build a 20-byte V2 fused EKF packet as the transmitter would (buf must
+ *  have FUSED_PACKET_SIZE bytes; pass FUSED_PACKET_SIZE_V1 to parse it as
+ *  a legacy packet).
  *  alt_qm is the raw encoded altitude: (alt_m + 500) * 4 quarter-meters. */
 static void build_fused_packet(uint8_t *buf, double lat_deg, double lon_deg,
                                uint16_t alt_qm, int16_t vn_cms, int16_t ve_cms,
@@ -66,6 +73,7 @@ static void build_fused_packet(uint8_t *buf, double lat_deg, double lon_deg,
     put_i16_le(&buf[15], vd_cms);
     buf[17] = age_ds;
     buf[18] = flags;
+    buf[19] = 0;   /* rocket_id */
 }
 
 /* ------------------------------------------------------------------ */
@@ -192,7 +200,7 @@ TEST(test_ascii_last_packet_bookkeeping) {
 
 TEST(test_binary_valid_packet) {
     RF_Parser_Reset();
-    uint8_t pkt[13];
+    uint8_t pkt[GPS_PACKET_SIZE];
     build_gps_packet(pkt, 39.8900750, -105.1155100, 1671, 12,
                      FLAG_LAUNCH_DETECTED | FLAG_FIX_QUALITY_GOOD | 0x01);
 
@@ -211,7 +219,7 @@ TEST(test_binary_valid_packet) {
 
 TEST(test_binary_negative_altitude) {
     RF_Parser_Reset();
-    uint8_t pkt[13];
+    uint8_t pkt[GPS_PACKET_SIZE];
     build_gps_packet(pkt, 51.5000000, -0.1200000, -100, 8, 0x41);
 
     CHECK(RF_Parser_ParseBinaryPacket(pkt, sizeof(pkt)) == RF_PARSER_OK);
@@ -222,23 +230,27 @@ TEST(test_binary_negative_altitude) {
     CHECK(gps.launch_detected == 0);
 }
 
-TEST(test_binary_malformed_rejected) {
+TEST(test_binary_layouts_and_malformed) {
     RF_Parser_Reset();
-    uint8_t pkt[13];
+    uint8_t pkt[GPS_PACKET_SIZE];
     build_gps_packet(pkt, 39.89, -105.11, 100, 8, 0);
 
-    CHECK(RF_Parser_ParseBinaryPacket(NULL, 13) == RF_PARSER_ERROR);  /* NULL   */
-    CHECK(RF_Parser_ParseBinaryPacket(pkt, 12) == RF_PARSER_ERROR);   /* short  */
-    CHECK(RF_Parser_ParseBinaryPacket(pkt, 14) == RF_PARSER_ERROR);   /* long   */
+    /* Both layouts accepted: current V2 (14B) and legacy V1 (13B) */
+    CHECK(RF_Parser_ParseBinaryPacket(pkt, GPS_PACKET_SIZE) == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseBinaryPacket(pkt, GPS_PACKET_SIZE_V1) == RF_PARSER_OK);
+
+    CHECK(RF_Parser_ParseBinaryPacket(NULL, GPS_PACKET_SIZE) == RF_PARSER_ERROR);     /* NULL  */
+    CHECK(RF_Parser_ParseBinaryPacket(pkt, GPS_PACKET_SIZE_V1 - 1) == RF_PARSER_ERROR); /* short */
+    CHECK(RF_Parser_ParseBinaryPacket(pkt, GPS_PACKET_SIZE + 1) == RF_PARSER_ERROR);  /* long  */
 
     pkt[0] = PACKET_TYPE_TELEMETRY;                                   /* type   */
-    CHECK(RF_Parser_ParseBinaryPacket(pkt, 13) == RF_PARSER_ERROR);
+    CHECK(RF_Parser_ParseBinaryPacket(pkt, GPS_PACKET_SIZE) == RF_PARSER_ERROR);
 
     build_gps_packet(pkt, 95.0, -105.11, 100, 8, 0);                  /* lat>90 */
-    CHECK(RF_Parser_ParseBinaryPacket(pkt, 13) == RF_PARSER_ERROR);
+    CHECK(RF_Parser_ParseBinaryPacket(pkt, GPS_PACKET_SIZE) == RF_PARSER_ERROR);
 
     build_gps_packet(pkt, 39.89, -190.0, 100, 8, 0);                  /* lon    */
-    CHECK(RF_Parser_ParseBinaryPacket(pkt, 13) == RF_PARSER_ERROR);
+    CHECK(RF_Parser_ParseBinaryPacket(pkt, GPS_PACKET_SIZE_V1) == RF_PARSER_ERROR);
 }
 
 /* ------------------------------------------------------------------ */
@@ -299,13 +311,13 @@ TEST(test_sensor_degraded_cleared_by_raw_gps) {
      * raw GPS packets the RX must stop claiming the IMU is dead (same
      * clearing discipline as fused_dr / fused_gps_fresh). */
     RF_Parser_Reset();
-    uint8_t fused_pkt[FUSED_PACKET_SIZE], gps_pkt[13];
+    uint8_t fused_pkt[FUSED_PACKET_SIZE], gps_pkt[GPS_PACKET_SIZE];
     build_fused_packet(fused_pkt, 39.89, -105.11, 6000, 0, 0, 0, 3,
                        FUSED_FLAG_SENSOR_DEGRADED);
     CHECK(RF_Parser_ParseFusedPacket(fused_pkt, FUSED_PACKET_SIZE) == RF_PARSER_OK);
 
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x41);
-    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, sizeof(gps_pkt)) == RF_PARSER_OK);
 
     GPS_Data gps;
     CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
@@ -325,9 +337,9 @@ TEST(test_fused_gate_reject_flag) {
     CHECK(gps.fused_dr == 0 && gps.fused_landed == 0);
 
     /* And the raw-GPS stream clears it again like the other fused-only bits */
-    uint8_t gps_pkt[13];
+    uint8_t gps_pkt[GPS_PACKET_SIZE];
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x41);
-    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, sizeof(gps_pkt)) == RF_PARSER_OK);
     CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
     CHECK(gps.fused_gate_reject == 0);
 }
@@ -354,7 +366,15 @@ TEST(test_fused_wire_format_constants_pin) {
      * this repo's two copies of packet_format.h must never drift. Keep the
      * literal expectations in sync on both sides. */
     CHECK(sizeof(FusedPosPacket_t) == FUSED_PACKET_SIZE);
-    CHECK(FUSED_PACKET_SIZE == 19);
+    CHECK(FUSED_PACKET_SIZE == 20);
+    CHECK(FUSED_PACKET_SIZE_V1 == 19);
+    CHECK(offsetof(FusedPosPacket_t, rocket_id) == 19);
+
+    CHECK(sizeof(BinaryGPSPacket_t) == GPS_PACKET_SIZE);
+    CHECK(GPS_PACKET_SIZE == 14);
+    CHECK(GPS_PACKET_SIZE_V1 == 13);
+    CHECK(offsetof(BinaryGPSPacket_t, rocket_id) == 13);
+
     CHECK(FUSED_FLAG_LAUNCH_DETECTED == 0x80);
     CHECK(FUSED_FLAG_GPS_FRESH       == 0x40);
     CHECK(FUSED_FLAG_IMU_HEALTHY     == 0x20);
@@ -386,7 +406,7 @@ TEST(test_fused_landed_flag_both_streams) {
      * clear, the field or the nav page chip would flap as the streams
      * interleave (same bug class as the fix-clobber regression above). */
     RF_Parser_Reset();
-    uint8_t fused_pkt[FUSED_PACKET_SIZE], gps_pkt[13];
+    uint8_t fused_pkt[FUSED_PACKET_SIZE], gps_pkt[GPS_PACKET_SIZE];
     build_fused_packet(fused_pkt, 39.89, -105.11, 2400, 0, 0, 0, 3,
                        FUSED_FLAG_GPS_FRESH | FUSED_FLAG_LANDED);
     CHECK(RF_Parser_ParseFusedPacket(fused_pkt, FUSED_PACKET_SIZE) == RF_PARSER_OK);
@@ -397,13 +417,13 @@ TEST(test_fused_landed_flag_both_streams) {
     /* Raw GPS packet WITHOUT the bit: updates the field (TX sends it on
      * both streams, so "not landed" is real information, not noise). */
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x43);
-    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, sizeof(gps_pkt)) == RF_PARSER_OK);
     CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
     CHECK(gps.fused_landed == 0);
 
     /* Raw GPS packet WITH FLAG_LANDED sets it again. */
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x43 | FLAG_LANDED);
-    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, sizeof(gps_pkt)) == RF_PARSER_OK);
     CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
     CHECK(gps.fused_landed == 1);
 }
@@ -437,12 +457,12 @@ TEST(test_stale_fused_does_not_override_fresh_raw) {
      * packet with GPS_FRESH clear must not overwrite a recent raw fix. */
     RF_Parser_Reset();
     Test_SetTick(100000);
-    uint8_t gps_pkt[13], fused_pkt[FUSED_PACKET_SIZE];
+    uint8_t gps_pkt[GPS_PACKET_SIZE], fused_pkt[FUSED_PACKET_SIZE];
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x43);
     build_fused_packet(fused_pkt, 40.08, -105.39, 2400, 100, 0, 0, 255,
                        FUSED_FLAG_DEAD_RECKONING);   /* GPS_FRESH clear */
 
-    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, sizeof(gps_pkt)) == RF_PARSER_OK);
     CHECK(RF_Parser_ParseFusedPacket(fused_pkt, sizeof(fused_pkt)) == RF_PARSER_OK);
 
     GPS_Data gps;
@@ -468,12 +488,12 @@ TEST(test_fresh_fused_always_updates_position) {
      * before - the override above only arms for self-admitted staleness. */
     RF_Parser_Reset();
     Test_SetTick(200000);
-    uint8_t gps_pkt[13], fused_pkt[FUSED_PACKET_SIZE];
+    uint8_t gps_pkt[GPS_PACKET_SIZE], fused_pkt[FUSED_PACKET_SIZE];
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x43);
     build_fused_packet(fused_pkt, 40.08, -105.39, 2400, 0, 0, 0, 3,
                        FUSED_FLAG_GPS_FRESH);
 
-    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, sizeof(gps_pkt)) == RF_PARSER_OK);
     CHECK(RF_Parser_ParseFusedPacket(fused_pkt, sizeof(fused_pkt)) == RF_PARSER_OK);
 
     GPS_Data gps;
@@ -483,13 +503,18 @@ TEST(test_fresh_fused_always_updates_position) {
     Test_SetTick(0);
 }
 
-TEST(test_fused_malformed_rejected) {
+TEST(test_fused_layouts_and_malformed) {
     RF_Parser_Reset();
     uint8_t pkt[FUSED_PACKET_SIZE];
     build_fused_packet(pkt, 39.89, -105.11, 0, 0, 0, 0, 0, 0);
 
+    /* Both layouts accepted: current V2 (20B) and legacy V1 (19B) */
+    CHECK(RF_Parser_ParseFusedPacket(pkt, FUSED_PACKET_SIZE) == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseFusedPacket(pkt, FUSED_PACKET_SIZE_V1) == RF_PARSER_OK);
+
     CHECK(RF_Parser_ParseFusedPacket(NULL, FUSED_PACKET_SIZE) == RF_PARSER_ERROR);
-    CHECK(RF_Parser_ParseFusedPacket(pkt, FUSED_PACKET_SIZE - 1) == RF_PARSER_ERROR);
+    CHECK(RF_Parser_ParseFusedPacket(pkt, FUSED_PACKET_SIZE_V1 - 1) == RF_PARSER_ERROR);
+    CHECK(RF_Parser_ParseFusedPacket(pkt, FUSED_PACKET_SIZE + 1) == RF_PARSER_ERROR);
 
     pkt[0] = PACKET_TYPE_GPS;
     CHECK(RF_Parser_ParseFusedPacket(pkt, FUSED_PACKET_SIZE) == RF_PARSER_ERROR);
@@ -507,12 +532,12 @@ TEST(test_fused_does_not_clobber_gps_fix) {
      * GPS packets; fused packets must leave it alone (regression guard for
      * the display-flapping bug documented in rf_parser.c). */
     RF_Parser_Reset();
-    uint8_t gps_pkt[13], fused_pkt[FUSED_PACKET_SIZE];
+    uint8_t gps_pkt[GPS_PACKET_SIZE], fused_pkt[FUSED_PACKET_SIZE];
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x43);  /* fix = 3 */
     build_fused_packet(fused_pkt, 39.90, -105.12, 2400, 100, 0, 0, 3,
                        FUSED_FLAG_GPS_FRESH);
 
-    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, sizeof(gps_pkt)) == RF_PARSER_OK);
     CHECK(RF_Parser_ParseFusedPacket(fused_pkt, FUSED_PACKET_SIZE) == RF_PARSER_OK);
 
     GPS_Data gps;
@@ -524,12 +549,12 @@ TEST(test_gps_does_not_clobber_fused_velocity) {
     /* Velocities come only from fused packets and must persist across raw
      * GPS packets so the nav display doesn't flicker to 0.0 m/s. */
     RF_Parser_Reset();
-    uint8_t gps_pkt[13], fused_pkt[FUSED_PACKET_SIZE];
+    uint8_t gps_pkt[GPS_PACKET_SIZE], fused_pkt[FUSED_PACKET_SIZE];
     build_fused_packet(fused_pkt, 39.90, -105.12, 2400, 1500, -250, 40, 3, 0);
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x41);
 
     CHECK(RF_Parser_ParseFusedPacket(fused_pkt, FUSED_PACKET_SIZE) == RF_PARSER_OK);
-    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, 13) == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseBinaryPacket(gps_pkt, sizeof(gps_pkt)) == RF_PARSER_OK);
 
     GPS_Data gps;
     CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
@@ -540,9 +565,9 @@ TEST(test_gps_does_not_clobber_fused_velocity) {
 }
 
 TEST(test_reset_clears_state) {
-    uint8_t pkt[13];
+    uint8_t pkt[GPS_PACKET_SIZE];
     build_gps_packet(pkt, 39.89, -105.11, 100, 10, 0x41);
-    CHECK(RF_Parser_ParseBinaryPacket(pkt, 13) == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseBinaryPacket(pkt, sizeof(pkt)) == RF_PARSER_OK);
 
     RF_Parser_Reset();
 
@@ -654,7 +679,7 @@ int main(void) {
     run_test_ascii_last_packet_bookkeeping();
     run_test_binary_valid_packet();
     run_test_binary_negative_altitude();
-    run_test_binary_malformed_rejected();
+    run_test_binary_layouts_and_malformed();
     run_test_fused_valid_packet();
     run_test_fused_dead_reckoning_flag();
     run_test_fused_sensor_degraded_flag();
@@ -666,7 +691,7 @@ int main(void) {
     run_test_stale_fused_does_not_override_fresh_raw();
     run_test_fresh_fused_always_updates_position();
     run_test_fused_landed_flag_both_streams();
-    run_test_fused_malformed_rejected();
+    run_test_fused_layouts_and_malformed();
     run_test_fused_does_not_clobber_gps_fix();
     run_test_gps_does_not_clobber_fused_velocity();
     run_test_reset_clears_state();

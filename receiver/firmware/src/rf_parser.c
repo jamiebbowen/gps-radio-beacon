@@ -405,16 +405,20 @@ void RF_Parser_GetDetailedFailures(uint32_t *null_packet, uint32_t *insufficient
 }
 
 /**
- * @brief Parse binary GPS packet (13 bytes)
+ * @brief Parse binary GPS packet (V2: 14 bytes, legacy V1: 13 bytes)
  * @param data Pointer to binary packet data
  * @param length Length of packet in bytes
  * @retval Status code (RF_PARSER_OK if successful, RF_PARSER_ERROR otherwise)
  */
 uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
   parse_attempts++;
-  
-  /* Verify pointer and packet length (13 bytes = sizeof(BinaryGPSPacket_t)) */
-  if (data == NULL || length != 13) {
+
+  /* Accept both layouts: V2 (GPS_PACKET_SIZE, trailing rocket_id byte)
+   * and legacy V1 (GPS_PACKET_SIZE_V1). The V2 rocket_id is checked by the
+   * airframe binding in rf_receiver.c BEFORE this parser runs; here it only
+   * changes which lengths are legal - the fields this parser decodes sit
+   * at the same offsets in both layouts. */
+  if (data == NULL || (length != GPS_PACKET_SIZE && length != GPS_PACKET_SIZE_V1)) {
     parse_failures++;
     return RF_PARSER_ERROR;
   }
@@ -506,9 +510,9 @@ uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
 }
 
 /**
- * @brief Parse a PACKET_TYPE_FUSED payload (19 bytes)
+ * @brief Parse a PACKET_TYPE_FUSED payload (V2: 20 bytes, legacy V1: 19)
  *
- * Layout (little-endian, 19 bytes):
+ * Layout (little-endian, 20 bytes):
  *   [0]      packet_type (0x04)
  *   [1..4]   latitude  (int32, deg*1e7)
  *   [5..8]   longitude (int32, deg*1e7)
@@ -518,6 +522,8 @@ uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
  *   [15..16] v_d       (int16, cm/s)
  *   [17]     age_ds    (uint8, deciseconds since TX-side last GPS fix)
  *   [18]     flags     (FUSED_FLAG_*)
+ *   [19]     rocket_id (uint8, V2 only - checked by the airframe binding
+ *                      in rf_receiver.c before this parser runs)
  *
  * Populates parsed_gps_data with decoded values, including the v_north /
  * v_east / v_down m/s fields and the is_fused / fused_* metadata so the UI
@@ -527,7 +533,7 @@ uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length)
 {
   parse_attempts++;
 
-  if (data == NULL || length != FUSED_PACKET_SIZE) {
+  if (data == NULL || (length != FUSED_PACKET_SIZE && length != FUSED_PACKET_SIZE_V1)) {
     parse_failures++;
     return RF_PARSER_ERROR;
   }

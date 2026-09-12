@@ -232,7 +232,8 @@ TEST(test_binary_packet_fields)
     GPSCoordinates_t c = valid_coords();
 
     CHECK(beacon_transmit_gps_data_binary(&c, 100, 0) == 1);
-    CHECK(tx_len == 13);
+    CHECK(tx_len == GPS_PACKET_SIZE);
+    CHECK(tx_len == 14);
     CHECK(tx_buf[0] == PACKET_TYPE_GPS);
 
     /* lat 39.8900473, lon -104.8851678 (deg * 1e7) */
@@ -245,6 +246,7 @@ TEST(test_binary_packet_fields)
     CHECK(tx_buf[11] == 8);                   /* sats */
     /* On the pad: no launch bit, good-fix bit + fix type 1 */
     CHECK(tx_buf[12] == (FLAG_FIX_QUALITY_GOOD | 0x01));
+    CHECK(tx_buf[13] == (uint8_t)ROCKET_ID);  /* V2 airframe ID */
 }
 
 TEST(test_binary_altitude_clamps)
@@ -290,7 +292,7 @@ TEST(test_landed_flag_both_packet_types)
     fake_fused.gps_fresh = true;
     CHECK(beacon_transmit_fused_data(100, 1) == 1);
     CHECK(tx_buf[0] == PACKET_TYPE_FUSED);
-    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_LANDED) != 0);
+    CHECK((tx_buf[offsetof(FusedPosPacket_t, flags)] & FUSED_FLAG_LANDED) != 0);
     fake_landed = false;
 }
 
@@ -431,7 +433,8 @@ TEST(test_fused_packet_fields)
     fake_fused.imu_healthy = true;
 
     CHECK(beacon_transmit_fused_data(100, 0) == 1);
-    CHECK(tx_len == 19);
+    CHECK(tx_len == FUSED_PACKET_SIZE);
+    CHECK(tx_len == 20);
     CHECK(tx_buf[0] == PACKET_TYPE_FUSED);
     CHECK(get_i32_le(&tx_buf[1]) > 398900000);
     CHECK(get_i32_le(&tx_buf[5]) < -1048851000);
@@ -442,6 +445,7 @@ TEST(test_fused_packet_fields)
     CHECK(get_i16_le(&tx_buf[15]) == -5500);       /* vD cm/s */
     CHECK(tx_buf[17] == 7);                        /* age ds */
     CHECK(tx_buf[18] == (FUSED_FLAG_GPS_FRESH | FUSED_FLAG_IMU_HEALTHY));
+    CHECK(tx_buf[19] == (uint8_t)ROCKET_ID);       /* V2 airframe ID */
 }
 
 TEST(test_fused_velocity_clamps_and_flags)
@@ -456,9 +460,9 @@ TEST(test_fused_velocity_clamps_and_flags)
     CHECK(beacon_transmit_fused_data(100, 1) == 1);
     CHECK(get_i16_le(&tx_buf[11]) == 32700);
     CHECK(get_i16_le(&tx_buf[13]) == -32700);
-    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_DEAD_RECKONING) != 0);
-    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_LAUNCH_DETECTED) != 0);
-    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_GPS_FRESH) == 0);
+    CHECK((tx_buf[offsetof(FusedPosPacket_t, flags)] & FUSED_FLAG_DEAD_RECKONING) != 0);
+    CHECK((tx_buf[offsetof(FusedPosPacket_t, flags)] & FUSED_FLAG_LAUNCH_DETECTED) != 0);
+    CHECK((tx_buf[offsetof(FusedPosPacket_t, flags)] & FUSED_FLAG_GPS_FRESH) == 0);
     fake_launch_state = LAUNCH_STATE_IDLE;
 }
 
@@ -476,7 +480,7 @@ TEST(test_fused_sensor_degraded_flag)
     /* Exact byte: ONLY bit 2 may be set. SENSOR_DEGRADED is the wire-format
      * pin for the IMU-dead signal - the receiver decodes it at the same
      * offset (see its mirror test in receiver/tests/test_rf_parser.c). */
-    CHECK(tx_buf[FUSED_PACKET_SIZE - 1] == FUSED_FLAG_SENSOR_DEGRADED);
+    CHECK(tx_buf[offsetof(FusedPosPacket_t, flags)] == FUSED_FLAG_SENSOR_DEGRADED);
 }
 
 TEST(test_fused_wire_format_pin)
@@ -485,9 +489,16 @@ TEST(test_fused_wire_format_pin)
      * the two files breaks the link silently. These literal CHECKs (and the
      * identical block in receiver/tests/test_rf_parser.c) make a drift a
      * red test on whichever side changed without updating the other. */
-    CHECK(sizeof(FusedPosPacket_t) == 19);
-    CHECK(offsetof(FusedPosPacket_t, age_ds) == 17);
-    CHECK(offsetof(FusedPosPacket_t, flags)  == 18);
+    CHECK(sizeof(FusedPosPacket_t) == 20);
+    CHECK(FUSED_PACKET_SIZE == 20 && FUSED_PACKET_SIZE_V1 == 19);
+    CHECK(offsetof(FusedPosPacket_t, age_ds)    == 17);
+    CHECK(offsetof(FusedPosPacket_t, flags)     == 18);
+    CHECK(offsetof(FusedPosPacket_t, rocket_id) == 19);
+
+    CHECK(sizeof(BinaryGPSPacket_t) == 14);
+    CHECK(GPS_PACKET_SIZE == 14 && GPS_PACKET_SIZE_V1 == 13);
+    CHECK(offsetof(BinaryGPSPacket_t, flags)     == 12);
+    CHECK(offsetof(BinaryGPSPacket_t, rocket_id) == 13);
 
     CHECK(FUSED_FLAG_LAUNCH_DETECTED == 0x80);
     CHECK(FUSED_FLAG_GPS_FRESH       == 0x40);
@@ -510,14 +521,14 @@ TEST(test_fused_gate_reject_delta)
 
     fake_gps_rejects = 0;
     CHECK(beacon_transmit_fused_data(100, 1) == 1);
-    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_GATE_REJECT) == 0);
+    CHECK((tx_buf[offsetof(FusedPosPacket_t, flags)] & FUSED_FLAG_GATE_REJECT) == 0);
 
     fake_gps_rejects = 3;                     /* gate rejected some fixes */
     CHECK(beacon_transmit_fused_data(101, 1) == 1);
-    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_GATE_REJECT) != 0);
+    CHECK((tx_buf[offsetof(FusedPosPacket_t, flags)] & FUSED_FLAG_GATE_REJECT) != 0);
 
     CHECK(beacon_transmit_fused_data(102, 1) == 1);
-    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_GATE_REJECT) == 0);
+    CHECK((tx_buf[offsetof(FusedPosPacket_t, flags)] & FUSED_FLAG_GATE_REJECT) == 0);
     /* Settle the tracker so no later test sees a stale delta */
     fake_gps_rejects = 0;
     CHECK(beacon_transmit_fused_data(103, 1) == 1);

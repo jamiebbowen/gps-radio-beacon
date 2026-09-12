@@ -52,6 +52,9 @@ $(BUILD)/test_sd_card: test_sd_card.c $(SRC_DIR)/sd_card.c \
 
 .PHONY: all test coverage clean
 
+# Default goal must be the suite, not the first binary rule below.
+.DEFAULT_GOAL := test
+
 all: test
 
 $(BUILD):

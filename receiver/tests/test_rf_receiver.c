@@ -79,11 +79,20 @@ uint8_t LoRa_GetRssiInst(int16_t *rssi)
     return LORA_OK;
 }
 uint8_t LoRa_PacketAvailable(void) { return fake_pkt_pending; }
+
+/* Corruption knob: when set, the next pending packet is "heard but
+ * undecodable" (read returns LORA_CRC_ERROR, like fringe reception at the
+ * horizon). Consumed either way, like the real FIFO read. */
+static uint8_t fake_crc_error = 0;
 uint8_t LoRa_ReadPacket(LoRa_Packet_t *pkt)
 {
     if (!fake_pkt_pending) return LORA_ERROR;
-    *pkt = fake_pkt;
     fake_pkt_pending = 0;
+    if (fake_crc_error) {
+        fake_crc_error = 0;
+        return LORA_CRC_ERROR;
+    }
+    *pkt = fake_pkt;
     return LORA_OK;
 }
 uint8_t LoRa_SetChannel(uint8_t ch)
@@ -206,7 +215,14 @@ static void put_i32_le(uint8_t *buf, int32_t v)
     buf[3] = (uint8_t)((v >> 24) & 0xFF);
 }
 
-static void inject_gps_packet(double lat_deg, double lon_deg)
+/* Airframe IDs used across the scenario tests: ours vs the other guy at
+ * the launch running this same beacon firmware on our channel. */
+#define OUR_ROCKET_ID      3
+#define FOREIGN_ROCKET_ID  7
+
+static void put_i16_le(uint8_t *buf, int16_t v);   /* defined with the tests */
+
+static void inject_gps_packet(double lat_deg, double lon_deg, uint8_t rocket_id)
 {
     memset(&fake_pkt, 0, sizeof(fake_pkt));
     fake_pkt.data[0] = PACKET_TYPE_GPS;
@@ -215,9 +231,27 @@ static void inject_gps_packet(double lat_deg, double lon_deg)
     fake_pkt.data[9] = 100; fake_pkt.data[10] = 0;  /* alt 356 m -> 0x0164 */
     fake_pkt.data[11] = 9;                           /* sats */
     fake_pkt.data[12] = 0x03;                        /* fix flags */
-    fake_pkt.length = 13;
+    fake_pkt.data[13] = rocket_id;                   /* V2 airframe ID */
+    fake_pkt.length = GPS_PACKET_SIZE;
     fake_pkt.rssi = -95;
     fake_pkt.snr = 4;
+    fake_pkt_pending = 1;
+}
+
+/* V2 fused packet, zero velocity, fresh-GPS flag, alt 1650 m */
+static void inject_fused_packet(double lat_deg, double lon_deg, uint8_t rocket_id)
+{
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    fake_pkt.data[0] = PACKET_TYPE_FUSED;
+    put_i32_le(&fake_pkt.data[1], (int32_t)(lat_deg * 10000000.0));
+    put_i32_le(&fake_pkt.data[5], (int32_t)(lon_deg * 10000000.0));
+    put_i16_le(&fake_pkt.data[9], (int16_t)((1650.0f + FUSED_ALT_FLOOR_M) * FUSED_ALT_SCALE));
+    fake_pkt.data[17] = 0;                        /* age ds */
+    fake_pkt.data[18] = FUSED_FLAG_GPS_FRESH | FUSED_FLAG_IMU_HEALTHY;
+    fake_pkt.data[19] = rocket_id;
+    fake_pkt.length = FUSED_PACKET_SIZE;
+    fake_pkt.rssi = -90;
+    fake_pkt.snr = 5;
     fake_pkt_pending = 1;
 }
 
@@ -290,7 +324,7 @@ TEST(test_band_garbage_packets_are_ignored)
      * at the modem; the dangerous case is same-modem garbage. Fire every
      * shape and make sure nav state + channel discipline all survive. */
     GPS_Data base_pos;
-    inject_gps_packet(39.89, -105.11);
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
     run_for(250, 250);
     CHECK(RF_Receiver_GetGPSData(&base_pos) == RF_OK);
 
@@ -309,11 +343,15 @@ TEST(test_band_garbage_packets_are_ignored)
     fake_pkt.length = FUSED_PACKET_SIZE; fake_pkt.data[0] = 0xAC;
     fake_pkt_pending = 1; run_for(100, 100);
 
-    /* Valid fused shape, out-of-range coordinates: parser must drop it */
+    /* Valid fused shape, out-of-range coordinates: parser must drop it.
+     * Carries OUR rocket id so it passes the airframe filter and actually
+     * reaches the parser - otherwise this checks the filter, not the
+     * coordinate guard. */
     uint8_t badfused[FUSED_PACKET_SIZE];
     memset(badfused, 0, sizeof(badfused));
     badfused[0] = PACKET_TYPE_FUSED;
     badfused[1] = 0xFF; badfused[2] = 0xFF; badfused[3] = 0xFF; badfused[4] = 0x7F;
+    badfused[FUSED_PACKET_SIZE - 1] = OUR_ROCKET_ID;
     memcpy(&fake_pkt.data, badfused, sizeof(badfused));
     fake_pkt.length = FUSED_PACKET_SIZE;
     fake_pkt_pending = 1; run_for(100, 100);
@@ -339,7 +377,7 @@ TEST(test_final_packet_position_persists_through_blackout)
      * The last-known position must not decay; the data-stale flag carries
      * the warning instead. */
     GPS_Data pos;
-    inject_gps_packet(39.76, -105.19);   /* whatever spot it fell at */
+    inject_gps_packet(39.76, -105.19, OUR_ROCKET_ID);   /* whatever spot it fell at */
     run_for(250, 250);
     CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
     CHECK(fabs(pos.latitude - 39.76) < 0.001f);
@@ -410,7 +448,7 @@ TEST(test_heartbeat_lifecycle)
 
 TEST(test_position_packet_flow)
 {
-    inject_gps_packet(40.0, -105.0);
+    inject_gps_packet(40.0, -105.0, OUR_ROCKET_ID);
     run_for(250, 250);
 
     CHECK(RF_Receiver_DataAvailable() == 1);
@@ -727,19 +765,7 @@ static void put_i16_le(uint8_t *buf, int16_t v)
 TEST(test_fused_packet_flow)
 {
     /* EKF-fused packet: parsed, flagged ready, and delivered like GPS */
-    memset(&fake_pkt, 0, sizeof(fake_pkt));
-    fake_pkt.data[0] = PACKET_TYPE_FUSED;
-    put_i32_le(&fake_pkt.data[1], (int32_t)(39.89 * 10000000.0));
-    put_i32_le(&fake_pkt.data[5], (int32_t)(-105.11 * 10000000.0));
-    put_i32_le(&fake_pkt.data[9], 123400);          /* alt cm */
-    put_i16_le(&fake_pkt.data[13], 500);            /* vN cm/s */
-    put_i16_le(&fake_pkt.data[15], -200);           /* vE cm/s */
-    put_i16_le(&fake_pkt.data[17], 100);            /* vD cm/s */
-    fake_pkt.data[19] = 3;                          /* age ds */
-    fake_pkt.data[20] = 0x01;                       /* flags */
-    fake_pkt.length = FUSED_PACKET_SIZE;
-    fake_pkt.rssi = -90; fake_pkt.snr = 5;
-    fake_pkt_pending = 1;
+    inject_fused_packet(39.89, -105.11, OUR_ROCKET_ID);
 
     now_ms += 10; Test_SetTick(now_ms);
     CHECK(RF_Receiver_DataAvailable() == 1);
@@ -748,6 +774,10 @@ TEST(test_fused_packet_flow)
     memset(&gps, 0, sizeof(gps));
     CHECK(RF_Receiver_GetGPSData(&gps) == RF_OK);
     CHECK(gps.is_fused == 1);
+    CHECK_NEAR(gps.latitude, 39.89, 1e-4);
+    CHECK_NEAR(gps.longitude, -105.11, 1e-4);
+    CHECK_NEAR(gps.altitude, 1650.0, 0.5);
+    CHECK(gps.fused_gps_fresh == 1);
 }
 
 TEST(test_get_gps_data_without_packet)
@@ -764,7 +794,7 @@ TEST(test_data_staleness_tracking)
     CHECK(RF_Receiver_GetLastPacketTime() == 0);
     CHECK(RF_Receiver_IsDataStale(now_ms) == 1);    /* nothing yet */
 
-    inject_gps_packet(39.89, -105.11);
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
     now_ms += 10; Test_SetTick(now_ms);
     CHECK(RF_Receiver_DataAvailable() == 1);
     GPS_Data gps;
@@ -960,6 +990,7 @@ TEST(test_auto_rescan_after_prolonged_silence)
      * (a manual channel pick with a quiet band is a deliberate choice). */
     RF_Receiver_StopScan();
     last_any_packet_ms = 0;
+    last_identified_ms = 0;   /* the auto re-scan now keys off this one */
     run_for(400000, 250);
     (void)RF_Receiver_ScanUpdate();
     CHECK(RF_Receiver_IsScanning() == 0);
@@ -968,7 +999,7 @@ TEST(test_auto_rescan_after_prolonged_silence)
      * no re-scan. GetGPSData consumes the packet so rf_packet_ready clears
      * and later injections aren't gated. */
     GPS_Data gps;
-    inject_gps_packet(39.89, -105.11);
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
     run_for(250, 250);
     CHECK(RF_Receiver_GetGPSData(&gps) == RF_OK);
     run_for(60000, 250);
@@ -1003,12 +1034,315 @@ TEST(test_auto_rescan_after_prolonged_silence)
     CHECK(scan_dwell_len_ms == RF_SCAN_DWELL_MS);
 
     /* A new packet locks the scan again */
-    inject_gps_packet(39.89, -105.11);
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
     run_for(250, 250);
     CHECK(RF_Receiver_ScanUpdate() == 1);
     CHECK(RF_Receiver_IsScanning() == 0);
 
     fake_cad_available = 0;   /* restore test-suite default */
+}
+
+/* ------------------------------------------------------------------ */
+/* Launch-day scenario battery                                          */
+/* ------------------------------------------------------------------ */
+
+TEST(test_foreign_beacon_filter)
+{
+    /* Crowded flight line: someone else is flying this same beacon
+     * firmware on our channel. Their packets are byte-valid; the rocket_id
+     * byte is the only tell. The first ID heard on the tuned channel claims
+     * the binding (pad workflow: our rocket's pre-launch heartbeat before
+     * the neighbor even powers up). */
+    RF_Receiver_StopScan();
+    fake_mode = 5;
+    fake_rssi_inst = -120;
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);        /* manual: unbind */
+    CHECK(RF_Receiver_GetBoundRocketId() == 0xFF);
+
+    inject_heartbeat(OUR_ROCKET_ID, 0, 8, 12);       /* ours powers up */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+
+    GPS_Data pos;
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+    CHECK_NEAR(pos.latitude, 39.89, 1e-4);
+
+    /* Neighbor's beacon starts transmitting valid-shaped packets from
+     * THEIR site. Position must not move, nothing may flag fresh. */
+    uint32_t drops0 = RF_Receiver_GetForeignDrops();
+    uint32_t ours_packet_ms = RF_Receiver_GetLastPacketTime();
+    inject_gps_packet(36.20, -115.40, FOREIGN_ROCKET_ID);
+    run_for(250, 250);
+    inject_fused_packet(36.21, -115.39, FOREIGN_ROCKET_ID);
+    run_for(250, 250);
+
+    CHECK(RF_Receiver_GetForeignDrops() == drops0 + 2);
+    CHECK(RF_Receiver_DataAvailable() == 0);
+    CHECK(RF_Receiver_GetLastPacketTime() == ours_packet_ms);
+
+    GPS_Data kept;
+    CHECK(RF_Receiver_GetParsedData(&kept, NULL, 0, NULL) == 1);
+    CHECK_NEAR(kept.latitude, 39.89, 1e-4);          /* still our fix */
+    CHECK_NEAR(kept.longitude, -105.11, 1e-4);
+
+    /* Known limitation, pinned deliberately: legacy V1 packets carry no
+     * ID and cannot be told apart. Mixed-fleet pollution protection
+     * requires V2 on BOTH ends - upgrade every beacon. */
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    fake_pkt.data[0] = PACKET_TYPE_GPS;
+    put_i32_le(&fake_pkt.data[1], (int32_t)(36.20 * 10000000.0));
+    put_i32_le(&fake_pkt.data[5], (int32_t)(-115.40 * 10000000.0));
+    fake_pkt.length = GPS_PACKET_SIZE_V1;
+    fake_pkt_pending = 1;
+    run_for(250, 250);
+    CHECK(RF_Receiver_DataAvailable() == 1);         /* passes, as V1 must */
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+    CHECK_NEAR(pos.latitude, 36.20, 1e-4);
+    CHECK(RF_Receiver_GetForeignDrops() == drops0 + 2);  /* V1 isn't a "drop" */
+
+    /* Manual channel change = operator is deliberately looking for
+     * another rocket: binding reset, first ID on the new channel
+     * claims it. */
+    CHECK(RF_Receiver_SetChannel(2) == RF_OK);
+    CHECK(RF_Receiver_GetBoundRocketId() == 0xFF);
+    inject_gps_packet(36.20, -115.40, FOREIGN_ROCKET_ID);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetBoundRocketId() == FOREIGN_ROCKET_ID);
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);    /* theirs is now legit */
+
+    /* ...and our own rocket is now the foreign one */
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    run_for(250, 250);
+    CHECK(RF_Receiver_DataAvailable() == 0);
+
+    /* Restore the default test posture */
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+}
+
+TEST(test_foreign_chatter_does_not_suppress_auto_rescan)
+{
+    /* Our beacon goes silent (splash/crater/reboot) while the neighbor's
+     * beacon keeps chattering on our channel. The auto re-scan exists to
+     * find OUR rebooted beacon; foreign traffic must not vote "all is
+     * well" just because the radio keeps hearing bytes. */
+    RF_Receiver_StopScan();
+    fake_mode = 5;
+    fake_rssi_inst = -120;
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    run_for(250, 250);
+    GPS_Data pos;
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+
+    /* 7 minutes of foreign chatter (one valid packet every 30 s - enough
+     * to keep the raw any-packet timer fresh) and no word from us. */
+    for (int i = 0; i < 14; i++) {
+        inject_gps_packet(36.20, -115.40, FOREIGN_ROCKET_ID);
+        run_for(30000, 250);
+    }
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);  /* never stole it */
+    CHECK(RF_Receiver_GetForeignDrops() > 0);
+    CHECK(RF_Receiver_IsScanning() == 0);
+
+    /* Silence-from-our-side is what counts: re-acquire fires anyway */
+    (void)RF_Receiver_ScanUpdate();
+    CHECK(RF_Receiver_IsScanning() == 1);
+    CHECK(scan_cad_phase == 0);            /* re-acquire: straight to dwell */
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);  /* kept */
+
+    /* A foreign packet during the sweep still drops; the scan locks on it
+     * (any-packet lock is the documented semantic) but the binding and
+     * our last position survive. */
+    inject_gps_packet(36.20, -115.40, FOREIGN_ROCKET_ID);
+    run_for(250, 250);
+    CHECK(RF_Receiver_ScanUpdate() == 1);  /* locked on the foreign packet */
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+    CHECK(RF_Receiver_DataAvailable() == 0);
+    GPS_Data kept;
+    CHECK(RF_Receiver_GetParsedData(&kept, NULL, 0, NULL) == 1);
+    CHECK_NEAR(kept.latitude, 39.89, 1e-4);
+
+    /* Our beacon answers on this channel after all. */
+    inject_gps_packet(39.91, -105.08, OUR_ROCKET_ID);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+    CHECK_NEAR(pos.latitude, 39.91, 1e-4);
+
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+}
+
+TEST(test_over_horizon_walk_reacquisition)
+{
+    /* The walk: beacon drifts over the horizon under chute, we get nothing
+     * for ~30 minutes while hiking, then the link re-forms as we crest the
+     * rise - mid auto-re-scan - and the last-known snaps straight to the
+     * landing site on the far side. */
+    RF_Receiver_StopScan();
+    fake_mode = 5;
+    fake_rssi_inst = -120;
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+
+    inject_gps_packet(39.890, -105.115, OUR_ROCKET_ID);   /* final descent fix */
+    run_for(250, 250);
+    GPS_Data pos;
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+
+    /* Over the horizon: total RF silence for 15 minutes. Half-way check:
+     * last-known persists (the blackout test owns this contract) and the
+     * stale flag, not position decay, carries the bad news. */
+    run_for(15 * 60 * 1000UL, 5000);
+    GPS_Data kept;
+    CHECK(RF_Receiver_GetParsedData(&kept, NULL, 0, NULL) == 1);
+    CHECK_NEAR(kept.latitude, 39.890, 1e-4);
+    CHECK(RF_Receiver_IsDataStale(now_ms) == 1);
+    CHECK(RF_Receiver_IsScanning() == 0);            /* silence < trigger */
+
+    /* ~20 min in the auto re-scan starts looking. CAD must be skipped
+     * (marginal preambles are CAD-invisible) and the sticky dwell must sit
+     * on home channel a full battery-save period. Binding stays OURS:
+     * the beacon we're hunting did not change identities. */
+    run_for(6 * 60 * 1000UL, 5000);
+    (void)RF_Receiver_ScanUpdate();
+    CHECK(RF_Receiver_IsScanning() == 1);
+    CHECK(scan_cad_phase == 0);
+    CHECK(scan_dwell_len_ms == RF_SCAN_REACQ_DWELL_MS);
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+
+    /* We crest the rise ~26 min in. The beacon has been sitting at its
+     * landing site 8 km away the whole time; its next pad-cadence packet
+     * lands inside the sticky dwell. */
+    run_for(5 * 60 * 1000UL, 5000);
+    inject_fused_packet(39.962, -105.021, OUR_ROCKET_ID);   /* ~8.3 km away */
+    run_for(250, 250);
+    CHECK(RF_Receiver_ScanUpdate() == 1);            /* lock */
+    CHECK(RF_Receiver_IsScanning() == 0);
+    CHECK(RF_Receiver_GetChannel() == 0);            /* same channel, as designed */
+
+    /* Position snaps to the landing site; freshness flags heal. */
+    CHECK(RF_Receiver_DataAvailable() == 1);
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+    CHECK_NEAR(pos.latitude, 39.962, 1e-4);
+    CHECK_NEAR(pos.longitude, -105.021, 1e-4);
+    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);
+    CHECK(RF_Receiver_GetLastPacketTime() == now_ms);
+}
+
+TEST(test_fringe_link_crc_forensics)
+{
+    /* Horizon-edge walking BEFORE the blackout: long stretches where the
+     * radio hears something it can't decode (CRC errors) with an occasional
+     * good packet through. The two counters must keep those worlds apart:
+     * "heard but corrupt" is proximity evidence, "heard nothing" is not. */
+    RF_Receiver_StopScan();
+    fake_mode = 5;
+    fake_rssi_inst = -120;
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    inject_gps_packet(39.80, -105.20, OUR_ROCKET_ID);
+    run_for(250, 250);
+    GPS_Data pos;
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+
+    uint32_t crc0 = RF_Receiver_GetCrcErrors();
+    uint32_t pkts0 = RF_Receiver_GetLoRaPacketCount();
+
+    /* 10 bursts over ~3 minutes: burst of 4 CRC-corrupt receptions, then
+     * ~15 s quiet, then one good packet a little closer each time. */
+    for (int burst = 0; burst < 10; burst++) {
+        for (int i = 0; i < 4; i++) {
+            memset(&fake_pkt, 0xA5, sizeof(fake_pkt));
+            fake_pkt.length = 20;
+            fake_pkt_pending = 1;
+            fake_crc_error = 1;                       /* undecodable */
+            run_for(250, 250);
+        }
+        run_for(15000, 5000);                         /* quiet stretch */
+        inject_gps_packet(39.80 + burst * 0.0001, -105.20, OUR_ROCKET_ID);
+        run_for(250, 250);
+        CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+        CHECK_NEAR(pos.latitude, 39.80 + burst * 0.0001, 1e-3); /* marches in */
+    }
+
+    CHECK(RF_Receiver_GetCrcErrors() == crc0 + 40);   /* heard-but-corrupt */
+    CHECK(RF_Receiver_GetLoRaPacketCount() == pkts0 + 10);
+    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);      /* freshest just arrived */
+    CHECK(RF_Receiver_IsScanning() == 0);             /* < 5 min silence: no rescan */
+    CHECK(RF_Receiver_NoiseAlert() == 0);             /* quiet band, no false alarm */
+}
+
+TEST(test_tick_wraparound_ages)
+{
+    /* The millisecond tick wraps every 49.7 days; a ground station can
+     * absolutely run that long. All freshness math is unsigned
+     * (now - then) subtraction - pin it across the boundary. run_for()
+     * can't cross a wrap (end < start), so this test steps manually. */
+#   define wrap_run(duration_ms)                                     \
+    for (uint32_t left = (duration_ms); left > 0; left -= 250) {     \
+        now_ms += 250;                                               \
+        Test_SetTick(now_ms);                                        \
+        (void)RF_Receiver_DataAvailable();                           \
+    }
+
+    RF_Receiver_StopScan();
+    fake_mode = 5;
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+
+    now_ms = 0xFFFFF000U;              /* 4 s before the wrap */
+    Test_SetTick(now_ms);
+
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    wrap_run(250);
+    GPS_Data pos;
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+    inject_heartbeat(OUR_ROCKET_ID, 0, 6, 500);
+    wrap_run(250);
+
+    /* Cross 2^32. Nothing may read as "49 days old" (huge stale age) or
+     * as fresh forever (age pinned at 0). */
+    wrap_run(5000);                    /* now ~5.5 s past the last packet */
+    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);
+    HeartbeatPacket_t hb;
+    uint32_t age_ms = 0;
+    CHECK(RF_Receiver_GetLastHeartbeat(&hb, &age_ms) == 1);
+    CHECK(age_ms >= 5000 && age_ms <= 6000);
+
+    /* Past the stale timeout on the far side of the wrap, the flag still
+     * matures normally. */
+    wrap_run(30000);
+    CHECK(RF_Receiver_IsDataStale(now_ms) == 1);
+
+    /* Scan dwell across the boundary: start it pre-wrap, and it must hop
+     * exactly once after one dwell - the dwell arithmetic must not wrap-
+     * -explode into an instant hop-frenzy or a frozen scan. */
+    now_ms = 0xFFFFFE00U;              /* 512 ms before wrap, mid-dwell */
+    Test_SetTick(now_ms);
+    RF_Receiver_StartScan();
+    uint8_t home = RF_Receiver_GetChannel();
+    for (uint32_t i = 0; i < 7000 / 250 + 4; i++) {
+        now_ms += 250;
+        Test_SetTick(now_ms);
+        (void)RF_Receiver_DataAvailable();   /* CAD unavailable -> dwell */
+        if (RF_Receiver_ScanUpdate()) break;
+    }
+    /* Exactly one dwell hop in one dwell window (a wrap-exploded dwell
+     * would have lapped several channels by now) */
+    CHECK(RF_Receiver_GetChannel() == (uint8_t)((home + 1) % LORA_CHANNEL_COUNT));
+    CHECK(RF_Receiver_IsScanning() == 1);
+
+    /* And the scan still locks on post-wrap packets */
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    wrap_run(250);
+    CHECK(RF_Receiver_ScanUpdate() == 1);
+
+    /* Leave the suite parked in its default posture */
+    RF_Receiver_StopScan();
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+#   undef wrap_run
 }
 
 int main(void)
@@ -1044,6 +1378,11 @@ int main(void)
     run_test_noise_sweep_null_guard();
     run_test_diagnostics_getters();
     run_test_auto_rescan_after_prolonged_silence();
+    run_test_foreign_beacon_filter();
+    run_test_foreign_chatter_does_not_suppress_auto_rescan();
+    run_test_over_horizon_walk_reacquisition();
+    run_test_fringe_link_crc_forensics();
+    run_test_tick_wraparound_ages();
 
     return TEST_SUMMARY();
 }
