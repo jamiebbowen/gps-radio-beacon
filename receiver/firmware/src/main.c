@@ -821,6 +821,16 @@ int main(void)
       /* No fix or error in GPS update - don't update local_gps_data */
       has_valid_local_gps = 0;
     }
+    /* Falling-edge note: makes "how long did the RX GPS hold its fix during
+     * the test?" directly observable instead of inferred from dead base
+     * columns. */
+    {
+      static uint8_t prev_valid_local = 0;
+      if (prev_valid_local && !has_valid_local_gps && sd_card_ok) {
+        SD_Card_LogEvent("Local GPS fix lost");
+      }
+      prev_valid_local = has_valid_local_gps;
+    }
     
     /* If we don't have valid current GPS data but have last known good data,
        use that for navigation calculations */

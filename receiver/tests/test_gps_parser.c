@@ -105,6 +105,7 @@ TEST(test_gga_valid_sentence) {
     CHECK(gps.fix == 1);
     CHECK(gps.hour == 12 && gps.minute == 35 && gps.second == 19);
     CHECK(gps.timestamp == 5000);
+    CHECK_NEAR(gps.hdop, 0.9, 1e-3);
 }
 
 TEST(test_gga_accepts_gn_talker) {

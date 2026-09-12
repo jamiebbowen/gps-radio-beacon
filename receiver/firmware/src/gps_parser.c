@@ -314,7 +314,11 @@ static uint8_t GPS_ParseGPGGA(const char* nmea_sentence, GPS_Data *gps_data)
         strncpy(gps_data->debug_sats, token, GPS_DEBUG_BUFFER_SIZE - 1);
         gps_data->debug_sats[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
         break;
-        
+
+      case 8: /* HDOP - geometry quality, separates "few sats" from "bad geometry" */
+        gps_data->hdop = atof(token);
+        break;
+
       case 9: /* Altitude */
         gps_data->altitude = atof(token);
         break;

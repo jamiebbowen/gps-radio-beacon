@@ -29,6 +29,7 @@ typedef struct {
   float altitude;          /* Altitude in meters */
   float speed;             /* Speed over ground in km/h */
   float course;            /* Course over ground in degrees */
+  float hdop;              /* Horizontal dilution of precision from GGA (0 if never parsed) */
   uint8_t satellites;      /* Number of satellites in use (numeric value) */
   uint8_t fix;             /* GPS fix status (numeric value) */
   char satellites_str[4];  /* Number of satellites as string */
