@@ -110,8 +110,8 @@
 #define POST_LAUNCH_PACKET_INTERVAL_SEC 2
 
 /* Fused-packet transmit cadence in LAUNCH state. Must exceed the fused
- * packet's air time (SF10/BW62.5k/CR4-6/8-sym-preamble, 19 bytes ≈
- * 0.83 s); 1200 ms gives ~0.8 fused updates/s in flight with comfortable
+ * packet's air time (SF10/BW62.5k/CR4-8/8-sym-preamble, 19 bytes ≈
+ * 0.99 s); 1200 ms gives ~0.8 fused updates/s in flight with comfortable
  * margin. Faster is impossible without airtime exceeding the interval,
  * which just converts the "rate" into back-to-back blocking transmits. */
 #define FUSED_TX_INTERVAL_MS            1200

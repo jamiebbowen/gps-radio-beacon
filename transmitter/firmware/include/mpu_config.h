@@ -109,8 +109,8 @@
 #define LORA_SPREADING      10          // SF10: ~+4 dB link budget vs SF9 (2026-09 range work).
                                         // Costs 2x airtime - see FUSED_TX_INTERVAL_MS in config.h,
                                         // which must exceed the ~0.56 s fused-packet airtime.
-#define LORA_CODING_RATE    6           // Coding Rate 4/6: ~18% shorter packets vs 4/8,
-                                        // costing <1 dB of margin (2026-09 packet diet)
+#define LORA_CODING_RATE    8           // Coding Rate 4/8: +~1 dB FEC margin vs 4/6 at +18%
+                                        // airtime (2026-09: fade-era correctness priority)
 #define LORA_SYNC_WORD      0x12        // Private sync word (0x12 = private, 0x34 = LoRaWAN)
 #define LORA_TX_POWER       22          // 22 dBm (~160mW - SX1268 chip maximum,
                                         //  which is also what drives the M33S
