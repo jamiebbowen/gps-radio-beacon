@@ -113,6 +113,7 @@ uint8_t RF_Receiver_IsSignalQualityGood(void);
 
 /* Packet loss diagnostics */
 void RF_Receiver_GetPacketLossDiagnostics(uint32_t *irq_count, uint32_t *lora_packets, uint32_t *duplicates);
+uint32_t RF_Receiver_GetCrcErrors(void);
 
 #ifdef __cplusplus
 }

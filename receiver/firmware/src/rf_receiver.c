@@ -63,6 +63,7 @@ static DMA_HandleTypeDef hdma_spi2_tx;
 static DMA_HandleTypeDef hdma_spi2_rx;
 static uint32_t rf_bytes_received = 0;
 static uint32_t rf_lora_packets_received = 0;  // Total LoRa packets received
+static uint32_t rf_crc_errors = 0;  // Packets heard but rejected by CRC (heard-and-corrupt vs never-heard)
 static uint32_t rf_irq_checks = 0;  // How many times we've checked IRQ status
 static uint16_t rf_last_irq_status = 0;  // Last IRQ status we read
 static uint8_t rf_last_device_mode = 0;  // Last device operating mode
@@ -305,7 +306,13 @@ uint8_t RF_Receiver_DataAvailable(void)
   /* Check for new LoRa packets */
   if (!rf_packet_ready && LoRa_PacketAvailable()) {
     /* Read the packet */
-    if (LoRa_ReadPacket(&last_packet) == LORA_OK) {
+    uint8_t rd = LoRa_ReadPacket(&last_packet);
+    if (rd == LORA_CRC_ERROR) {
+      /* Heard something, couldn't decode it: the missing-packet
+       * forensics number - separates "radio heard garbage" from "radio
+       * heard nothing at all" when reconstructing a blackout. */
+      rf_crc_errors++;
+    } else if (rd == LORA_OK) {
       rf_lora_packets_received++;  // Count every LoRa packet received
       last_any_packet_ms = now_ms;
       rf_bytes_received += last_packet.length;
@@ -1054,6 +1061,12 @@ void RF_Receiver_GetPacketLossDiagnostics(uint32_t *irq_count, uint32_t *lora_pa
   if (irq_count) *irq_count = LoRa_GetIRQCount();
   if (lora_packets) *lora_packets = rf_lora_packets_received;
   if (duplicates) *duplicates = 0;  /* Duplicate detection disabled */
+}
+
+/** Packets that arrived and failed CRC - "heard but corrupt". */
+uint32_t RF_Receiver_GetCrcErrors(void)
+{
+  return rf_crc_errors;
 }
 
 /**

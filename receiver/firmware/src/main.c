@@ -771,21 +771,21 @@ int main(void)
         uint32_t irqs = 0, pkts = 0, dups = 0;
         RF_Receiver_GetPacketLossDiagnostics(&irqs, &pkts, &dups);
         int16_t nf = 0;
+        char st_msg[80];
         if (RF_Receiver_GetNoiseFloor(&nf)) {
-          char st_msg[64];
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu wedges=%lu nf=%ddBm",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm",
                    (unsigned long)pkts, (unsigned long)irqs,
+                   (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered(), (int)nf);
-          SD_Card_LogEvent(st_msg);
         } else {
-          char st_msg[64];
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu wedges=%lu nf=n/a",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a",
                    (unsigned long)pkts, (unsigned long)irqs,
+                   (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered());
-          SD_Card_LogEvent(st_msg);
         }
+        SD_Card_LogEvent(st_msg);
       }
     }
 
@@ -911,14 +911,18 @@ int main(void)
     if (sd_card_ok) {
       static int8_t prev_mag_cal = -1;
       static uint8_t prev_hv = 0;
+      static uint8_t prev_hs = 0;
       int8_t mc = (int8_t)compass_data.mag_cal;
       uint8_t hv = compass_data.heading_valid;
-      if (mc != prev_mag_cal || hv != prev_hv) {
+      uint8_t hs = compass_data.heading_stale;
+      if (mc != prev_mag_cal || hv != prev_hv || hs != prev_hs) {
         prev_mag_cal = mc;
         prev_hv = hv;
-        char c_msg[40];
-        snprintf(c_msg, sizeof(c_msg), "COMPASS mag_cal=%d heading_%svalid",
-                 (int)mc, hv ? "" : "IN");
+        prev_hs = hs;
+        char c_msg[48];
+        snprintf(c_msg, sizeof(c_msg),
+                 "COMPASS mag_cal=%d heading_%svalid%s",
+                 (int)mc, hv ? "" : "IN", hs ? " stale" : "");
         SD_Card_LogEvent(c_msg);
       }
     }
@@ -961,6 +965,26 @@ int main(void)
               int16_t pkt_rssi;
               int8_t  pkt_snr;
               RF_Receiver_GetSignalQuality(&pkt_rssi, &pkt_snr);
+
+              /* Link-edge breadcrumbs: the crossing moments mark the
+               * walk-out/walk-back edge without needing post-hoc RSSI
+               * archaeology. -85/-80 hysteresis keeps flutter out. */
+              if (sd_card_ok) {
+                static uint8_t link_weak = 0;
+                if (!link_weak && pkt_rssi <= -85) {
+                  link_weak = 1;
+                  char wk[48];
+                  snprintf(wk, sizeof(wk), "LINK WEAK rssi=%ddBm snr=%d",
+                           (int)pkt_rssi, (int)pkt_snr);
+                  SD_Card_LogEvent(wk);
+                } else if (link_weak && pkt_rssi >= -80) {
+                  link_weak = 0;
+                  char wk[48];
+                  snprintf(wk, sizeof(wk), "LINK OK rssi=%ddBm snr=%d",
+                           (int)pkt_rssi, (int)pkt_snr);
+                  SD_Card_LogEvent(wk);
+                }
+              }
 
               /* Log navigation snapshot. Compute distance/bearing from THIS
                * packet's coordinates - distance_to_tx tracks the live fused

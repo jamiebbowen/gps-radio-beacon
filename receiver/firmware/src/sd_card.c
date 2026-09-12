@@ -99,16 +99,18 @@ static struct lfs_file_config adhoc_file_cfg = {
  *   21-22 RX antenna Pitch/Roll deg     (pointing diagnostics for the
  *                                        directional antenna: fused with
  *                                        Heading to reconstruct boresight)
+ *   23  BaseSats - receiver's own GPS satellite count (base honesty at
+ *        log time, so a wobbling base can't later masquerade as truth)
  */
 static const char SD_LOG_HEADER[] =
     "Timestamp,Type,PktSrc,BeaconLat,BeaconLon,BeaconAlt_m,BeaconSats,"
     "VN_ms,VE_ms,VD_ms,FusedAge_ds,FusedFlags,"
     "BaseLat,BaseLon,BaseAlt_m,Distance_km,Bearing_deg,Heading_deg,"
-    "RSSI_dBm,SNR_dB,Pitch_deg,Roll_deg\n";
+    "RSSI_dBm,SNR_dB,Pitch_deg,Roll_deg,BaseSats\n";
 static const char SD_NAV_ROW_FMT[] =
     "%s,NAV,%s,%.6f,%.6f,%.1f,%d,"
     "%.2f,%.2f,%.2f,%d,%02X,"
-    "%.6f,%.6f,%.1f,%.3f,%.1f,%.1f,%d,%d,%.1f,%.1f\n";
+    "%.6f,%.6f,%.1f,%.3f,%.1f,%.1f,%d,%d,%.1f,%.1f,%d\n";
 
 /* Private function prototypes -----------------------------------------------*/
 static SD_Card_Status SD_Card_WriteLogEntry(const char *entry);
@@ -592,10 +594,12 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
         if (beacon_gps->fused_landed) fused_flags |= 0x20;
     }
     float s_lat = 0, s_lon = 0, s_alt = 0;
+    int   s_sats = 0;
     if (base_gps) {
         s_lat = base_gps->latitude;
         s_lon = base_gps->longitude;
         s_alt = base_gps->altitude;
+        s_sats = base_gps->satellites;
     }
 
     snprintf(log_buffer, sizeof(log_buffer), SD_NAV_ROW_FMT,
@@ -604,7 +608,7 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
              vn, ve, vd, age_ds, (unsigned)fused_flags,
              s_lat, s_lon, s_alt,
              distance_km, bearing_deg, heading_deg, (int)rssi, (int)snr,
-             pitch_deg, roll_deg);
+             pitch_deg, roll_deg, s_sats);
 
     SD_Card_Status status = SD_Card_WriteLogEntry(log_buffer);
 
