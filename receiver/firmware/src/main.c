@@ -111,6 +111,10 @@ static uint32_t mode_change_time = 0;
  * frame; otherwise a mode change could take up to 250 ms to become visible. */
 static uint8_t force_display_update = 0;
 
+/* 1 = the quat-heading lock was restored from SD at this boot (skip the
+ * per-boot re-save + log spam; it only NEWS-locks once). */
+static uint8_t quatlock_loaded_at_boot = 0;
+
 /* Worst main-loop iteration time since last RFSTATS emission (forensics:
  * blocking SD writes / radio wedge / display stalls surface here, every
  * minute). Per-segment max attribution below so the worst patcher is
@@ -594,7 +598,6 @@ int main(void)
      * tilt-immune when the quat path is driving it. Without the restore
      * we'd wait out a level+calibrated moment on every boot while the
      * Euler path glitches through steep pitch. */
-    static uint8_t quatlock_loaded_at_boot = 0;
     if (sd_card_ok) {
       uint8_t conv = 0;
       if (SD_Card_LoadQuatLock(&conv) == SD_CARD_OK) {
