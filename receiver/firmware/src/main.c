@@ -111,6 +111,11 @@ static uint32_t mode_change_time = 0;
  * frame; otherwise a mode change could take up to 250 ms to become visible. */
 static uint8_t force_display_update = 0;
 
+/* Worst main-loop iteration time since last RFSTATS emission (forensics:
+ * blocking SD writes / radio wedge / display stalls surface here, every
+ * minute). */
+static uint32_t main_loop_max_ms = 0;
+
 /* Flags and counters */
 uint8_t has_valid_local_gps = 0;
 uint8_t has_valid_remote_gps = 0;
@@ -176,6 +181,50 @@ void Error_Handler(void);
   * @brief  The application entry point.
   * @retval int
   */
+/* Measure supply voltage via ADC1/VREFINT (no pins needed - fully internal).
+ * The handheld runs on whatever battery pack is handy; a sagging pack is a
+ * classic hidden root cause for "the radio/GPS got flaky mid-walk". The
+ * RFSTATS breadcrumb carries it every minute. */
+static uint16_t sys_vdd_mv = 0;
+static void Sys_MeasureVdd(void)
+{
+  ADC_HandleTypeDef hadc = {0};
+  __HAL_RCC_ADC1_CLK_ENABLE();
+  hadc.Instance = ADC1;
+  hadc.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
+  hadc.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc.Init.ScanConvMode = DISABLE;
+  hadc.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc.Init.ContinuousConvMode = DISABLE;
+  hadc.Init.DiscontinuousConvMode = DISABLE;
+  hadc.Init.NbrOfConversion = 1;
+  hadc.Init.DMAContinuousRequests = DISABLE;
+  hadc.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  if (HAL_ADC_Init(&hadc) != HAL_OK) return;
+
+  ADC1_COMMON->CCR |= ADC_CCR_TSVREFE;   /* VREFINT on */
+  HAL_Delay(1);
+
+  ADC_ChannelConfTypeDef cfg = {0};
+  cfg.Channel = ADC_CHANNEL_VREFINT;
+  cfg.Rank = 1;
+  cfg.SamplingTime = ADC_SAMPLETIME_480CYCLES;
+  if (HAL_ADC_ConfigChannel(&hadc, &cfg) != HAL_OK) return;
+  HAL_ADC_Start(&hadc);
+  if (HAL_ADC_PollForConversion(&hadc, 50) == HAL_OK) {
+    uint32_t raw = HAL_ADC_GetValue(&hadc);
+    if (raw > 0) {
+      uint16_t vref_cal = *VREFINT_CAL_ADDR;   /* 3.3 V factory point */
+      sys_vdd_mv = (uint16_t)(3300u * vref_cal / raw);
+    }
+  }
+  HAL_ADC_Stop(&hadc);
+  HAL_ADC_DeInit(&hadc);
+  __HAL_RCC_ADC1_CLK_DISABLE();
+}
+
 int main(void)
 {
   /* USER CODE BEGIN 1 */
@@ -445,6 +494,24 @@ int main(void)
     HAL_Delay(3000);
   }
 
+  /* Reset-source breadcrumb, read before RMVF clears it: tells brown-out,
+   * pin resets and software resets apart so mystery restarts stop being
+   * mysteries. */
+  if (sd_card_ok) {
+    uint32_t csr = RCC->CSR;
+    const char *src =
+      (csr & RCC_CSR_IWDGRSTF) ? "IWDG"  :
+      (csr & RCC_CSR_WWDGRSTF) ? "WWDG"  :
+      (csr & RCC_CSR_SFTRSTF)  ? "SOFT"  :
+      (csr & RCC_CSR_BORRSTF)  ? "BOR"   :
+      (csr & RCC_CSR_PINRSTF)  ? "PIN"   :
+      (csr & RCC_CSR_PORRSTF)  ? "POR"   : "UNK";
+    SD_Card_EnsureLogFile();
+    char rst_msg[32];
+    snprintf(rst_msg, sizeof(rst_msg), "RESET src=%s", src);
+    SD_Card_LogEvent(rst_msg);
+  }
+
   /* Clear the reset flags unconditionally: if SD init failed above, a set
    * IWDGRSTF would otherwise survive into a later boot and be logged then
    * as a spurious "Boot after IWDG watchdog reset". */
@@ -576,6 +643,20 @@ int main(void)
   {
     /* USER CODE END WHILE */
     IWDG->KR = 0xAAAA;  /* feed the watchdog */
+
+    /* Main-loop iteration time tracking: the quiet forensic signal for
+     * blocking bugs (SD commit stalls, radio wedges, display churn) that
+     * otherwise leave no trace between watchdog resets. The RFSTATS
+     * breadcrumb below emits the worst iteration each minute. */
+    {
+      static uint32_t loop_prev_ms = 0;
+      uint32_t loop_now_ms = HAL_GetTick();
+      if (loop_prev_ms != 0) {
+        uint32_t dt = loop_now_ms - loop_prev_ms;
+        if (dt > main_loop_max_ms) main_loop_max_ms = dt;
+      }
+      loop_prev_ms = loop_now_ms;
+    }
 
     /* USER CODE BEGIN 3 */
     /* LED = RF activity indicator: pulse for 100 ms after each packet
@@ -771,19 +852,26 @@ int main(void)
         uint32_t irqs = 0, pkts = 0, dups = 0;
         RF_Receiver_GetPacketLossDiagnostics(&irqs, &pkts, &dups);
         int16_t nf = 0;
-        char st_msg[80];
+        /* VDD + loop-max: power and blocking-stall forensics */
+        Sys_MeasureVdd();
+        uint32_t loop_max = main_loop_max_ms;
+        main_loop_max_ms = 0;
+
+        char st_msg[112];
         if (RF_Receiver_GetNoiseFloor(&nf)) {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
-                   (unsigned long)RF_Receiver_GetWedgesRecovered(), (int)nf);
+                   (unsigned long)RF_Receiver_GetWedgesRecovered(), (int)nf,
+                   (unsigned)sys_vdd_mv, (unsigned long)loop_max);
         } else {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
-                   (unsigned long)RF_Receiver_GetWedgesRecovered());
+                   (unsigned long)RF_Receiver_GetWedgesRecovered(),
+                   (unsigned)sys_vdd_mv, (unsigned long)loop_max);
         }
         SD_Card_LogEvent(st_msg);
       }
