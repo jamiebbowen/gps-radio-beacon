@@ -123,6 +123,11 @@ static uint8_t  noise_sample_idx = 0;
 static uint8_t  noise_sample_count = 0;
 static uint8_t  noise_alert_active = 0;
 
+/* Per-channel measurement ticks from the last NF sweep (the sweep runs
+ * standalone and then results get logged from main - logging each line
+ * with the sweep-end tick would falsely claim the sweep was instant). */
+static uint32_t nf_sweep_ch_tick[LORA_CHANNEL_COUNT];
+
 /* Private function prototypes */
 static uint8_t RF_SPI_Init(void);
 
@@ -851,10 +856,18 @@ uint8_t RF_Receiver_NoiseSweep(int16_t *nf_dbm_out)
       samples[j] = t;
     }
     nf_dbm_out[ch] = samples[got / 2];
+    nf_sweep_ch_tick[ch] = HAL_GetTick();
     measured++;
   }
   (void)LoRa_SetChannel(home);
   return measured;
+}
+
+/** Tick at which the last sweep measured channel `ch` (0 until first sweep). */
+uint32_t RF_Receiver_GetSweepTick(uint8_t ch)
+{
+  if (ch >= LORA_CHANNEL_COUNT) return 0;
+  return nf_sweep_ch_tick[ch];
 }
 
 /**

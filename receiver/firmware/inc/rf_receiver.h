@@ -93,6 +93,9 @@ uint32_t RF_Receiver_GetWedgesRecovered(void);
  * the channel it started on; returns channels measured (0 on total
  * failure). The caller re-arms any in-flight channel scan afterwards. */
 uint8_t RF_Receiver_NoiseSweep(int16_t *nf_dbm_out);
+/** Tick at which the last sweep measured channel `ch` (for honest
+ *  timestamping when the logger prints results after the sweep). */
+uint32_t RF_Receiver_GetSweepTick(uint8_t ch);
 
 /* Boot-time channel scan: hop channels until a CRC-valid packet is heard */
 void    RF_Receiver_StartScan(void);

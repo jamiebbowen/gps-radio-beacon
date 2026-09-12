@@ -456,11 +456,16 @@ int main(void)
         int16_t nf_ch[LORA_CHANNEL_COUNT];
         for (uint8_t i = 0; i < LORA_CHANNEL_COUNT; i++) nf_ch[i] = 1;  /* "n/a" */
         if (RF_Receiver_NoiseSweep(nf_ch) > 0) {
-          char nf_msg[48];
+          char nf_msg[56];
           for (uint8_t ch = 0; ch < LORA_CHANNEL_COUNT; ch++) {
             if (nf_ch[ch] == 1) continue;
-            snprintf(nf_msg, sizeof(nf_msg), "NF sweep CH%u %.2fMHz nf=%ddBm",
-                     (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)nf_ch[ch]);
+            /* at= is when THIS channel was measured (the sweep takes ~1 s
+             * in total; batch-logging with fresh stamps would fake it). */
+            snprintf(nf_msg, sizeof(nf_msg),
+                     "NF sweep CH%u %.2fMHz nf=%ddBm at=%lu.%03lu",
+                     (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)nf_ch[ch],
+                     (unsigned long)(RF_Receiver_GetSweepTick(ch) / 1000),
+                     (unsigned long)(RF_Receiver_GetSweepTick(ch) % 1000));
             SD_Card_LogEvent(nf_msg);
           }
         }
@@ -589,10 +594,12 @@ int main(void)
      * tilt-immune when the quat path is driving it. Without the restore
      * we'd wait out a level+calibrated moment on every boot while the
      * Euler path glitches through steep pitch. */
+    static uint8_t quatlock_loaded_at_boot = 0;
     if (sd_card_ok) {
       uint8_t conv = 0;
       if (SD_Card_LoadQuatLock(&conv) == SD_CARD_OK) {
         (void)Compass_SetQuatLockConv(conv);
+        quatlock_loaded_at_boot = 1;  /* already durable; don't re-save each boot */
       }
     }
     /* BNO055 initialized successfully - try to restore saved calibration */
@@ -1059,7 +1066,7 @@ int main(void)
     {
       static uint8_t quat_lock_saved = 0;
       uint8_t conv = Compass_GetQuatLockConv();
-      if (conv != 0 && !quat_lock_saved && sd_card_ok) {
+      if (conv != 0 && !quat_lock_saved && !quatlock_loaded_at_boot && sd_card_ok) {
         quat_lock_saved = 1;
         SD_Card_SaveQuatLock(conv);
         char q_msg[32];
