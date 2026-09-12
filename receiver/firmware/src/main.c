@@ -120,6 +120,8 @@ static uint32_t seg_max_rf_ms = 0;
 static uint32_t seg_max_gps_ms = 0;
 static uint32_t seg_max_disp_ms = 0;
 static uint32_t seg_max_cmp_ms = 0;
+static uint32_t loop_iter_count = 0;
+static uint32_t loop_iter_at_last = 0;
 static uint32_t seg_start_rf = 0;
 static uint32_t seg_start_gps = 0;
 static uint32_t seg_start_disp = 0;
@@ -657,6 +659,7 @@ int main(void)
   {
     /* USER CODE END WHILE */
     IWDG->KR = 0xAAAA;  /* feed the watchdog */
+    loop_iter_count++;
 
     /* Deferred SD sync at write-idle moments (see SD_Card_ServiceSync): the
      * per-row lfs commit+metadata compaction could otherwise stall the loop
@@ -894,26 +897,35 @@ int main(void)
         uint32_t m_gps = seg_max_gps_ms; seg_max_gps_ms = 0;
         uint32_t m_disp = seg_max_disp_ms; seg_max_disp_ms = 0;
         uint32_t m_cmp = seg_max_cmp_ms;   seg_max_cmp_ms = 0;
+        /* Loop-rate (not just worst-case) + accumulated SD write errors:
+         * a stall can hide inside "fine" maxima if the loop simply runs
+         * rarely; sd errors escaping silent is how dead cards hide. */
+        uint32_t loops_d = loop_iter_count - loop_iter_at_last;
+        loop_iter_at_last = loop_iter_count;
+        SD_Card_Info sd_i;
+        uint32_t sd_werr = (SD_Card_GetInfo(&sd_i) == SD_CARD_OK) ? sd_i.write_errors : 0;
 
-        char st_msg[160];
+        char st_msg[180];
         if (RF_Receiver_GetNoiseFloor(&nf)) {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums sd=%lums rf=%lums gps=%lums disp=%lums cmp=%lums",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums sd=%lums rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered(), (int)nf,
                    (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max,
                    (unsigned long)m_rf, (unsigned long)m_gps,
-                   (unsigned long)m_disp, (unsigned long)m_cmp);
+                   (unsigned long)m_disp, (unsigned long)m_cmp,
+                   (unsigned long)loops_d, (unsigned long)sd_werr);
         } else {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums sd=%lums rf=%lums gps=%lums disp=%lums cmp=%lums",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums sd=%lums rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered(),
                    (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max,
                    (unsigned long)m_rf, (unsigned long)m_gps,
-                   (unsigned long)m_disp, (unsigned long)m_cmp);
+                   (unsigned long)m_disp, (unsigned long)m_cmp,
+                   (unsigned long)loops_d, (unsigned long)sd_werr);
         }
         SD_Card_LogEvent(st_msg);
       }
