@@ -113,8 +113,20 @@ static uint8_t force_display_update = 0;
 
 /* Worst main-loop iteration time since last RFSTATS emission (forensics:
  * blocking SD writes / radio wedge / display stalls surface here, every
- * minute). */
+ * minute). Per-segment max attribution below so the worst patcher is
+ * named, not guessed. */
 static uint32_t main_loop_max_ms = 0;
+static uint32_t seg_max_rf_ms = 0;
+static uint32_t seg_max_gps_ms = 0;
+static uint32_t seg_max_disp_ms = 0;
+static uint32_t seg_max_cmp_ms = 0;
+static uint32_t seg_start_rf = 0;
+static uint32_t seg_start_gps = 0;
+static uint32_t seg_start_disp = 0;
+static uint32_t seg_start_cmp = 0;
+#define SEG_TIC(v) seg_start_##v = HAL_GetTick()
+#define SEG_TOC(v) do { uint32_t _d = HAL_GetTick() - seg_start_##v; \
+    if (_d > seg_max_##v##_ms) seg_max_##v##_ms = _d; } while (0)
 
 /* Flags and counters */
 uint8_t has_valid_local_gps = 0;
@@ -507,8 +519,10 @@ int main(void)
       (csr & RCC_CSR_PINRSTF)  ? "PIN"   :
       (csr & RCC_CSR_PORRSTF)  ? "POR"   : "UNK";
     SD_Card_EnsureLogFile();
-    char rst_msg[32];
-    snprintf(rst_msg, sizeof(rst_msg), "RESET src=%s", src);
+    char rst_msg[48];
+    Sys_MeasureVdd();   /* boot rail check: pairs with src=BOR events */
+    snprintf(rst_msg, sizeof(rst_msg), "RESET src=%s vdd=%umV", src,
+             (unsigned)sys_vdd_mv);
     SD_Card_LogEvent(rst_msg);
   }
 
@@ -865,27 +879,36 @@ int main(void)
         uint32_t irqs = 0, pkts = 0, dups = 0;
         RF_Receiver_GetPacketLossDiagnostics(&irqs, &pkts, &dups);
         int16_t nf = 0;
-        /* VDD + loop-max + SD write burst: power and stall forensics */
+        /* VDD + loop-max + SD write burst + per-segment max: stall
+         * attribution, not just detection */
         Sys_MeasureVdd();
         uint32_t loop_max = main_loop_max_ms;
         main_loop_max_ms = 0;
         uint32_t sd_max = SD_Card_TakeMaxWriteMs();
+        uint32_t m_rf = seg_max_rf_ms;   seg_max_rf_ms = 0;
+        uint32_t m_gps = seg_max_gps_ms; seg_max_gps_ms = 0;
+        uint32_t m_disp = seg_max_disp_ms; seg_max_disp_ms = 0;
+        uint32_t m_cmp = seg_max_cmp_ms;   seg_max_cmp_ms = 0;
 
-        char st_msg[124];
+        char st_msg[160];
         if (RF_Receiver_GetNoiseFloor(&nf)) {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums sd=%lums",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums sd=%lums rf=%lums gps=%lums disp=%lums cmp=%lums",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered(), (int)nf,
-                   (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max);
+                   (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max,
+                   (unsigned long)m_rf, (unsigned long)m_gps,
+                   (unsigned long)m_disp, (unsigned long)m_cmp);
         } else {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums sd=%lums",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums sd=%lums rf=%lums gps=%lums disp=%lums cmp=%lums",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered(),
-                   (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max);
+                   (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max,
+                   (unsigned long)m_rf, (unsigned long)m_gps,
+                   (unsigned long)m_disp, (unsigned long)m_cmp);
         }
         SD_Card_LogEvent(st_msg);
       }
@@ -898,7 +921,9 @@ int main(void)
     }
     
     /* Update GPS data (skip if init failed - its UART was never set up) */
+    SEG_TIC(gps);
     uint8_t gps_update_result = local_gps_ok ? GPS_Update(&gps_data) : GPS_ERROR;
+    SEG_TOC(gps);
     
     /* Validate GPS data before marking as valid */
     if ((gps_update_result == GPS_OK && gps_data.fix) || GPS_IsFixed()) {
@@ -1071,6 +1096,7 @@ int main(void)
 
     /* Check for RF data - check MULTIPLE times to catch queued packets */
     /* A packet may arrive while processing the first one - catch it immediately */
+    SEG_TIC(rf);
     for (int rf_check = 0; rf_check < 3; rf_check++) {
       if (rf_initialized && RF_Receiver_DataAvailable()) {
         uint8_t status = RF_Receiver_GetGPSData(&rf_gps_data); 
@@ -1185,7 +1211,8 @@ int main(void)
         break;
       }
     }
-    
+    SEG_TOC(rf);
+
     /* (Stale-RF invalidation happens in the every-loop check below.) */
 
     /* Calculate distance and direction if we have valid GPS data (current or last known good) and remote GPS */
@@ -1270,9 +1297,11 @@ int main(void)
   static uint32_t last_compass_update = 0;
   if (current_time - last_compass_update >= 200) { /* 5 Hz: walking-speed heading
                                                      * feedback; each update is ~1ms of I2C */
+    SEG_TIC(cmp);
     if (Compass_Update(&compass_data) == COMPASS_OK) {
       compass_heading = compass_data.heading;
     }
+    SEG_TOC(cmp);
     last_compass_update = current_time;
   }
   
@@ -1307,6 +1336,7 @@ int main(void)
     }
   }
   
+  SEG_TIC(disp);
   /* Clear display buffer before drawing new content */
   Display_Clear();
   
@@ -1407,6 +1437,7 @@ int main(void)
     last_display_update = current_time;
     force_display_update = 0;
   }
+  SEG_TOC(disp);
   
   /* No delay - check packets continuously with zero blocking */
 }
