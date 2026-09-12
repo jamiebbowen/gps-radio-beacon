@@ -41,6 +41,15 @@
 #define COMPCAL_DATA_LEN    22
 #define COMPCAL_FILE_LEN    25
 
+/* BNO055 quaternion-heading convention lock (compass.c). Hardware-shaped,
+ * not session-shaped: losing it every boot means the arrow falls back to
+ * the Euler path until the next level+calibrated moment, and that is the
+ * "arrow swings when I pitch the antenna" complaint. */
+#define QLOCK_FILENAME      "QLOCK.BIN"
+#define QLOCK_MAGIC_0       0x51  /* 'Q' */
+#define QLOCK_MAGIC_1       0x4C  /* 'L' */
+#define QLOCK_FILE_LEN      4     /* magic0, magic1, conv, csum */
+
 #define BEACON_FILENAME     "BEACON.TXT"
 
 /* Private variables ---------------------------------------------------------*/
@@ -704,6 +713,42 @@ SD_Card_Status SD_Card_LoadCompassCal(uint8_t *data, uint8_t len)
     for (uint8_t i = 0; i < COMPCAL_DATA_LEN; i++) csum ^= buf[2 + i];
     if (csum != buf[COMPCAL_FILE_LEN - 1]) return SD_CARD_ERROR;
     memcpy(data, &buf[2], COMPCAL_DATA_LEN);
+    return SD_CARD_OK;
+}
+
+SD_Card_Status SD_Card_SaveQuatLock(uint8_t conv)
+{
+    if (conv < 1 || conv > 8) return SD_CARD_ERROR;
+    if (!sd_initialized || !lfs_mounted) return SD_CARD_ERROR;
+
+    uint8_t buf[QLOCK_FILE_LEN] = { QLOCK_MAGIC_0, QLOCK_MAGIC_1, conv, 0 };
+    buf[QLOCK_FILE_LEN - 1] = (uint8_t)(conv ^ 0xA5);
+
+    lfs_file_t f;
+    int err = LFS_OPEN(&lfs, &f, QLOCK_FILENAME,
+                       LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC);
+    if (err) return SD_CARD_ERROR;
+    lfs_ssize_t w = lfs_file_write(&lfs, &f, buf, QLOCK_FILE_LEN);
+    int close_err = lfs_file_close(&lfs, &f);
+    return (w == QLOCK_FILE_LEN && close_err == 0) ? SD_CARD_OK : SD_CARD_ERROR;
+}
+
+SD_Card_Status SD_Card_LoadQuatLock(uint8_t *conv)
+{
+    if (!conv) return SD_CARD_ERROR;
+    if (!sd_initialized || !lfs_mounted) return SD_CARD_ERROR;
+
+    lfs_file_t f;
+    int err = LFS_OPEN(&lfs, &f, QLOCK_FILENAME, LFS_O_RDONLY);
+    if (err) return SD_CARD_ERROR;
+    uint8_t buf[QLOCK_FILE_LEN];
+    lfs_ssize_t r = lfs_file_read(&lfs, &f, buf, QLOCK_FILE_LEN);
+    lfs_file_close(&lfs, &f);
+    if (r != QLOCK_FILE_LEN) return SD_CARD_ERROR;
+    if (buf[0] != QLOCK_MAGIC_0 || buf[1] != QLOCK_MAGIC_1) return SD_CARD_ERROR;
+    if (buf[2] < 1 || buf[2] > 8) return SD_CARD_ERROR;
+    if (buf[QLOCK_FILE_LEN - 1] != (uint8_t)(buf[2] ^ 0xA5)) return SD_CARD_ERROR;
+    *conv = buf[2];
     return SD_CARD_OK;
 }
 

@@ -420,6 +420,34 @@ TEST(test_compass_cal_persistence)
     CHECK(SD_Card_LoadCompassCal(out, COMPCAL_DATA_LEN) == SD_CARD_ERROR);
 }
 
+TEST(test_quatlock_persistence)
+{
+    wipe_card();
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+
+    uint8_t conv = 0;
+    CHECK(SD_Card_LoadQuatLock(&conv) == SD_CARD_ERROR);          /* none yet */
+    CHECK(SD_Card_SaveQuatLock(0) == SD_CARD_ERROR);              /* 0 = unlocked */
+    CHECK(SD_Card_SaveQuatLock(9) == SD_CARD_ERROR);              /* out of range */
+    CHECK(SD_Card_SaveQuatLock(5) == SD_CARD_OK);
+    CHECK(SD_Card_LoadQuatLock(&conv) == SD_CARD_OK);
+    CHECK(conv == 5);
+
+    /* Corrupt the checksum: rejected */
+    lfs_file_t f;
+    uint8_t raw[QLOCK_FILE_LEN];
+    CHECK(lfs_file_opencfg(&lfs, &f, QLOCK_FILENAME, LFS_O_RDONLY,
+                           &adhoc_file_cfg) == 0);
+    CHECK(lfs_file_read(&lfs, &f, raw, QLOCK_FILE_LEN) == QLOCK_FILE_LEN);
+    lfs_file_close(&lfs, &f);
+    raw[QLOCK_FILE_LEN - 1] ^= 0x01;
+    CHECK(lfs_file_opencfg(&lfs, &f, QLOCK_FILENAME,
+                           LFS_O_WRONLY | LFS_O_TRUNC, &adhoc_file_cfg) == 0);
+    lfs_file_write(&lfs, &f, raw, QLOCK_FILE_LEN);
+    lfs_file_close(&lfs, &f);
+    CHECK(SD_Card_LoadQuatLock(&conv) == SD_CARD_ERROR);
+}
+
 TEST(test_format_wipes_everything)
 {
     wipe_card();
@@ -594,6 +622,7 @@ int main(void)
     run_test_apis_reject_when_uninitialized();
     run_test_beacon_persistence_validation();
     run_test_compass_cal_persistence();
+    run_test_quatlock_persistence();
     run_test_format_wipes_everything();
     run_test_self_test_pass_and_write_failure();
     run_test_rotation_launchflag_and_write_failure();

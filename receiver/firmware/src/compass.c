@@ -567,6 +567,19 @@ static float Compass_QuatHeadingCandidate(int idx, float vx, float vy)
   }
 }
 
+/* Quat-lock convention persistence hooks (see compass.h for the why). */
+uint8_t Compass_GetQuatLockConv(void)
+{
+    return (uint8_t)quat_conv_locked;
+}
+
+uint8_t Compass_SetQuatLockConv(uint8_t conv)
+{
+    if (conv < 1 || conv > 8) return COMPASS_ERROR;
+    quat_conv_locked = (int8_t)conv;
+    return COMPASS_OK;
+}
+
 /**
  * @brief Initialize the BNO055 IMU with robust initialization sequence
  * @retval Status code

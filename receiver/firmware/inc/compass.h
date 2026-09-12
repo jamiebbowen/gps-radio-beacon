@@ -81,6 +81,16 @@ const uint8_t* Compass_GetFoundAddresses(void);
 uint8_t Compass_DisplayI2CScan(void);
 uint8_t Compass_SetHeadingOffset(float offset_deg);
 
+/* Quaternion->heading convention lock. 0 = not locked yet; 1-8 = locked
+ * convention. Once it locks (which needs a simultaneously level+mag-OK
+ * moment, rare in hand), the quaternion path drives the arrow and pitch
+ * swings stop mattering. The convention is a property of the hardware,
+ * so it is persisted on SD (see SD_Card_SaveQuatLock): without that, a
+ * reset drops the unit back to the Euler path which glitches when the
+ * board pitches steeply - the "arrow swings wildly" behavior. */
+uint8_t Compass_GetQuatLockConv(void);
+uint8_t Compass_SetQuatLockConv(uint8_t conv);
+
 /* Calibration persistence */
 #define BNO055_CAL_DATA_LEN  22  /* ACC(6) + MAG(6) + GYR(6) + radii(4) bytes */
 uint8_t Compass_GetCalibrationData(uint8_t *data, uint8_t len);

@@ -228,6 +228,18 @@ SD_Card_Status SD_Card_SaveCompassCal(const uint8_t *data, uint8_t len);
  */
 SD_Card_Status SD_Card_LoadCompassCal(uint8_t *data, uint8_t len);
 
+/**
+ * @brief Persist the BNO055 quaternion-heading convention lock (1-8)
+ * @retval SD_Card_Status
+ */
+SD_Card_Status SD_Card_SaveQuatLock(uint8_t conv);
+
+/**
+ * @brief Load the persisted quat-lock convention
+ * @retval SD_CARD_OK on success, SD_CARD_ERROR if missing/corrupt/out-of-range
+ */
+SD_Card_Status SD_Card_LoadQuatLock(uint8_t *conv);
+
 #ifdef __cplusplus
 }
 #endif

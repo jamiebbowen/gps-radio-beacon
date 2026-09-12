@@ -469,6 +469,19 @@ TEST(test_quat_lock_all_conventions_selectable)
     compass_cal_restored = 0;
 }
 
+TEST(test_quat_lock_get_set_for_persistence)
+{
+    fresh_init();
+    quat_conv_locked = 0;
+    CHECK(Compass_GetQuatLockConv() == 0);
+    CHECK(Compass_SetQuatLockConv(0) == COMPASS_ERROR);   /* 0 = unlocked, not a conv */
+    CHECK(Compass_SetQuatLockConv(9) == COMPASS_ERROR);
+    CHECK(Compass_SetQuatLockConv(5) == COMPASS_OK);
+    CHECK(Compass_GetQuatLockConv() == 5);
+    CHECK(quat_conv_locked == 5);                          /* same static drives heading */
+    quat_conv_locked = 0;                                  /* leave unlocked for later tests */
+}
+
 TEST(test_quat_lock_refused_in_ambiguity_band)
 {
     fresh_init();
@@ -993,6 +1006,7 @@ int main(void)
     run_test_vertical_orientation_invalid();
     run_test_quat_lock_and_tilt_robustness();
     run_test_quat_lock_all_conventions_selectable();
+    run_test_quat_lock_get_set_for_persistence();
     run_test_quat_lock_refused_in_ambiguity_band();
     run_test_i2c_error_streak_recovers();
     run_test_stale_heading_flagged_on_comm_loss();

@@ -487,6 +487,17 @@ int main(void)
       HAL_Delay(200);
     }
   } else {
+    /* Restore the persisted quat->heading convention lock: this convention
+     * is a property of the hardware, and the arrow only becomes
+     * tilt-immune when the quat path is driving it. Without the restore
+     * we'd wait out a level+calibrated moment on every boot while the
+     * Euler path glitches through steep pitch. */
+    if (sd_card_ok) {
+      uint8_t conv = 0;
+      if (SD_Card_LoadQuatLock(&conv) == SD_CARD_OK) {
+        (void)Compass_SetQuatLockConv(conv);
+      }
+    }
     /* BNO055 initialized successfully - try to restore saved calibration */
     if (sd_card_ok) {
       uint8_t cal_data[BNO055_CAL_DATA_LEN];
@@ -862,6 +873,22 @@ int main(void)
           best_mag_cal_saved = mag_cal;
         }
         last_cal_save_ms = HAL_GetTick();
+      }
+    }
+
+    /* Persist the quat->heading convention lock the first time it forms in
+     * any session: later boots get tilt-immunity immediately instead of
+     * waiting for a level+calibrated moment. Log it too, so the field log
+     * says which heading path drove the arrow. */
+    {
+      static uint8_t quat_lock_saved = 0;
+      uint8_t conv = Compass_GetQuatLockConv();
+      if (conv != 0 && !quat_lock_saved && sd_card_ok) {
+        quat_lock_saved = 1;
+        SD_Card_SaveQuatLock(conv);
+        char q_msg[32];
+        snprintf(q_msg, sizeof(q_msg), "QUATLOCK conv=%u saved", (unsigned)conv);
+        SD_Card_LogEvent(q_msg);
       }
     }
 
