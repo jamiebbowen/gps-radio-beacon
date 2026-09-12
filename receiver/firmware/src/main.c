@@ -785,6 +785,19 @@ int main(void)
     if (rf_initialized && sd_card_ok) {
       HeartbeatPacket_t hb;
       if (RF_Receiver_GetHeartbeat(&hb)) {
+        /* Beacon-side resets are otherwise indistinguishable from a LOST
+         * window at review time: the heartbeat uptime field regresses.
+         * (Covers TX WDT resets and supply sags - the lfs-of-the-air.) */
+        static uint16_t prev_hb_uptime = 0;
+        if (hb.uptime_s < prev_hb_uptime) {
+          char r_msg[48];
+          snprintf(r_msg, sizeof(r_msg), "TX reset: uptime %us -> %us",
+                   (unsigned)prev_hb_uptime, (unsigned)hb.uptime_s);
+          SD_Card_EnsureLogFile();
+          SD_Card_LogError(r_msg);
+        }
+        prev_hb_uptime = hb.uptime_s;
+
         int16_t hb_rssi;
         int8_t  hb_snr;
         RF_Receiver_GetSignalQuality(&hb_rssi, &hb_snr);
