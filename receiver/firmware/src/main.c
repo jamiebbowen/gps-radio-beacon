@@ -658,6 +658,11 @@ int main(void)
     /* USER CODE END WHILE */
     IWDG->KR = 0xAAAA;  /* feed the watchdog */
 
+    /* Deferred SD sync at write-idle moments (see SD_Card_ServiceSync): the
+     * per-row lfs commit+metadata compaction could otherwise stall the loop
+     * ~2 s mid-packet. This call moves that burst to between-packet time. */
+    SD_Card_ServiceSync();
+
     /* Main-loop iteration time tracking: the quiet forensic signal for
      * blocking bugs (SD commit stalls, radio wedges, display churn) that
      * otherwise leave no trace between watchdog resets. The RFSTATS

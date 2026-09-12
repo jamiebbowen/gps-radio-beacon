@@ -240,8 +240,13 @@ SD_Card_Status SD_Card_SaveQuatLock(uint8_t conv);
  */
 SD_Card_Status SD_Card_LoadQuatLock(uint8_t *conv);
 
-/** Worst write+sync burst in ms since the last call (clears after read). */
+/** Worst write/sync burst in ms since the last call (clears after read). */
 uint32_t SD_Card_TakeMaxWriteMs(void);
+
+/** Deferred-sync service - call once per main-loop iteration. Syncs the log
+ *  at an idle window after the last write (or every 10 s under floods), so
+ *  LittleFS commit+compact bursts don't land mid-packet-processing. */
+void SD_Card_ServiceSync(void);
 
 #ifdef __cplusplus
 }

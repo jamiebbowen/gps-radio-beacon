@@ -244,6 +244,7 @@ TEST(test_log_file_lazy_creation_and_sequencing)
                                 5.0f, -2.0f, -92, 6) == SD_CARD_OK);
 
     char big[2048];
+    CHECK(SD_Card_Flush() == SD_CARD_OK);   /* deferred-sync model: explicit flush before readback */
     CHECK(read_file("L0001.TXT", big, sizeof(big)) > 0);  /* seq starts at 1 */
     CHECK(strstr(big, "Timestamp,Type,PktSrc") == big);   /* header first */
     CHECK(strstr(big, "12.345,NAV,GPS,39.89") != NULL);   /* row followed */
@@ -312,6 +313,7 @@ TEST(test_all_log_row_formats)
                                 12.0f, -4.0f, -88, 8) == SD_CARD_OK);
 
     char big[4096];
+    CHECK(SD_Card_Flush() == SD_CARD_OK);
     CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
     CHECK(strstr(big, "GPS_LOCAL")  != NULL);
     CHECK(strstr(big, "GPS_REMOTE") != NULL);

@@ -58,6 +58,17 @@ static lfs_file_t    log_file;
 static uint8_t       sd_initialized = 0;
 static uint8_t       lfs_mounted    = 0;
 static uint32_t      sd_max_write_ms = 0;
+
+/* Deferred-sync state. Per-row lfs_file_sync used to block the main loop
+ * ~50 ms, except that about once a minute the metadata pair hits its
+ * compaction threshold and the sync picks up a ~2 s GC burst (measured,
+ * RFSTATS loop=2349ms sd=1981ms, 2026-09-11 card). Committing at an idle
+ * window instead - after 400 ms with no writes - puts that stall where no
+ * packets, no display frame and no I2C work care about it. Worst-case
+ * unsynced tail is 400 ms of rows; field power-offs are never that tight. */
+#define SD_IDLE_SYNC_MS  400u
+static uint8_t  sd_dirty      = 0;
+static uint32_t sd_last_write = 0;
 static uint8_t       log_file_open  = 0;
 static SD_Card_Info  sd_info;
 static char          log_buffer[SD_CARD_LOG_BUFFER_SIZE];
@@ -419,6 +430,8 @@ static SD_Card_Status SD_Card_WriteLogEntry(const char *entry)
             if (w >= 0 && (size_t)w == len) {
                 sd_info.bytes_written += (uint32_t)w;
                 log_sequence++;
+                sd_dirty = 1;
+                sd_last_write = HAL_GetTick();
                 return SD_CARD_OK;
             }
         }
@@ -426,6 +439,8 @@ static SD_Card_Status SD_Card_WriteLogEntry(const char *entry)
     }
     sd_info.bytes_written += (uint32_t)w;
     log_sequence++;
+    sd_dirty = 1;
+    sd_last_write = HAL_GetTick();
     return SD_CARD_OK;
 }
 
@@ -474,25 +489,19 @@ SD_Card_Status SD_Card_LogCompass(float heading, int16_t x, int16_t y, int16_t z
     return SD_Card_WriteLogEntry(log_buffer);
 }
 
-/* EVENT/ERROR entries sync immediately, like nav rows. Only nav rows used
- * to sync, so a no-fix pad session (scan lock + heartbeats, never a nav
- * row) kept every event in the littlefs cache and power-off reverted the
- * file to its last-synced state: a header and nothing else. Field cards
- * showed exactly that - header-only L000N.TXT files from sessions where
- * the beacon was demonstrably heard (the log file is only created on
- * proof of beacon). Events are rare (<=1 per heartbeat interval), so the
- * ~50 ms commit is trivial. */
+/* Syncs are deferred (SD_Card_ServiceSync): the 2026-09-11 bench cards
+ * showed the per-row sync picking up ~2 s LittleFS metadata-compaction
+ * bursts mid-packet-flow. Committing at an idle window instead bounds the
+ * unsynced tail to SD_IDLE_SYNC_MS of writes, puts the burst where nothing
+ * cares, and keeps the power-off protection the original sync-per-entry
+ * design exists for. */
 SD_Card_Status SD_Card_LogEvent(const char *msg)
 {
     if (msg == NULL || !sd_initialized) return SD_CARD_ERROR;
     char ts[32];
     SD_Card_GetTimestamp(ts, sizeof(ts));
     snprintf(log_buffer, sizeof(log_buffer), "%s,EVENT,%s\n", ts, msg);
-    SD_Card_Status status = SD_Card_WriteLogEntry(log_buffer);
-    if (status == SD_CARD_OK && log_file_open) {
-        lfs_file_sync(&lfs, &log_file);
-    }
-    return status;
+    return SD_Card_WriteLogEntry(log_buffer);
 }
 
 SD_Card_Status SD_Card_LogError(const char *msg)
@@ -501,17 +510,37 @@ SD_Card_Status SD_Card_LogError(const char *msg)
     char ts[32];
     SD_Card_GetTimestamp(ts, sizeof(ts));
     snprintf(log_buffer, sizeof(log_buffer), "%s,ERROR,%s\n", ts, msg);
-    SD_Card_Status status = SD_Card_WriteLogEntry(log_buffer);
-    if (status == SD_CARD_OK && log_file_open) {
+    return SD_Card_WriteLogEntry(log_buffer);
+}
+
+/**
+ * @brief Deferred-sync service - call every main-loop iteration.
+ *
+ * Syncs the log file once the write path has been idle for
+ * SD_IDLE_SYNC_MS, or unconditionally every 10 s so a continuous write
+ * flood (launch boost) never starves the sync forever.
+ */
+static uint32_t sd_last_sync_ms = 0;
+void SD_Card_ServiceSync(void)
+{
+    if (!sd_dirty || !log_file_open || !lfs_mounted) return;
+    uint32_t now = HAL_GetTick();
+    if ((now - sd_last_write >= SD_IDLE_SYNC_MS) ||
+        (now - sd_last_sync_ms >= 10000u)) {
+        sd_last_sync_ms = now;
+        sd_dirty = 0;
+        uint32_t wstart = HAL_GetTick();
         lfs_file_sync(&lfs, &log_file);
+        uint32_t wd = HAL_GetTick() - wstart;
+        if (wd > sd_max_write_ms) sd_max_write_ms = wd;
     }
-    return status;
 }
 
 SD_Card_Status SD_Card_Flush(void)
 {
     if (!sd_initialized) return SD_CARD_ERROR;
     if (log_file_open) lfs_file_sync(&lfs, &log_file);
+    sd_dirty = 0;
     return SD_CARD_OK;
 }
 
@@ -614,9 +643,9 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
              distance_km, bearing_deg, heading_deg, (int)rssi, (int)snr,
              pitch_deg, roll_deg, s_sats, (double)s_hdop);
 
-    /* Perf telemetry: the worst SD write+sync burst is a prime suspect in
-     * any "the main loop stalled" mystery (LittleFS GC is the 2 s cliff
-     * at worst). track and expose it so RFSTATS can carry it. */
+    /* Perf telemetry: the worst SD write burst is a prime suspect in any
+     * "the main loop stalled" mystery; sync cost is attributed separately
+     * since the deferred-sync change (they don't fire in-row anymore). */
     uint32_t wstart = HAL_GetTick();
 
     SD_Card_Status status = SD_Card_WriteLogEntry(log_buffer);
@@ -628,9 +657,8 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
      * now running at ~1.3 MHz the commit pair is ~50 ms - trivial compared
      * to packet cadence (~1-3 Hz), and safely inside the 500 ms display
      * update budget. Flight data > throughput here. */
-    if (status == SD_CARD_OK) {
-        lfs_file_sync(&lfs, &log_file);
-    }
+    /* Sync is deferred to the idle window (SD_Card_ServiceSync); the
+     * protection window is bounded by SD_IDLE_SYNC_MS + the burst itself. */
 
     uint32_t wd = HAL_GetTick() - wstart;
     if (wd > sd_max_write_ms) sd_max_write_ms = wd;
