@@ -57,6 +57,7 @@ static lfs_t         lfs;
 static lfs_file_t    log_file;
 static uint8_t       sd_initialized = 0;
 static uint8_t       lfs_mounted    = 0;
+static uint32_t      sd_max_write_ms = 0;
 static uint8_t       log_file_open  = 0;
 static SD_Card_Info  sd_info;
 static char          log_buffer[SD_CARD_LOG_BUFFER_SIZE];
@@ -613,6 +614,11 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
              distance_km, bearing_deg, heading_deg, (int)rssi, (int)snr,
              pitch_deg, roll_deg, s_sats, (double)s_hdop);
 
+    /* Perf telemetry: the worst SD write+sync burst is a prime suspect in
+     * any "the main loop stalled" mystery (LittleFS GC is the 2 s cliff
+     * at worst). track and expose it so RFSTATS can carry it. */
+    uint32_t wstart = HAL_GetTick();
+
     SD_Card_Status status = SD_Card_WriteLogEntry(log_buffer);
 
     /* Sync after every row so no packet is ever lost to power-off / brown-out.
@@ -625,7 +631,18 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
     if (status == SD_CARD_OK) {
         lfs_file_sync(&lfs, &log_file);
     }
+
+    uint32_t wd = HAL_GetTick() - wstart;
+    if (wd > sd_max_write_ms) sd_max_write_ms = wd;
     return status;
+}
+
+/** Worst write+sync burst in ms since last call (clears). */
+uint32_t SD_Card_TakeMaxWriteMs(void)
+{
+    uint32_t m = sd_max_write_ms;
+    sd_max_write_ms = 0;
+    return m;
 }
 
 /* ========================================================================= */

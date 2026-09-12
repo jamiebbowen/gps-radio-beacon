@@ -248,6 +248,18 @@ TEST(test_log_file_lazy_creation_and_sequencing)
     CHECK(strstr(big, "Timestamp,Type,PktSrc") == big);   /* header first */
     CHECK(strstr(big, "12.345,NAV,GPS,39.89") != NULL);   /* row followed */
 
+    /* The write-time tracker: reads cleanly and clears on read. (Fake
+     * ticks can't measure real bursts - only the semantics are pinned.) */
+    {
+        Test_SetTick(12345 + 37);
+        Test_SetTickAutoAdvance(1);                       /* 1 ms/call */
+        (void)SD_Card_LogNavigation(&beacon, NULL, 1.0f, 10.0f, 20.0f,
+                                    0.0f, 0.0f, -90, 5);
+        Test_SetTickAutoAdvance(0);
+        CHECK(SD_Card_TakeMaxWriteMs() != 0);
+        CHECK(SD_Card_TakeMaxWriteMs() == 0);             /* read clears */
+    }
+
     /* Second boot: sequence advances to L0002.TXT */
     SD_Card_DeInit();
     CHECK(SD_Card_Init() == SD_CARD_OK);

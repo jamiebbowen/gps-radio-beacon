@@ -240,6 +240,9 @@ SD_Card_Status SD_Card_SaveQuatLock(uint8_t conv);
  */
 SD_Card_Status SD_Card_LoadQuatLock(uint8_t *conv);
 
+/** Worst write+sync burst in ms since the last call (clears after read). */
+uint32_t SD_Card_TakeMaxWriteMs(void);
+
 #ifdef __cplusplus
 }
 #endif

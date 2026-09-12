@@ -865,26 +865,27 @@ int main(void)
         uint32_t irqs = 0, pkts = 0, dups = 0;
         RF_Receiver_GetPacketLossDiagnostics(&irqs, &pkts, &dups);
         int16_t nf = 0;
-        /* VDD + loop-max: power and blocking-stall forensics */
+        /* VDD + loop-max + SD write burst: power and stall forensics */
         Sys_MeasureVdd();
         uint32_t loop_max = main_loop_max_ms;
         main_loop_max_ms = 0;
+        uint32_t sd_max = SD_Card_TakeMaxWriteMs();
 
-        char st_msg[112];
+        char st_msg[124];
         if (RF_Receiver_GetNoiseFloor(&nf)) {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums sd=%lums",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered(), (int)nf,
-                   (unsigned)sys_vdd_mv, (unsigned long)loop_max);
+                   (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max);
         } else {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums sd=%lums",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered(),
-                   (unsigned)sys_vdd_mv, (unsigned long)loop_max);
+                   (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max);
         }
         SD_Card_LogEvent(st_msg);
       }
@@ -947,13 +948,16 @@ int main(void)
      * sessions took ~150 s to first fix - this tells us why next time. */
     static uint8_t local_fix_logged  = 0;
     static uint8_t local_slow_logged = 0;
-    if (has_valid_local_gps && !local_fix_logged) {
+    /* RMC carries no satellite count: a first-fix latching from an RMC-only
+     * sentence would wrongly log sats=0 (seen in bench logs). Wait until a
+     * GGA has given us a real count. */
+    if (has_valid_local_gps && gps_data.satellites > 0 && !local_fix_logged) {
       local_fix_logged = 1;
       if (sd_card_ok) {
         char gps_msg[56];
         snprintf(gps_msg, sizeof(gps_msg),
-                 "Local GPS first fix: sats=%d utc=%02u:%02u:%02u",
-                 (int)gps_data.satellites, (unsigned)gps_data.hour,
+                 "Local GPS first fix: sats=%u utc=%02u:%02u:%02u",
+                 (unsigned)gps_data.satellites, (unsigned)gps_data.hour,
                  (unsigned)gps_data.minute, (unsigned)gps_data.second);
         SD_Card_LogEvent(gps_msg);
       }
