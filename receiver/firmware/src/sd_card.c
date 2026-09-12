@@ -67,7 +67,9 @@ static uint32_t      sd_max_write_ms = 0;
  * packets, no display frame and no I2C work care about it. Worst-case
  * unsynced tail is 400 ms of rows; field power-offs are never that tight. */
 #define SD_IDLE_SYNC_MS  400u
+#define SD_SYNC_ROW_CAP  8u     /* hard staleness bound, in rows */
 static uint8_t  sd_dirty      = 0;
+static uint8_t  sd_dirty_rows = 0;
 static uint32_t sd_last_write = 0;
 static uint8_t       log_file_open  = 0;
 static SD_Card_Info  sd_info;
@@ -431,6 +433,7 @@ static SD_Card_Status SD_Card_WriteLogEntry(const char *entry)
                 sd_info.bytes_written += (uint32_t)w;
                 log_sequence++;
                 sd_dirty = 1;
+                sd_dirty_rows++;
                 sd_last_write = HAL_GetTick();
                 return SD_CARD_OK;
             }
@@ -440,6 +443,7 @@ static SD_Card_Status SD_Card_WriteLogEntry(const char *entry)
     sd_info.bytes_written += (uint32_t)w;
     log_sequence++;
     sd_dirty = 1;
+    sd_dirty_rows++;
     sd_last_write = HAL_GetTick();
     return SD_CARD_OK;
 }
@@ -516,19 +520,24 @@ SD_Card_Status SD_Card_LogError(const char *msg)
 /**
  * @brief Deferred-sync service - call every main-loop iteration.
  *
- * Syncs the log file once the write path has been idle for
- * SD_IDLE_SYNC_MS, or unconditionally every 10 s so a continuous write
- * flood (launch boost) never starves the sync forever.
+ * Batched commits: once the write path has been idle for SD_IDLE_SYNC_MS,
+ * or when 8 rows are pending (staleness bound), or every 10 s under
+ * sustained load. Each sync picks up a LittleFS commit (and periodically
+ * a metadata compaction burst); fewer commits = fewer radio-deaf windows.
  */
 static uint32_t sd_last_sync_ms = 0;
+static uint32_t sd_sync_count = 0;
 void SD_Card_ServiceSync(void)
 {
     if (!sd_dirty || !log_file_open || !lfs_mounted) return;
     uint32_t now = HAL_GetTick();
     if ((now - sd_last_write >= SD_IDLE_SYNC_MS) ||
+        (sd_dirty_rows >= SD_SYNC_ROW_CAP) ||
         (now - sd_last_sync_ms >= 10000u)) {
         sd_last_sync_ms = now;
         sd_dirty = 0;
+        sd_dirty_rows = 0;
+        sd_sync_count++;
         uint32_t wstart = HAL_GetTick();
         lfs_file_sync(&lfs, &log_file);
         uint32_t wd = HAL_GetTick() - wstart;
@@ -536,11 +545,20 @@ void SD_Card_ServiceSync(void)
     }
 }
 
+/** Syncs performed since last call (clears). */
+uint32_t SD_Card_TakeSyncCount(void)
+{
+    uint32_t n = sd_sync_count;
+    sd_sync_count = 0;
+    return n;
+}
+
 SD_Card_Status SD_Card_Flush(void)
 {
     if (!sd_initialized) return SD_CARD_ERROR;
     if (log_file_open) lfs_file_sync(&lfs, &log_file);
     sd_dirty = 0;
+    sd_dirty_rows = 0;
     return SD_CARD_OK;
 }
 
