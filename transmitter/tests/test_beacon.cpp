@@ -100,6 +100,9 @@ bool launch_detect_has_landed(void) { return fake_landed; }
 static NavFused_t fake_fused;
 void nav_get_fused(NavFused_t *out) { *out = fake_fused; }
 
+static uint32_t fake_gps_rejects = 0;
+uint32_t nav_get_gps_rejects(void) { return fake_gps_rejects; }
+
 /* Include the module under test AFTER the fakes (it only needs their
  * declarations from the headers; definitions resolve at link within
  * this translation unit). */
@@ -492,7 +495,32 @@ TEST(test_fused_wire_format_pin)
     CHECK(FUSED_FLAG_DEAD_RECKONING  == 0x10);
     CHECK(FUSED_FLAG_LANDED          == 0x08);
     CHECK(FUSED_FLAG_SENSOR_DEGRADED == 0x04);
-    CHECK(FUSED_FLAG_RESERVED_MASK   == 0x03);
+    CHECK(FUSED_FLAG_GATE_REJECT     == 0x02);
+    CHECK(FUSED_FLAG_RESERVED_MASK   == 0x01);
+}
+
+TEST(test_fused_gate_reject_delta)
+{
+    /* GATE_REJECT (bit 1) is a per-packet delta: it must appear exactly on
+     * packets where nav_get_gps_rejects grew, then clear again. */
+    reset_tx();
+    memset(&fake_fused, 0, sizeof(fake_fused));
+    fake_fused.valid = true;
+    fake_fused.lat_deg = 39.89f; fake_fused.lon_deg = -105.11f;
+
+    fake_gps_rejects = 0;
+    CHECK(beacon_transmit_fused_data(100, 1) == 1);
+    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_GATE_REJECT) == 0);
+
+    fake_gps_rejects = 3;                     /* gate rejected some fixes */
+    CHECK(beacon_transmit_fused_data(101, 1) == 1);
+    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_GATE_REJECT) != 0);
+
+    CHECK(beacon_transmit_fused_data(102, 1) == 1);
+    CHECK((tx_buf[FUSED_PACKET_SIZE - 1] & FUSED_FLAG_GATE_REJECT) == 0);
+    /* Settle the tracker so no later test sees a stale delta */
+    fake_gps_rejects = 0;
+    CHECK(beacon_transmit_fused_data(103, 1) == 1);
 }
 
 TEST(test_airlink_golden_fused_encode)
@@ -557,6 +585,7 @@ int main(void)
     run_test_fused_velocity_clamps_and_flags();
     run_test_fused_sensor_degraded_flag();
     run_test_fused_wire_format_pin();
+    run_test_fused_gate_reject_delta();
     run_test_airlink_golden_fused_encode();
     run_test_fused_hexdump_cadence_and_tx_failure();
 

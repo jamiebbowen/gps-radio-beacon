@@ -369,6 +369,20 @@ int main(void)
 
       SD_Card_LogEvent(rf_msg);
 
+      /* Boot identity: which firmware + radio config produced this log
+       * (otherwise cards from parallel bench sessions are archaeology). */
+#ifdef GIT_HASH_STR
+      {
+        char boot_msg[56];
+        snprintf(boot_msg, sizeof(boot_msg),
+                 "BOOT fw=%s SF%d BW%.1fk CR4/%d",
+                 GIT_HASH_STR, (int)LORA_SPREADING_FACTOR,
+                 (double)LORA_BANDWIDTH_KHZ, (int)LORA_CODING_RATE);
+        SD_Card_EnsureLogFile();
+        SD_Card_LogEvent(boot_msg);
+      }
+#endif
+
       /* Per-channel ambient noise sweep (SD-logged). Substitutes for a
        * spectrum analyzer when hunting the RX noise floor: one or two hot
        * channels = narrowband junk (move the beacon); everything lifted
@@ -889,6 +903,23 @@ int main(void)
         char q_msg[32];
         snprintf(q_msg, sizeof(q_msg), "QUATLOCK conv=%u saved", (unsigned)conv);
         SD_Card_LogEvent(q_msg);
+      }
+    }
+
+    /* Magnetic-cal / heading-validity transitions: ties "the arrow was
+     * wild until it settled" stories to actual fusion state in the log. */
+    if (sd_card_ok) {
+      static int8_t prev_mag_cal = -1;
+      static uint8_t prev_hv = 0;
+      int8_t mc = (int8_t)compass_data.mag_cal;
+      uint8_t hv = compass_data.heading_valid;
+      if (mc != prev_mag_cal || hv != prev_hv) {
+        prev_mag_cal = mc;
+        prev_hv = hv;
+        char c_msg[40];
+        snprintf(c_msg, sizeof(c_msg), "COMPASS mag_cal=%d heading_%svalid",
+                 (int)mc, hv ? "" : "IN");
+        SD_Card_LogEvent(c_msg);
       }
     }
 

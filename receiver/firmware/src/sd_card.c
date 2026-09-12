@@ -581,6 +581,8 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
             if (beacon_gps->fused_imu_healthy) fused_flags |= 0x08;
             /* 0x40 = TX-side BNO085 dead / in retry (FUSED_FLAG_SENSOR_DEGRADED) */
             if (beacon_gps->fused_sensor_degraded) fused_flags |= 0x40;
+            /* 0x80 = TX-side EKF gate rejected a fix since last fused packet */
+            if (beacon_gps->fused_gate_reject)     fused_flags |= 0x80;
             if (beacon_gps->launch_detected)   fused_flags |= 0x10;
         } else if (beacon_gps->launch_detected) {
             fused_flags = 0x10;

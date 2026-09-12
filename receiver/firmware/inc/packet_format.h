@@ -66,7 +66,9 @@ typedef struct __attribute__((packed)) {
 #define FUSED_FLAG_DEAD_RECKONING    0x10  /* Bit 4: 1 = no GPS for > NAV_DR_TIMEOUT_S    */
 #define FUSED_FLAG_LANDED            0x08  /* Bit 3: 1 = landing detected (latched)       */
 #define FUSED_FLAG_SENSOR_DEGRADED   0x04  /* Bit 2: 1 = BNO085 dead or in retry          */
-#define FUSED_FLAG_RESERVED_MASK     0x03  /* Bits 1-0: reserved                          */
+#define FUSED_FLAG_GATE_REJECT       0x02  /* Bit 1: EKF gate rejected a fix since last
+                                                * fused packet (delta, not latched)      */
+#define FUSED_FLAG_RESERVED_MASK     0x01  /* Bit 0: reserved                            */
 
 /* Fused packet: 19 bytes. See transmitter include for full field semantics
  * (this file intentionally carries the same defines - the two copies must

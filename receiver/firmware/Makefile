@@ -74,6 +74,12 @@ INCLUDES = \
 
 # Compiler flags
 CFLAGS = $(CPU) -Wall -O2 -g3
+
+# Bake the git identity into the log boot event so every extracted card
+# file answers "which firmware produced this".
+GIT_HASH := $(shell git -C .. rev-parse --short HEAD 2>/dev/null || echo unknown)
+GIT_DIRTY := $(shell git -C .. diff --quiet 2>/dev/null && git -C .. diff --cached --quiet 2>/dev/null && echo "" || echo "-dirty")
+CFLAGS += -DGIT_HASH_STR=\"$(GIT_HASH)$(GIT_DIRTY)\"
 CFLAGS += -ffunction-sections -fdata-sections
 CFLAGS += -DUSE_HAL_DRIVER -DSTM32F401xC
 # LittleFS: trim disabled features to keep flash + RAM footprint down.

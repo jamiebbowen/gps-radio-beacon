@@ -392,6 +392,14 @@ uint8_t beacon_transmit_fused_data(uint32_t system_time_seconds, uint8_t transmi
     if (f.imu_healthy)     flags |= FUSED_FLAG_IMU_HEALTHY;
     if (f.dead_reckoning)  flags |= FUSED_FLAG_DEAD_RECKONING;
     if (f.sensor_degraded) flags |= FUSED_FLAG_SENSOR_DEGRADED;
+    /* Innovation-gate rejections since the previous fused packet - the
+     * field-visible hint of nav trouble. Delta, not a latch. */
+    static uint32_t last_gps_rejects = 0;
+    uint32_t rejects = nav_get_gps_rejects();
+    if (rejects != last_gps_rejects) {
+        last_gps_rejects = rejects;
+        flags |= FUSED_FLAG_GATE_REJECT;
+    }
     /* Level-based query - see note in beacon_transmit_gps_data_binary about
      * why launch_detect_is_launched() (one-shot) must NOT be used here. */
     if (launch_detect_get_state() == LAUNCH_STATE_CONFIRMED) {

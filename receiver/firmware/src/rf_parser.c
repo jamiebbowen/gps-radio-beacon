@@ -492,6 +492,7 @@ uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
   parsed_gps_data.fused_gps_fresh       = 0;
   parsed_gps_data.fused_imu_healthy     = 0;
   parsed_gps_data.fused_sensor_degraded = 0;
+  parsed_gps_data.fused_gate_reject     = 0;
   last_raw_gps_ms                       = HAL_GetTick();
   /* (fused_landed is deliberately NOT zeroed here: raw GPS packets carry
    * their own FLAG_LANDED, parsed above, so both streams drive it.) */
@@ -598,6 +599,7 @@ uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length)
   parsed_gps_data.fused_gps_fresh      = (flags & FUSED_FLAG_GPS_FRESH)       ? 1 : 0;
   parsed_gps_data.fused_imu_healthy    = (flags & FUSED_FLAG_IMU_HEALTHY)     ? 1 : 0;
   parsed_gps_data.fused_sensor_degraded = (flags & FUSED_FLAG_SENSOR_DEGRADED) ? 1 : 0;
+  parsed_gps_data.fused_gate_reject     = (flags & FUSED_FLAG_GATE_REJECT)     ? 1 : 0;
   parsed_gps_data.fused_landed         = (flags & FUSED_FLAG_LANDED)          ? 1 : 0;
   parsed_gps_data.fused_age_ds         = age_ds;
 
