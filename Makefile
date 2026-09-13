@@ -61,6 +61,7 @@ test: tools-test
 tools-test:
 	@echo "--- tools-test: unit tests ---"
 	python3 -m unittest discover -s receiver/tools/tests
+	python3 tools/test_log_summary.py
 	@if find flight_data -name 'L*.TXT' 2>/dev/null | grep -q .; then \
 		$(MAKE) -s tools-test-logs; \
 	else \

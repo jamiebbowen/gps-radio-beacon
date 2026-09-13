@@ -450,6 +450,22 @@ TEST(test_airlink_golden_fused_decode) {
     CHECK(gps.fused_sensor_degraded == 0);
 }
 
+TEST(test_airlink_golden_gps_decode) {
+    /* Raw-GPS sibling of the fused airlink pin: decode the exact bytes
+     * the TX golden encoder test emits (airlink_golden.h). */
+    RF_Parser_Reset();
+    CHECK(RF_Parser_ParseBinaryPacket(AIRLINK_GPS_GOLDEN,
+                                      sizeof(AIRLINK_GPS_GOLDEN)) == RF_PARSER_OK);
+    GPS_Data gps;
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK_NEAR(gps.latitude,  AIRLINK_GPS_LAT_DEG, 1e-4);
+    CHECK_NEAR(gps.longitude, AIRLINK_GPS_LON_DEG, 1e-4);
+    CHECK_NEAR(gps.altitude,  AIRLINK_GPS_ALT_M, 0.01);
+    CHECK(gps.satellites == AIRLINK_GPS_SATS);
+    CHECK(gps.fix == 1);
+    CHECK(gps.launch_detected == 0 && gps.fused_landed == 0);
+}
+
 TEST(test_stale_fused_does_not_override_fresh_raw) {
     /* 2026-09-11 field failure: a diverged TX-side EKF drifted the fused
      * position ~22 km off while honest raw GPS packets kept arriving -
@@ -688,6 +704,7 @@ int main(void) {
     run_test_fused_reserved_bits_ignored();
     run_test_fused_wire_format_constants_pin();
     run_test_airlink_golden_fused_decode();
+    run_test_airlink_golden_gps_decode();
     run_test_stale_fused_does_not_override_fresh_raw();
     run_test_fresh_fused_always_updates_position();
     run_test_fused_landed_flag_both_streams();

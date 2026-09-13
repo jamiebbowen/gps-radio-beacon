@@ -63,6 +63,9 @@ size_t  radiolib_last_tx_len = 0;
 int     radiolib_set_cl_calls = 0;
 float   radiolib_current_limit = 0;
 int     radiolib_set_cl_result = RADIOLIB_ERR_NONE;
+/* Real 20-byte fused ToA at SF10/BW62.5k/CR4-8/8-sym-preamble (LDRO on):
+ * 68.25 symbols x 16.384 ms ~= 1118 ms */
+uint32_t radiolib_time_on_air_us = 1118000;
 
 /* Include the module under test */
 #include "../firmware/radio.cpp"
@@ -82,6 +85,7 @@ static void reset_knobs(void)
     radiolib_set_cl_calls = 0;
     radiolib_current_limit = 0;
     radiolib_set_cl_result = RADIOLIB_ERR_NONE;
+    radiolib_time_on_air_us = 1118000;
     jumper_level = HIGH;
     busy_level = LOW;
     txen_level = -1;
@@ -291,6 +295,23 @@ TEST(test_dead_radio_keeps_retrying_reinit)
     radiolib_transmit_result = RADIOLIB_ERR_NONE;
 }
 
+TEST(test_airtime_sanity_report)
+{
+    /* Boot prints the chip-computed fused time-on-air vs the configured
+     * cadence; a drift that leaves <100 ms of radio-quiet per cycle must
+     * be LOUD at boot, not discovered as a hot PA on recovery day. */
+    reset_knobs();
+    radio_init();
+    CHECK(strstr(Serial.log, "Fused time-on-air: 1118 ms") != NULL);
+    CHECK(strstr(Serial.log, "WARNING") == NULL);
+
+    reset_knobs();
+    radiolib_time_on_air_us = 1450000;   /* cadence 1500 -> 50 ms gap */
+    radio_init();
+    CHECK(strstr(Serial.log, "WARNING") != NULL);
+    radiolib_time_on_air_us = 1118000;
+}
+
 int main(void)
 {
     run_test_init_primary_channel();
@@ -303,6 +324,7 @@ int main(void)
     run_test_disable();
     run_test_tx_failure_streak_forces_reinit();
     run_test_dead_radio_keeps_retrying_reinit();
+    run_test_airtime_sanity_report();
 
     return TEST_SUMMARY();
 }

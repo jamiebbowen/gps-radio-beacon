@@ -1,5 +1,7 @@
 #include "include/radio.h"
 #include "include/mpu_config.h"
+#include "include/config.h"
+#include "include/packet_format.h"
 #include <Arduino.h>
 #include <RadioLib.h>
 
@@ -100,6 +102,21 @@ void radio_init(void) {
         if (lim_state != RADIOLIB_ERR_NONE) {
             Serial.print(F("[Radio] Warning: setCurrentLimit failed, code: "));
             Serial.println(lim_state);
+        }
+
+        /* Chip-side airtime sanity: the fused cadence must clear the
+         * fused packet's time-on-air with a real gap, or the flight phases
+         * become back-to-back blocking TX with the PA at ~100% duty. Format
+         * or radio-parameter drift shows up here at boot now, instead of as
+         * a thermally wedged radio on recovery day. */
+        uint32_t toa_ms = (radio.getTimeOnAir(FUSED_PACKET_SIZE) + 999) / 1000;
+        Serial.print(F("[Radio] Fused time-on-air: "));
+        Serial.print(toa_ms);
+        Serial.print(F(" ms, cadence "));
+        Serial.print(FUSED_TX_INTERVAL_MS);
+        Serial.println(F(" ms"));
+        if (toa_ms + 100 > (uint32_t)FUSED_TX_INTERVAL_MS) {
+            Serial.println(F("[Radio] WARNING: fused cadence gap under 100 ms - PA duty ~100%"));
         }
 
         // Set to standby mode initially

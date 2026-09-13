@@ -16,10 +16,26 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <math.h>
 
 #include "../firmware/include/flight_cadence.h"
 #include "../firmware/include/config.h"
+#include "../firmware/include/mpu_config.h"
+#include "../firmware/include/packet_format.h"
 #include "test_harness.h"
+
+/* SX126x time-on-air (Semtech RM, explicit header + CRC16 + LDRO auto per
+ * symbol length). Kept here - the pin is what matters, not the plumbing. */
+static double lora_airtime_ms(unsigned payload_bytes)
+{
+    double sf = LORA_SPREADING;
+    double tsym_ms = ldexp(1.0, (int)sf) / (LORA_BANDWIDTH * 1000.0) * 1000.0;
+    int de = (tsym_ms > 16.0) ? 1 : 0;          /* LDRO rule */
+    double num = 8.0 * payload_bytes - 4.0 * sf + 28.0 + 16.0;
+    double den = 4.0 * (sf - 2 * de);
+    int pay_syms = 8 + (int)ceil(num / den) * LORA_CODING_RATE;
+    return (LORA_PREAMBLE + 4.25 + pay_syms) * tsym_ms;
+}
 
 /* These tests pin PRODUCTION pacing. A TESTING_MODE build would need its
  * own expectations; the suite always builds the flight config. */
@@ -37,8 +53,8 @@ TEST(test_cadence_table_pins)
 
     /* Milliseconds between fused packets */
     CHECK(flight_cadence_fused_interval_ms(BEACON_STATE_PRE_LAUNCH)  == 5000);
-    CHECK(flight_cadence_fused_interval_ms(BEACON_STATE_LAUNCH)      == 1200);
-    CHECK(flight_cadence_fused_interval_ms(BEACON_STATE_POST_LAUNCH) == 1200);
+    CHECK(flight_cadence_fused_interval_ms(BEACON_STATE_LAUNCH)      == 1500);
+    CHECK(flight_cadence_fused_interval_ms(BEACON_STATE_POST_LAUNCH) == 1500);
     CHECK(flight_cadence_fused_interval_ms(BEACON_STATE_BATTERY_SAVE)== 5000);
 
     /* FCC 97.119: station ID at least every 10 minutes in flight. We do
@@ -61,11 +77,22 @@ TEST(test_cadence_phase_exits)
 
 TEST(test_cadence_pa_airtime_margin)
 {
-    /* The fused interval must exceed the on-air time of a fused packet,
-     * or "cadence" degenerates into back-to-back blocking transmits with
-     * zero GPS/listen gaps. 20 bytes at SF10/BW62.5k/CR4-8 + 8-symbol
-     * preamble is ~1.0-1.04 s of airtime. */
-    CHECK(flight_cadence_fused_interval_ms(BEACON_STATE_LAUNCH) >= 1100);
+    /* The fused interval must clear the packet's computed time-on-air with
+     * real gap - otherwise "cadence" degenerates into back-to-back
+     * blocking transmits with the PA at ~100% duty. This is a formula
+     * guardrail against every future format/config drift: packet-size
+     * growth, CR/BW/SF changes, preamble changes. */
+    double fused_toa = lora_airtime_ms(FUSED_PACKET_SIZE);
+    /* Formula sanity: V2 20B at SF10/62.5k/CR4-8/8pre = 68.25 sym * 16.384 ms */
+    CHECK_NEAR(fused_toa, 1118.2, 2.0);
+    /* Legacy 19B packet = 987 ms - the step the rocket_id byte crossed */
+    CHECK_NEAR(lora_airtime_ms(19), 987.1, 2.0);
+    /* The 14-byte V2 GPS packet did NOT cross a step (same as legacy 13B) */
+    CHECK_NEAR(lora_airtime_ms(GPS_PACKET_SIZE), lora_airtime_ms(13), 1.0);
+
+    double iv = (double)flight_cadence_fused_interval_ms(BEACON_STATE_LAUNCH);
+    CHECK(iv >= fused_toa * 1.1);        /* >10% radio-quiet gap per cycle */
+    CHECK(iv <= fused_toa * 2.0);        /* don't relax into uselessness */
 }
 
 TEST(test_scripted_flight_timeline)
@@ -147,8 +174,10 @@ TEST(test_scripted_flight_timeline)
     /* Battery-save tail (648..720 s): entry TX plus one at the 60 s mark */
     CHECK(save_raws == 2);
 
-    /* Fused stream in flight phases: 601 s at 1.2 s = ~500 packets... */
-    CHECK(launch_fused >= 495 && launch_fused <= 505);
+    /* Fused stream in flight phases: 601 s at 1.5 s nominal. The harness
+     * steps 200 ms so the effective spacing quantizes to 1.4/1.6 s -> the
+     * deterministic count for this script is 376. */
+    CHECK(launch_fused == 376);
     /* ...then 5 s spacing on the ground */
     CHECK(save_fused >= 13 && save_fused <= 15);
 

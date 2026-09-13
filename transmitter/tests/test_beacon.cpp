@@ -534,6 +534,26 @@ TEST(test_fused_gate_reject_delta)
     CHECK(beacon_transmit_fused_data(103, 1) == 1);
 }
 
+TEST(test_airlink_golden_gps_encode)
+{
+    /* Same tripwire as the fused golden, for the raw GPS stream: the
+     * production encoder fed with the golden NMEA input must emit exactly
+     * the golden V2 bytes the RX parser test decodes. */
+    reset_tx();
+    GPSCoordinates_t c = valid_coords();
+    strcpy(c.lat, AIRLINK_GPS_NMEA_LAT); c.lat_dir = 'N';
+    strcpy(c.lon, AIRLINK_GPS_NMEA_LON); c.lon_dir = 'W';
+    strcpy(c.altitude, "1655.4");
+    strcpy(c.satellites, "8");
+    c.fix_quality = 1;
+    fake_launch_state = LAUNCH_STATE_IDLE;
+    fake_landed = false;
+
+    CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 1);
+    CHECK(tx_len == sizeof(AIRLINK_GPS_GOLDEN));
+    CHECK(memcmp(tx_buf, AIRLINK_GPS_GOLDEN, sizeof(AIRLINK_GPS_GOLDEN)) == 0);
+}
+
 TEST(test_airlink_golden_fused_encode)
 {
     /* Byte-exact encode pin: the production beacon encoder must emit
@@ -597,6 +617,7 @@ int main(void)
     run_test_fused_sensor_degraded_flag();
     run_test_fused_wire_format_pin();
     run_test_fused_gate_reject_delta();
+    run_test_airlink_golden_gps_encode();
     run_test_airlink_golden_fused_encode();
     run_test_fused_hexdump_cadence_and_tx_failure();
 

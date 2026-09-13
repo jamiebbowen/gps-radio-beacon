@@ -817,9 +817,13 @@ int main(void)
       uint32_t foreign = RF_Receiver_GetForeignDrops();
       if (foreign != foreign_logged &&
           (foreign_logged == 0 || foreign - foreign_logged >= 4)) {
-        char f_msg[48];
-        snprintf(f_msg, sizeof(f_msg), "RF foreign pkts=%lu dropped CH%u",
-                 (unsigned long)foreign, (unsigned)RF_Receiver_GetChannel());
+        int16_t f_rssi; int8_t f_snr;
+        RF_Receiver_GetSignalQuality(&f_rssi, &f_snr);
+        char f_msg[56];
+        snprintf(f_msg, sizeof(f_msg),
+                 "RF foreign pkts=%lu dropped CH%u rssi=%ddBm snr=%d",
+                 (unsigned long)foreign, (unsigned)RF_Receiver_GetChannel(),
+                 (int)f_rssi, (int)f_snr);
         SD_Card_EnsureLogFile();
         SD_Card_LogEvent(f_msg);
         foreign_logged = foreign;

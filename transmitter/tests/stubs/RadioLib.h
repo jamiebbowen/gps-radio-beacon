@@ -32,6 +32,7 @@ extern size_t  radiolib_last_tx_len;
 extern int     radiolib_set_cl_calls;   /* setCurrentLimit() call count */
 extern float   radiolib_current_limit;  /* captured mA argument         */
 extern int     radiolib_set_cl_result;  /* scripted return value        */
+extern uint32_t radiolib_time_on_air_us; /* scripted getTimeOnAir() us  */
 
 class SX1268 {
 public:
@@ -54,6 +55,12 @@ public:
         radiolib_set_cl_calls++;
         radiolib_current_limit = ma;
         return radiolib_set_cl_result;
+    }
+
+    uint32_t getTimeOnAir(uint8_t len)
+    {
+        (void)len;
+        return radiolib_time_on_air_us;
     }
 
     int transmit(uint8_t *data, size_t len)

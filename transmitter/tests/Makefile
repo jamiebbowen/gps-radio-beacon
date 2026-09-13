@@ -70,9 +70,11 @@ $(BUILD)/test_flight_profile: test_flight_profile.cpp stubs/Arduino.h \
                               stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
 
-# Pure state->timing policy; no Arduino deps, links the real module.
-$(BUILD)/test_flight_cadence: test_flight_cadence.cpp ../firmware/flight_cadence.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(COVFLAGS) -o $@ $^ $(LDFLAGS)
+# Pure state->timing policy; links the real module (Arduino stub headers
+# only satisfy mpu_config.h's include chain).
+$(BUILD)/test_flight_cadence: test_flight_cadence.cpp ../firmware/flight_cadence.cpp \
+                              stubs/Arduino.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $^ $(LDFLAGS)
 
 test: $(BINS)
 	@rc=0; for b in $(BINS); do \

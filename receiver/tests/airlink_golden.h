@@ -40,4 +40,28 @@ static const uint8_t AIRLINK_FUSED_GOLDEN[20] = {
     AIRLINK_FUSED_ROCKET_ID   /* V2 rocket_id byte            */
 };
 
+/* Same coverage for the raw GPS stream (14-byte V2). Encoded from the
+ * production beacon path fed with NMEA lat "3953.40000"N / lon
+ * "10453.11007"W, alt 1655.4 m, 8 sats, fix quality 1 (pad state: no
+ * launch, no landed bits). Lat/lon are the same point as the fused
+ * golden, so both streams pin one canonical position. */
+#define AIRLINK_GPS_NMEA_LAT   "3953.40000"
+#define AIRLINK_GPS_NMEA_LON   "10453.11007"
+#define AIRLINK_GPS_LAT_DEG    39.89
+#define AIRLINK_GPS_LON_DEG    (-104.8851678)
+#define AIRLINK_GPS_ALT_M      1655        /* 1655.4 m truncated            */
+#define AIRLINK_GPS_SATS       8
+#define AIRLINK_GPS_FLAGS      0x41        /* FIX_QUALITY_GOOD | fix type 1 */
+#define AIRLINK_GPS_ROCKET_ID  AIRLINK_FUSED_ROCKET_ID
+
+static const uint8_t AIRLINK_GPS_GOLDEN[14] = {
+    0x01,                     /* PACKET_TYPE_GPS              */
+    0x20, 0xBB, 0xC6, 0x17,   /* latitude  = 398900000        */
+    0x00, 0xCB, 0x7B, 0xC1,   /* longitude = -1048851712      */
+    0x77, 0x06,               /* altitude  = 1655             */
+    AIRLINK_GPS_SATS,
+    AIRLINK_GPS_FLAGS,
+    AIRLINK_GPS_ROCKET_ID
+};
+
 #endif /* AIRLINK_GOLDEN_H */
