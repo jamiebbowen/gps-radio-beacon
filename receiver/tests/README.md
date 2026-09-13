@@ -26,8 +26,14 @@ make clean
 | Format | Parser | Size |
 |---|---|---|
 | ASCII CSV (`lat,lon,alt[,sats]` / callsign) | `RF_Parser_ParseAsciiPacket` | variable |
-| Binary GPS fix | `RF_Parser_ParseBinaryPacket` | 13 bytes |
-| EKF fused position + velocity | `RF_Parser_ParseFusedPacket` | 19 bytes |
+| Binary GPS fix | `RF_Parser_ParseBinaryPacket` | 14 B (V2, +rocket_id), 13 B legacy V1 |
+| EKF fused position + velocity | `RF_Parser_ParseFusedPacket` | 20 B (V2, +rocket_id), 19 B legacy V1 |
+
+`test_rf_receiver.c` additionally carries the launch-day scenario battery:
+airframe binding and foreign-beacon filtering (same-modem co-channel
+traffic), the sequential-rocket livelock breaker, over-the-horizon
+blackout/re-acquisition, fringe CRC-error forensics, 49.7-day tick
+wraparound, and receiver cold-boots mid-flight / mid-walk.
 
 Tests include NMEA→decimal-degree conversion accuracy, hemisphere signs,
 malformed/NULL/short packet rejection, coordinate range validation, flag

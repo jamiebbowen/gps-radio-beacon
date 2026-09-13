@@ -56,6 +56,8 @@ class Session:
         self.lost = []              # t
         self.locks = []             # (t, msg)
         self.noise = []             # (t, msg)
+        self.bindings = []          # (t, msg)
+        self.foreign = []           # (t, msg)
         self.iwdg = []              # t
         self.sd_fail = []           # (t, msg)
         self.callsigns = []         # (t, msg)
@@ -81,6 +83,10 @@ class Session:
             self.locks.append((t, msg))
         elif msg.startswith("RF NOISE"):
             self.noise.append((t, msg))
+        elif msg.startswith("RF bound"):
+            self.bindings.append((t, msg))
+        elif msg.startswith("RF foreign"):
+            self.foreign.append((t, msg))
         elif "IWDG watchdog reset" in msg:
             self.iwdg.append(t)
         elif msg.startswith("CALLSIGN"):
@@ -114,12 +120,21 @@ def parse_file(path, sess):
             sess.t_last = t if sess.t_last is None else max(sess.t_last, t)
 
             kind = parts[1]
+            msg = parts[2] if len(parts) > 2 else ""
             if kind == "EVENT":
-                sess.add_event(t, parts[2] if len(parts) > 2 else "")
+                if msg.startswith("HEARTBEAT "):
+                    # Heartbeats are logged as EVENT rows whose message
+                    # begins with "HEARTBEAT " (sd_card.c prefixes every
+                    # LogEvent with the EVENT field).
+                    m = HEARTBEAT_RE.search(msg)
+                    if m:
+                        sess.add_heartbeat(t, m)
+                else:
+                    sess.add_event(t, msg)
             elif kind == "ERROR":
-                sess.errors.append((t, parts[2] if len(parts) > 2 else ""))
+                sess.errors.append((t, msg))
             elif kind == "HEARTBEAT":
-                m = HEARTBEAT_RE.search(line)
+                m = HEARTBEAT_RE.search("HEARTBEAT " + msg)
                 if m:
                     sess.add_heartbeat(t, m)
             elif kind == "NAV":
@@ -154,12 +169,23 @@ def report(sess, label):
         + [f"SD problem at {fmt_s(t)}: {m}" for t, m in sess.sd_fail]
     ), empty="OK - no watchdog resets, no SD failures")
 
-    print_section("RF link", (
+    rf_lines = (
         [f"wedge recovery at {fmt_s(t)} ({m})" for t, m in sess.wedges]
         + [f"LOST (5 min silence) at {fmt_s(t)}" for t in sess.lost]
         + [f"noise alert at {fmt_s(t)}: {m}" for t, m in sess.noise]
         + [f"scan/channel at {fmt_s(t)}: {m}" for t, m in sess.locks]
-    ), empty="OK - no wedge recoveries, no LOST windows, no noise alerts")
+    )
+    print_section("RF link", rf_lines,
+                  empty="OK - no wedge recoveries, no LOST windows, no noise alerts")
+
+    airframe = [f"{fmt_s(t)}: {m}" for t, m in sess.bindings]
+    if sess.foreign:
+        airframe.append(
+            f"FOREIGN TRAFFIC: {fmt_s(sess.foreign[0][0])}.."
+            f"{fmt_s(sess.foreign[-1][0])} - {sess.foreign[-1][1]} "
+            f"(another beacon on our channel; its positions were dropped)")
+    print_section("Airframe binding / foreign traffic", airframe,
+                  empty="OK - single airframe, no foreign packets dropped")
 
     if sess.callsigns:
         print_section("Callsigns heard",

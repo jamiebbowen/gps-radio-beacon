@@ -25,7 +25,9 @@
  *   Last pkt: 12s ago
  *   Parse OK:120 F:1
  *   Mode:RX SPI:OK Bsy:0
- *   IRQst:0x0002
+ *   Bnd:R3  IRQst:0x0002      (or "FGN TRAFFIC:n Bnd:R3" when foreign
+ *                              packets are being dropped - another beacon
+ *                              on this channel)
  */
 void DisplayMode_RFStats(void)
 {
@@ -104,7 +106,21 @@ void DisplayMode_RFStats(void)
              (unsigned)busy_state);
     Display_DrawTextRowCol(6, 0, buffer);
 
-    /* Row 7: last non-zero IRQ status register */
-    snprintf(buffer, sizeof(buffer), "IRQst:0x%04X", (unsigned)last_irq);
+    /* Row 7: airframe binding, escalating to a foreign-traffic warning.
+     * Dropped foreign packets (a co-channel beacon running this same
+     * firmware) are the launch-day story worth neutering the IRQ register
+     * readout for; on a quiet channel the row keeps both facts. */
+    uint32_t foreign = RF_Receiver_GetForeignDrops();
+    uint8_t bnd = RF_Receiver_GetBoundRocketId();
+    char bnd_str[8];
+    if (bnd == 0xFF) snprintf(bnd_str, sizeof(bnd_str), "--");
+    else             snprintf(bnd_str, sizeof(bnd_str), "R%u", (unsigned)bnd);
+    if (foreign > 0) {
+        snprintf(buffer, sizeof(buffer), "FGN TRAFFIC:%lu Bnd:%s",
+                 (unsigned long)foreign, bnd_str);
+    } else {
+        snprintf(buffer, sizeof(buffer), "Bnd:%s IRQst:0x%04X",
+                 bnd_str, (unsigned)last_irq);
+    }
     Display_DrawTextRowCol(7, 0, buffer);
 }

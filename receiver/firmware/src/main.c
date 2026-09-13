@@ -796,6 +796,36 @@ int main(void)
       }
     }
 
+    /* Airframe binding / foreign-traffic breadcrumbs. A binding change is
+     * how you later tell "we tracked the wrong rocket for a while" apart
+     * from a real blackout; foreign drops mean someone else was blasting
+     * the channel (position packets rejected, count grows). Foreign-drop
+     * lines are rate-limited: first drop logs immediately, then every 4. */
+    if (rf_initialized && sd_card_ok) {
+      static uint8_t  bound_logged  = 0xFF;
+      static uint32_t foreign_logged = 0;
+      uint8_t bnd = RF_Receiver_GetBoundRocketId();
+      if (bnd != bound_logged && bnd != 0xFF) {
+        char b_msg[48];
+        snprintf(b_msg, sizeof(b_msg), "RF bound rocket_id=%u CH%u %.2fMHz",
+                 (unsigned)bnd, (unsigned)RF_Receiver_GetChannel(),
+                 LORA_CHANNEL_FREQ_MHZ(RF_Receiver_GetChannel()));
+        SD_Card_EnsureLogFile();
+        SD_Card_LogEvent(b_msg);
+        bound_logged = bnd;
+      }
+      uint32_t foreign = RF_Receiver_GetForeignDrops();
+      if (foreign != foreign_logged &&
+          (foreign_logged == 0 || foreign - foreign_logged >= 4)) {
+        char f_msg[48];
+        snprintf(f_msg, sizeof(f_msg), "RF foreign pkts=%lu dropped CH%u",
+                 (unsigned long)foreign, (unsigned)RF_Receiver_GetChannel());
+        SD_Card_EnsureLogFile();
+        SD_Card_LogEvent(f_msg);
+        foreign_logged = foreign;
+      }
+    }
+
     /* Drive the boot channel scan; returns 1 the moment a packet locks it */
     if (rf_initialized && RF_Receiver_ScanUpdate()) {
       if (sd_card_ok) {
