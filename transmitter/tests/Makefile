@@ -66,9 +66,14 @@ $(BUILD)/test_uart: test_uart.cpp ../firmware/uart.cpp stubs/Arduino.h | $(BUILD
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
 
 # Simulated flight: nav + launch_detect + beacon chained over stubbed IMU
-# events and scripted GPS fixes.
-$(BUILD)/test_flight_profile: test_flight_profile.cpp stubs/Arduino.h \
-                              stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
+# events and scripted GPS fixes. IMPORTANT: tests that #include module
+# sources must list them as prerequisites, or edits to the firmware do
+# not rebuild the test binary (stale-pass trap that once masked a real
+# CI failure).
+$(BUILD)/test_flight_profile: test_flight_profile.cpp \
+            ../firmware/launch_detect.cpp ../firmware/nav.cpp \
+            ../firmware/ekf.cpp ../firmware/beacon.cpp \
+            stubs/Arduino.h stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
 
 # Pure state->timing policy; links the real module (Arduino stub headers
@@ -84,14 +89,18 @@ $(BUILD)/rf_parser_rx.o: ../../receiver/firmware/src/rf_parser.c | $(BUILD)
 	    -I../../receiver/firmware/inc -c -o $@ $<
 
 $(BUILD)/test_airlink_roundtrip: test_airlink_roundtrip.cpp \
-                                 $(BUILD)/rf_parser_rx.o stubs/Arduino.h | $(BUILD)
+            ../firmware/beacon.cpp \
+            $(BUILD)/rf_parser_rx.o stubs/Arduino.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -I../../receiver/tests/stubs \
-	    -I../../receiver/firmware/inc -o $@ $^ $(LDFLAGS)
+	    -I../../receiver/firmware/inc -o $@ $< \
+	    $(BUILD)/rf_parser_rx.o $(LDFLAGS)
 
 # Host sim of firmware.ino itself: the sketch runs over stubbed HAL with a
 # scripted GPS fix stream and IMU event queue.
 $(BUILD)/test_mainloop: test_mainloop.cpp ../firmware/flight_cadence.cpp \
-                        stubs/Arduino.h stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
+            ../firmware/firmware.ino ../firmware/launch_detect.cpp \
+            ../firmware/nav.cpp ../firmware/ekf.cpp ../firmware/beacon.cpp \
+            stubs/Arduino.h stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< ../firmware/flight_cadence.cpp $(LDFLAGS)
 
 test: $(BINS)

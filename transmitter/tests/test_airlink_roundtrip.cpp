@@ -267,10 +267,15 @@ int main(void)
     }
 
     /* ---------- Raw GPS structural rejections must stay rejections ---- */
+    /* State hygiene: the sweeps randomize launch/landing state per
+     * iteration; restore pad semantics or the 3-sat case legitimately
+     * passes the post-landing 2D gate (caught by CI fresh builds). */
+    fake_launch_state = LAUNCH_STATE_IDLE;
+    fake_landed = false;
     struct { const char *alt; const char *sats; uint8_t fq; } bad[] = {
         { "-600", "8", 1 },   /* below altitude sanity floor */
         { "60000", "8", 1 },  /* above sanity ceiling        */
-        { "1655",  "3", 1 },  /* below 4 sats                */
+        { "1655",  "3", 1 },  /* below 4 sats (pre-landing)  */
         { "1655",  "8", 0 },  /* no fix                      */
     };
     for (size_t i = 0; i < sizeof(bad)/sizeof(bad[0]); i++) {
