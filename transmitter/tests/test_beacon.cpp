@@ -508,6 +508,8 @@ TEST(test_fused_wire_format_pin)
     CHECK(FUSED_FLAG_SENSOR_DEGRADED == 0x04);
     CHECK(FUSED_FLAG_GATE_REJECT     == 0x02);
     CHECK(FUSED_FLAG_RESERVED_MASK   == 0x01);
+
+    CHECK(FLAG_LOW_SATS              == 0x20);
 }
 
 TEST(test_fused_gate_reject_delta)
@@ -532,6 +534,39 @@ TEST(test_fused_gate_reject_delta)
     /* Settle the tracker so no later test sees a stale delta */
     fake_gps_rejects = 0;
     CHECK(beacon_transmit_fused_data(103, 1) == 1);
+}
+
+TEST(test_3sat_2d_fix_post_landing_only)
+{
+    /* Recovery rule: after the landing latch, a 3-sat 2D fix still flies
+     * (canopy landings) tagged FLAG_LOW_SATS; before landing, 3 sats is
+     * still a rejection - noisy flight positions must not ship. */
+    reset_tx();
+    fake_landed = false;
+    GPSCoordinates_t c = valid_coords();
+    strcpy(c.satellites, "3");
+    CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 0);   /* pre-landing */
+    CHECK(tx_count == 0);
+
+    reset_tx();
+    fake_landed = true;
+    CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 1);   /* post-landing */
+    CHECK(tx_buf[12] & FLAG_LOW_SATS);
+    CHECK(tx_buf[12] & FLAG_LANDED);
+    CHECK(tx_buf[11] == 3);                                    /* sats field honest */
+
+    /* LOW_SATS must never mark healthy geometry */
+    reset_tx();
+    fake_landed = true;
+    c = valid_coords();                                        /* 8 sats */
+    CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 1);
+    CHECK((tx_buf[12] & FLAG_LOW_SATS) == 0);
+
+    /* Two sats is nonsense even landed: still rejected */
+    reset_tx();
+    strcpy(c.satellites, "2");
+    CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 0);
+    fake_landed = false;
 }
 
 TEST(test_fused_altitude_floor_clamps)
@@ -640,6 +675,7 @@ int main(void)
     run_test_fused_sensor_degraded_flag();
     run_test_fused_wire_format_pin();
     run_test_fused_gate_reject_delta();
+    run_test_3sat_2d_fix_post_landing_only();
     run_test_fused_altitude_floor_clamps();
     run_test_airlink_golden_gps_encode();
     run_test_airlink_golden_fused_encode();

@@ -365,6 +365,60 @@ TEST(test_landing_requires_launch_and_valid_gps)
     CHECK(launch_detect_has_landed() == false);
 }
 
+TEST(test_landing_survives_canopy_multipath_glitches)
+{
+    /* Recovery killer this guards: rocket at rest under tree canopy or in
+     * a gully, GPS altitude reporting honest jitter plus 20-30 m multipath
+     * spikes every ~15-60 s. One spike used to reset the 60 s stability
+     * window forever - the landing never latches, and the beacon burns the
+     * recovery-window power budget overnight. Isolated spikes must not
+     * reset the window; sustained out-of-window readings still must. */
+    reset_all();
+    launch_detect_init();
+    launch_detect_gps_fallback_update(1000.0f, 1);
+    launch_detect_gps_fallback_update(1100.0f, 2);
+    launch_detect_gps_fallback_update(1100.0f, 3);
+    launch_detect_gps_fallback_update(1100.0f, 4);  /* confirmed */
+
+    total_accel = 0.5f;
+    uint32_t t = 500;
+    uint32_t window_start = 0;
+    bool landed = false;
+    for (int i = 0; i < 75; i++, t++) {
+        float alt = 500.0f + (float)((i % 2) ? 4 : -4);     /* honest jitter */
+        if (i == 25 || i == 55) alt = 535.0f;              /* canopy spikes */
+        landed = landing_detect_update(alt, true, t) || landed;
+    }
+    CHECK(landed);
+    CHECK(launch_detect_has_landed() == true);
+
+    /* Control: the same spikes must NOT become a general tolerance for
+     * movement - two consecutive out-of-window readings mean the rocket
+     * is still sliding/rolling and the window really does restart. */
+    reset_all();
+    launch_detect_init();
+    launch_detect_gps_fallback_update(1000.0f, 1);
+    launch_detect_gps_fallback_update(1100.0f, 2);
+    launch_detect_gps_fallback_update(1100.0f, 3);
+    launch_detect_gps_fallback_update(1100.0f, 4);
+
+    total_accel = 0.5f;
+    landed = false;
+    t = 700;
+    for (int i = 0; i < 50; i++, t++) {
+        landing_detect_update(500.0f, true, t);           /* near-complete window */
+    }
+    /* Rocket slides downhill for a while, then stops again */
+    for (int i = 0; i < 6; i++, t++) {
+        landing_detect_update(500.0f - 3.0f * i, true, t);
+    }
+    for (int i = 0; i < LAND_QUIET_S + 2; i++, t++) {
+        landed = landing_detect_update(482.0f, true, t) || landed;
+    }
+    CHECK(landed);                                       /* latched from RESTART */
+    (void)window_start;
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void)
@@ -381,6 +435,7 @@ int main(void)
     run_test_landing_latches_on_quiet_and_stable();
     run_test_landing_never_during_descent();
     run_test_landing_requires_launch_and_valid_gps();
+    run_test_landing_survives_canopy_multipath_glitches();
 
     return TEST_SUMMARY();
 }

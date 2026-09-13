@@ -41,8 +41,15 @@ uint8_t beacon_transmit_gps_data(const GPSCoordinates_t* coords, uint32_t system
     }
     
     // Require minimum 4 satellites for reliable fix
+    /* Minimum satellites: 4 (3D fix) in flight. Once the landing latch is
+     * set, a 3-sat 2D fix still carries recovery-grade horizontal
+     * coordinates - and a rocket under canopy with 3 sats would otherwise
+     * go position-silent exactly when the crew is walking in (it would
+     * heartbeat instead, with only the stale pre-canopy fix surviving).
+     * The 0x20 flag marks degraded geometry so the log explains itself. */
     int sat_count = atoi(coords->satellites);
-    if (sat_count < 4) {
+    int min_sats = launch_detect_has_landed() ? 3 : 4;
+    if (sat_count < min_sats) {
         Serial.print(F("[Beacon] Rejecting GPS - insufficient satellites: "));
         Serial.println(sat_count);
         return 0;
@@ -162,8 +169,15 @@ uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t
         return 0;
     }
     
+    /* Minimum satellites: 4 (3D fix) in flight. Once the landing latch is
+     * set, a 3-sat 2D fix still carries recovery-grade horizontal
+     * coordinates - and a rocket under canopy with 3 sats would otherwise
+     * go position-silent exactly when the crew is walking in (it would
+     * heartbeat instead, with only the stale pre-canopy fix surviving).
+     * The 0x20 flag marks degraded geometry so the log explains itself. */
     int sat_count = atoi(coords->satellites);
-    if (sat_count < 4) {
+    int min_sats = launch_detect_has_landed() ? 3 : 4;
+    if (sat_count < min_sats) {
         Serial.print(F("[Beacon] Rejecting GPS - insufficient satellites: "));
         Serial.println(sat_count);
         return 0;
@@ -224,6 +238,11 @@ uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t
     }
     if (coords->fix_quality >= 1) {
         packet.flags |= FLAG_FIX_QUALITY_GOOD;
+    }
+    /* Degraded-geometry marker: post-landing 2D positions (min-sats relaxed
+     * to 3). Receivers that predate the bit ignore it; logs read sats=3. */
+    if (launch_detect_has_landed() && sat_count < 4) {
+        packet.flags |= FLAG_LOW_SATS;
     }
     packet.flags |= (coords->fix_quality & FLAG_FIX_TYPE_MASK);
     /* V2 wire byte: lets a co-channel foreign beacon (this same firmware,

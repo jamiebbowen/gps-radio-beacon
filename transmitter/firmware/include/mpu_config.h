@@ -49,7 +49,10 @@
  * stable, so both conditions are required. On landing the beacon drops to
  * BATTERY_SAVE cadence early (longer recovery window on the same battery). */
 #define LAND_ACCEL_QUIET_MS2        1.5f    // |linear accel| below this = quiet
-#define LAND_ALT_WINDOW_M           10.0f   // alt min/max spread allowed (m)
+#define LAND_ALT_WINDOW_M           10.0f   // alt min/max spread allowed (m);
+                                            // a lone out-of-window sample is
+                                            // a tolerated multipath glitch,
+                                            // two in a row = still moving
 #define LAND_QUIET_S                60      // sustained quiet+stable time (s)
 
 // Callsign - Update this with your ham radio callsign

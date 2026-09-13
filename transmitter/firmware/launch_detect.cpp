@@ -259,6 +259,8 @@ bool launch_detect_gps_fallback_update(float alt_m, uint32_t system_time_seconds
     return false;
 }
 
+static uint8_t  land_outlier_streak = 0;   /* consecutive out-of-window samples */
+
 /* ---------- Landing detection (post-launch) ------------------------------ */
 
 /**
@@ -282,16 +284,29 @@ bool landing_detect_update(float alt_m, bool gps_valid, uint32_t system_time_sec
     if (land_window_start_s == 0) {
         land_window_start_s = system_time_seconds;
         land_window_min = land_window_max = alt_m;
+        land_outlier_streak = 0;
         return false;
     }
 
-    if (alt_m < land_window_min) land_window_min = alt_m;
-    if (alt_m > land_window_max) land_window_max = alt_m;
-
-    if ((land_window_max - land_window_min) > LAND_ALT_WINDOW_M) {
-        land_window_start_s = 0;   /* still moving vertically */
+    /* Multipath guard: rockets land in trees and gullies where resting GPS
+     * altitude throws isolated 20-30 m spikes. A single outlier must not
+     * flush a nearly-complete 60 s window and cost the battery-save
+     * transition (the beacon stays at recovery power overnight and dies
+     * before the walk). One outlier: tolerated (not folded into min/max,
+     * window keeps running). Two IN A ROW: the spread is real motion -
+     * the rocket is still sliding - reset as before. */
+    float cand_min = (alt_m < land_window_min) ? alt_m : land_window_min;
+    float cand_max = (alt_m > land_window_max) ? alt_m : land_window_max;
+    if ((cand_max - cand_min) > LAND_ALT_WINDOW_M) {
+        if (++land_outlier_streak >= 2) {
+            land_window_start_s = 0;   /* genuinely still moving vertically */
+            land_outlier_streak = 0;
+        }
         return false;
     }
+    land_outlier_streak = 0;
+    land_window_min = cand_min;
+    land_window_max = cand_max;
 
     if ((system_time_seconds - land_window_start_s) >= LAND_QUIET_S) {
         landed = true;

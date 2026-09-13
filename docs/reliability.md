@@ -39,7 +39,11 @@ NMEA data. Failed checks log a reason and skip the transmission.
 
 ### 2.1 Minimum satellite count
 
-- Required: **>= 4 satellites** (needed for 3-D GPS solution)
+- Required: **>= 4 satellites** (3-D GPS solution) in flight
+- **After the landing latch: >= 3** - a canopy landing often leaves 2-D
+  geometry; its horizontal position is exactly what the recovery crew
+  walks to. Those packets carry `FLAG_LOW_SATS` (0x20) and report the true
+  sat count. Under 3 sats still rejects.
 - Example log: `[Beacon] Rejecting GPS - insufficient satellites: 3`
 
 ### 2.2 GPS fix-quality indicator (GGA field 6)
@@ -295,6 +299,12 @@ tests (`transmitter/tests`, `receiver/tests`).
   past 2 km from the anchor, re-bases the tangent origin with a hard state
   reset. Prevents the 2026-09-11 failure where 5 minutes of windshield
   shadow left phantom velocity the gate then defended forever.
+- **Landing-window multipath tolerance**: rockets land in trees and
+  gullies where resting GPS throws isolated 20-30 m altitude spikes. A
+  single out-of-window sample no longer flushes the 60 s landing-stability
+  window (the battery-save transition still happens on time); two
+  consecutive out-of-window samples mean the rocket is genuinely still
+  sliding and the window restarts.
 
 ### Receiver
 
