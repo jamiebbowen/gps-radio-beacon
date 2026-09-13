@@ -396,10 +396,77 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
       snprintf(narrow, sizeof(narrow), "%s", LoRa_QualityLabel(rssi, snr));
       Display_DrawTextRowCol(4, 0, narrow);
 
-      /* Row 5: pad -> ready-to-fly verdict; in flight -> range countdown.
-       * The verdict string names the failing checks: L=link, T=TX GPS,
-       * R=RX GPS, C=compass (details live on the PRE-FLIGHT page). */
-      if (speed_ms < 2.0f) {
+  /* Recovery semantics for the landed rocket. Once the landing latch
+   * flies, a pre-flight verdict on row 5 is actively misleading ("READY
+   * TO FLY" over a rocket sitting in a field), so the row becomes
+   * recovery intel, in priority order:
+   *   MOVED +42m!  - it has been dragged >30 m since touchdown (wind,
+   *                  slope); the walk target keeps moving, don't trust it
+   *   CLS 4m/m     - your closing rate over the last ~20 s of walking
+   *   AWY 2m/m     - you are walking AWAY from it (detours happen)
+   *   LANDED       - down, holding position
+   * The touchdown anchor is the position carried by the first LANDED
+   * packet; it re-arms when the latch clears (next flight/reboot). */
+    static uint8_t land_anchor_valid = 0;
+    static float   land_anchor_lat = 0.0f, land_anchor_lon = 0.0f;
+    float moved_m = 0.0f;
+    uint8_t landed = (last_rf_packet_time > 0) && remote_gps_data->fused_landed;
+    if (landed && remote_gps_data->latitude != 0.0f &&
+        remote_gps_data->longitude != 0.0f) {
+      if (!land_anchor_valid) {
+        land_anchor_lat = remote_gps_data->latitude;
+        land_anchor_lon = remote_gps_data->longitude;
+        land_anchor_valid = 1;
+      }
+      moved_m = calculate_distance(land_anchor_lat, land_anchor_lon,
+                                   remote_gps_data->latitude,
+                                   remote_gps_data->longitude);
+    } else if (!landed) {
+      land_anchor_valid = 0;
+    }
+
+    /* Walk closing-rate: two-point slope over >=20 s of distance samples.
+     * 9999 is the "no estimate yet" sentinel. */
+    static uint32_t trend_prev_ms = 0;
+    static float    trend_prev_km = -1.0f;
+    float close_m_per_min = 9999.0f;
+    if (distance_to_tx >= 0.0f) {
+      uint32_t now = HAL_GetTick();
+      if (trend_prev_km >= 0.0f && (now - trend_prev_ms) >= 20000u) {
+        close_m_per_min = (trend_prev_km - distance_to_tx) * 1000.0f
+                          * (60000.0f / (float)(now - trend_prev_ms));
+        trend_prev_km = distance_to_tx;
+        trend_prev_ms = now;
+      } else if (trend_prev_km < 0.0f) {
+        trend_prev_km = distance_to_tx;
+        trend_prev_ms = now;
+      }
+    } else {
+      trend_prev_km = -1.0f;
+      trend_prev_ms = 0;
+    }
+
+      /* Row 5: landed -> recovery intel; pad -> ready-to-fly verdict;
+       * in flight -> range countdown. The verdict string names the failing
+       * checks: L=link, T=TX GPS, R=RX GPS, C=compass (PRE-FLIGHT page). */
+      if (landed) {
+        if (moved_m > 30.0f) {
+          /* uint16_t bounds the print width; clamp the float first so a
+           * huge drag aliases to "way pastouchdown", not a wrapped number */
+          float mc = (moved_m > 65535.0f) ? 65535.0f : moved_m;
+          snprintf(narrow, sizeof(narrow), "MOVED +%um!", (unsigned)(uint16_t)mc);
+        } else if (close_m_per_min != 9999.0f &&
+                   (close_m_per_min >= 2.0f || close_m_per_min <= -2.0f)) {
+          int cr = (int)(close_m_per_min + (close_m_per_min >= 0 ? 0.5f : -0.5f));
+          if (cr > 99) cr = 99;
+          if (cr < -99) cr = -99;
+          snprintf(narrow, sizeof(narrow), "%s %dm/m",
+                   cr >= 0 ? "CLS" : "AWY", (cr >= 0 ? cr : -cr));
+        } else {
+          snprintf(narrow, sizeof(narrow), "LANDED");
+        }
+        Display_DrawTextRowCol(5, 0, narrow);
+      } else if (speed_ms < 2.0f) {
         if (rtf_link && rtf_tx && rtf_rx && rtf_cmp) {
           Display_DrawTextRowCol(5, 0, "READY TO FLY");
         } else {
@@ -606,8 +673,10 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
       {
         uint8_t hb_gps = HB_GPS_STATE(hb.gps_health);
         uint8_t resets = HB_GPS_RESETS(hb.gps_health);
+        /* Text budget: verdict + " rst:N" must fit 22 chars, or the reset
+         * count itself clips off the row (found by test_navigation_mode). */
         if (hb_gps == HB_GPS_NO_DATA) {
-          snprintf(wide, sizeof(wide), "GPS SILENT-chk wire");
+          snprintf(wide, sizeof(wide), "GPS SILENT wire");
         } else if (hb_gps == HB_GPS_NO_NMEA) {
           snprintf(wide, sizeof(wide), "GPS data garbled");
         } else if (hb_gps == HB_GPS_ACQUIRING && hb.uptime_s > 90 &&
@@ -616,7 +685,7 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
            * 90+ s at zero means antenna/power/RF-desense on the TX side,
            * not patience. (The TX watchdog now cold-restarts at 60 s, so
            * this state implies recovery is failing -> hardware.) */
-          snprintf(wide, sizeof(wide), "0 sats-chk TX ant");
+          snprintf(wide, sizeof(wide), "0 sats-chk TXant");
         } else if (hb_gps == HB_GPS_ACQUIRING) {
           snprintf(wide, sizeof(wide), "GPS ok, acquiring");
         } else {

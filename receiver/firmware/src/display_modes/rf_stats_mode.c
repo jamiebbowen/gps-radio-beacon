@@ -116,7 +116,7 @@ void DisplayMode_RFStats(void)
     if (bnd == 0xFF) snprintf(bnd_str, sizeof(bnd_str), "--");
     else             snprintf(bnd_str, sizeof(bnd_str), "R%u", (unsigned)bnd);
     if (foreign > 0) {
-        snprintf(buffer, sizeof(buffer), "FGN TRAFFIC:%lu Bnd:%s",
+        snprintf(buffer, sizeof(buffer), "FGN:%lu Bnd:%s",
                  (unsigned long)foreign, bnd_str);
     } else {
         snprintf(buffer, sizeof(buffer), "Bnd:%s IRQst:0x%04X",
