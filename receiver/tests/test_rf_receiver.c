@@ -228,7 +228,7 @@ static void inject_gps_packet(double lat_deg, double lon_deg, uint8_t rocket_id)
     fake_pkt.data[0] = PACKET_TYPE_GPS;
     put_i32_le(&fake_pkt.data[1], (int32_t)(lat_deg * 10000000.0));
     put_i32_le(&fake_pkt.data[5], (int32_t)(lon_deg * 10000000.0));
-    fake_pkt.data[9] = 100; fake_pkt.data[10] = 0;  /* alt 356 m -> 0x0164 */
+    fake_pkt.data[9] = 100; fake_pkt.data[10] = 0;  /* alt 100 m (0x0064) */
     fake_pkt.data[11] = 9;                           /* sats */
     fake_pkt.data[12] = 0x03;                        /* fix flags */
     fake_pkt.data[13] = rocket_id;                   /* V2 airframe ID */
@@ -1560,6 +1560,217 @@ TEST(test_receiver_cold_boot_mid_walk)
     CHECK_NEAR(pos.longitude, -105.021, 1e-4);
 }
 
+/* Generalized fused injector for the soup test */
+static void inject_fused_ex(double lat_deg, double lon_deg, uint8_t rocket_id,
+                            uint8_t flags, int16_t vn_cms, int16_t ve_cms)
+{
+    inject_fused_packet(lat_deg, lon_deg, rocket_id);
+    fake_pkt.data[18] = flags;
+    put_i16_le(&fake_pkt.data[11], vn_cms);
+    put_i16_le(&fake_pkt.data[13], ve_cms);
+    fake_pkt_pending = 1;
+}
+
+TEST(test_packet_soup_state_coherence)
+{
+    /* Launch-day truth: GPS + fused + heartbeats + callsigns + foreign
+     * packets + CRC hits arrive interleaved in whatever order RF feels
+     * like. The interaction rules are pairwise-tested elsewhere; this is
+     * the adversarial mixture - every accepted packet type owns ONLY its
+     * fields, no matter what preceded it. A running oracle mirrors the
+     * documented rules and every accepted packet is checked against it. */
+    RF_Receiver_StopScan();
+    fake_mode = 5;
+    fake_rssi_inst = -120;
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+
+    /* Bind to our rocket and seed the oracle */
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    run_for(250, 250);
+    GPS_Data pos;
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+
+    double exp_lat = 39.89, exp_lon = -105.11;   /* last position          */
+    float  exp_alt = 100.0f;
+    float  exp_vn = 0.0f, exp_ve = 0.0f;         /* velocity: fused-owned  */
+    uint8_t exp_fix = 0x03;                       /* raw GPS-owned          */
+    uint8_t exp_sats = 9;
+    uint8_t exp_is_fused = 0;
+    char    exp_cs[RF_PARSER_MAX_CALLSIGN_LEN] = "";
+    uint32_t last_raw_ms = now_ms;               /* freshness of last RAW fix */
+    uint8_t  check_adv = 1;                      /* 0 = dead-zone: skip pos asserts */
+    uint32_t exp_drops = RF_Receiver_GetForeignDrops();
+    uint32_t exp_crc   = RF_Receiver_GetCrcErrors();
+
+    /* Reproducible PRNG (no rand(): we want identical runs everywhere) */
+    uint32_t rng = 0xC0FFEEu;
+    #define SOUP_RAND() (rng ^= rng << 13, rng ^= rng >> 17, rng ^= rng << 5, rng)
+
+    for (int iter = 0; iter < 500; iter++) {
+        uint8_t pick = SOUP_RAND() % 9;
+        double lat = 39.85 + (SOUP_RAND() % 1000) * 1e-5;   /* +- ~1.1 km wander */
+        double lon = -105.20 + (SOUP_RAND() % 1000) * 1e-5;
+        int16_t vn = (int16_t)(SOUP_RAND() % 4000 - 2000);
+        int16_t ve = (int16_t)(SOUP_RAND() % 4000 - 2000);
+
+        switch (pick) {
+        case 0: case 1:                                    /* own raw GPS */
+            inject_gps_packet(lat, lon, OUR_ROCKET_ID);
+            exp_lat = lat; exp_lon = lon; exp_alt = 100.0f;
+            exp_fix = 0x03; exp_sats = 9; exp_is_fused = 0;
+            run_for(400, 200);
+            last_raw_ms = now_ms;
+            CHECK(RF_Receiver_DataAvailable() == 1);
+            break;
+        case 2:                                            /* own fused, FRESH */
+            inject_fused_ex(lat, lon, OUR_ROCKET_ID,
+                            FUSED_FLAG_GPS_FRESH | FUSED_FLAG_IMU_HEALTHY, vn, ve);
+            exp_lat = lat; exp_lon = lon; exp_alt = 1650.0f;
+            exp_vn = vn * 0.01f; exp_ve = ve * 0.01f; exp_is_fused = 1;
+            run_for(400, 200);
+            CHECK(RF_Receiver_DataAvailable() == 1);
+            break;
+        case 3:                                            /* own fused, STALE */
+            inject_fused_ex(lat, lon, OUR_ROCKET_ID,
+                            FUSED_FLAG_DEAD_RECKONING, vn, ve);
+            exp_is_fused = 1;
+            run_for(400, 200);
+            CHECK(RF_Receiver_DataAvailable() == 1);
+            /* Override semantics: within RF_FUSED_STALE_OVERRIDE_MS of a
+             * raw fix, position+velocity stay exactly as displayed (oracle
+             * leaves exp_* untouched). Without a recent raw, fused owns all
+             * of it. The 1 s dead zone around the 10 s boundary keeps the
+             * oracle away from parse-vs-check tick quantization. */
+            if (now_ms - last_raw_ms > 11000UL) {
+                exp_lat = lat; exp_lon = lon; exp_alt = 1650.0f;
+                exp_vn = vn * 0.01f; exp_ve = ve * 0.01f;
+            } else if (now_ms - last_raw_ms > 9000UL) {
+                check_adv = 0;               /* dead zone: skip pos asserts */
+            }
+            break;
+        case 4:                                            /* foreign GPS */
+            inject_gps_packet(36.20, -115.40, FOREIGN_ROCKET_ID);
+            exp_drops++;
+            run_for(400, 200);
+            CHECK(RF_Receiver_DataAvailable() == 0);
+            break;
+        case 5:                                            /* foreign fused */
+            inject_fused_ex(36.21, -115.39, FOREIGN_ROCKET_ID,
+                            FUSED_FLAG_GPS_FRESH, 100, 100);
+            exp_drops++;
+            run_for(400, 200);
+            CHECK(RF_Receiver_DataAvailable() == 0);
+            break;
+        case 6:                                            /* garbage bytes */
+            /* High-bit bytes: unprintable AND never a valid type byte, so
+             * this action can never classify as callsign or heartbeat -
+             * keeps the oracle deterministic (random printable text could
+             * legitimately register as a third-party callsign). */
+            memset(&fake_pkt, 0x00, sizeof(fake_pkt));
+            for (uint8_t b = 0; b < 24; b++)
+                fake_pkt.data[b] = (uint8_t)(0x80 | (SOUP_RAND() & 0x7F));
+            fake_pkt.length = 1 + SOUP_RAND() % 30;
+            fake_pkt_pending = 1;
+            run_for(400, 200);
+            CHECK(RF_Receiver_DataAvailable() == 0);
+            break;
+        case 7: {                                          /* callsign ours/foreign */
+            uint8_t foreign = SOUP_RAND() & 1;
+            char cs[24];
+            strcpy(cs, foreign ? "KD0ABC-7 CH0" : "KE0MZS-3 CH0");
+            inject_callsign(cs);
+            if (foreign) { exp_drops++; } else { strcpy(exp_cs, cs); }
+            run_for(400, 200);
+            CHECK(RF_Receiver_DataAvailable() == 0);       /* callsigns aren't position */
+            break;
+        }
+        default:                                           /* own heartbeat + CRC hit */
+            inject_heartbeat(OUR_ROCKET_ID, 0, (uint8_t)(SOUP_RAND() % 12),
+                             (uint16_t)(SOUP_RAND() % 60000));
+            run_for(200, 200);
+            fake_crc_error = 1;                            /* heard-but-corrupt */
+            memset(&fake_pkt, 0x5A, sizeof(fake_pkt));
+            fake_pkt.length = 20;
+            fake_pkt_pending = 1;
+            exp_crc++;
+            run_for(200, 200);
+            CHECK(RF_Receiver_DataAvailable() == 0);       /* heartbeat != position */
+            break;
+        }
+
+        /* Consume whatever flagged ready and check the WHOLE oracle */
+        if (RF_Receiver_DataAvailable()) {
+            CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+        }
+        GPS_Data cur;
+        char heard[RF_PARSER_MAX_CALLSIGN_LEN] = "";
+        CHECK(RF_Receiver_GetParsedData(&cur, heard, sizeof(heard), NULL) == 1);
+        if (check_adv) {
+            CHECK_NEAR(cur.latitude, exp_lat, 2e-5);
+            CHECK_NEAR(cur.longitude, exp_lon, 2e-5);
+            CHECK_NEAR(cur.altitude, exp_alt, 0.3f);
+            CHECK_NEAR(cur.v_north, exp_vn, 0.005f);
+            CHECK_NEAR(cur.v_east, exp_ve, 0.005f);
+        } else {
+            /* Boundary iteration: re-sync the oracle from what the parser
+             * actually did, so following iterations check real state */
+            exp_lat = cur.latitude; exp_lon = cur.longitude;
+            exp_alt = cur.altitude;
+            exp_vn = cur.v_north; exp_ve = cur.v_east;
+        }
+        check_adv = 1;
+        CHECK(cur.fix == exp_fix);
+        CHECK(cur.satellites == exp_sats);
+        CHECK(cur.is_fused == exp_is_fused);
+        CHECK(strcmp(heard, exp_cs) == 0);
+        CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+        CHECK(RF_Receiver_GetForeignDrops() == exp_drops);
+        CHECK(RF_Receiver_GetCrcErrors() == exp_crc);
+    }
+    #undef SOUP_RAND
+
+    /* Restore default posture */
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    run_for(400, 200);
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+}
+
+TEST(test_heartbeat_uptime_regression_keeps_tracking)
+{
+    /* TX WDT hang -> beacon hard-resets mid-flight: heartbeat uptime
+     * regresses. The receiver must keep accepting (the reset breadcrumb
+     * lives in main.c); nothing may go stale or rebind. */
+    RF_Receiver_StopScan();
+    fake_mode = 5;
+    fake_rssi_inst = -120;
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+
+    inject_heartbeat(OUR_ROCKET_ID, 0, 5, 900);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    run_for(250, 250);
+    GPS_Data pos;
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);   /* consume, else the
+        * ready flag gates every later packet out of DataAvailable() */
+
+    /* Beacon reboots 20 minutes in: uptime wraps to single digits */
+    run_for(1200000, 5000);
+    inject_heartbeat(OUR_ROCKET_ID, 0, 0, 7);
+    run_for(250, 250);
+    HeartbeatPacket_t hb;
+    CHECK(RF_Receiver_GetHeartbeat(&hb) == 1);
+    CHECK(hb.uptime_s == 7);
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);  /* no rebind drama */
+
+    /* Position flow resumes unaffected */
+    inject_gps_packet(39.91, -105.10, OUR_ROCKET_ID);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+    CHECK_NEAR(pos.latitude, 39.91, 1e-4);
+}
+
 int main(void)
 {
     Test_SetTick(now_ms);
@@ -1602,6 +1813,8 @@ int main(void)
     run_test_tick_wraparound_ages();
     run_test_receiver_cold_boot_mid_flight();
     run_test_receiver_cold_boot_mid_walk();
+    run_test_packet_soup_state_coherence();
+    run_test_heartbeat_uptime_regression_keeps_tracking();
 
     return TEST_SUMMARY();
 }

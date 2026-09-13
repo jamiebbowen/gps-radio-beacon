@@ -21,7 +21,8 @@ BUILD    := build
 BINS     := $(BUILD)/test_ekf $(BUILD)/test_nmea_fields $(BUILD)/test_beacon \
             $(BUILD)/test_nav $(BUILD)/test_gps $(BUILD)/test_radio \
             $(BUILD)/test_launch_detect $(BUILD)/test_uart \
-            $(BUILD)/test_flight_profile $(BUILD)/test_flight_cadence
+            $(BUILD)/test_flight_profile $(BUILD)/test_flight_cadence \
+            $(BUILD)/test_airlink_roundtrip $(BUILD)/test_mainloop
 
 .PHONY: all test coverage clean
 
@@ -75,6 +76,23 @@ $(BUILD)/test_flight_profile: test_flight_profile.cpp stubs/Arduino.h \
 $(BUILD)/test_flight_cadence: test_flight_cadence.cpp ../firmware/flight_cadence.cpp \
                               stubs/Arduino.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $^ $(LDFLAGS)
+
+# Airlink round-trip: TX encoder (beacon.cpp, C++) + RX parser
+# (receiver's rf_parser.c, compiled as C) in one binary.
+$(BUILD)/rf_parser_rx.o: ../../receiver/firmware/src/rf_parser.c | $(BUILD)
+	$(CC) $(CFLAGS) -I../../receiver/tests/stubs \
+	    -I../../receiver/firmware/inc -c -o $@ $<
+
+$(BUILD)/test_airlink_roundtrip: test_airlink_roundtrip.cpp \
+                                 $(BUILD)/rf_parser_rx.o stubs/Arduino.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -I../../receiver/tests/stubs \
+	    -I../../receiver/firmware/inc -o $@ $^ $(LDFLAGS)
+
+# Host sim of firmware.ino itself: the sketch runs over stubbed HAL with a
+# scripted GPS fix stream and IMU event queue.
+$(BUILD)/test_mainloop: test_mainloop.cpp ../firmware/flight_cadence.cpp \
+                        stubs/Arduino.h stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< ../firmware/flight_cadence.cpp $(LDFLAGS)
 
 test: $(BINS)
 	@rc=0; for b in $(BINS); do \

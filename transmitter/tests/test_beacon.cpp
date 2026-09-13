@@ -534,6 +534,29 @@ TEST(test_fused_gate_reject_delta)
     CHECK(beacon_transmit_fused_data(103, 1) == 1);
 }
 
+TEST(test_fused_altitude_floor_clamps)
+{
+    /* Below the -500 m MSL floor the quarter-meter field must clamp to 0,
+     * never wrap to ~+16 km and scare the recovery crew. */
+    reset_tx();
+    memset(&fake_fused, 0, sizeof(fake_fused));
+    fake_fused.valid = true;
+    fake_fused.lat_deg = 39.89;  fake_fused.lon_deg = -105.11;
+    fake_fused.alt_m   = -800.0;
+    CHECK(beacon_transmit_fused_data(100, 1) == 1);
+    CHECK((uint16_t)(tx_buf[9] | (tx_buf[10] << 8)) == 0);
+
+    /* Exactly at the floor: encodes 0 as well, decodes back to -500 */
+    fake_fused.alt_m = -500.0;
+    CHECK(beacon_transmit_fused_data(101, 1) == 1);
+    CHECK((uint16_t)(tx_buf[9] | (tx_buf[10] << 8)) == 0);
+
+    /* Ceiling: 15883.75 m is the uint16 quarter-meter roof */
+    fake_fused.alt_m = 50000.0;
+    CHECK(beacon_transmit_fused_data(102, 1) == 1);
+    CHECK((uint16_t)(tx_buf[9] | (tx_buf[10] << 8)) == 65535);
+}
+
 TEST(test_airlink_golden_gps_encode)
 {
     /* Same tripwire as the fused golden, for the raw GPS stream: the
@@ -617,6 +640,7 @@ int main(void)
     run_test_fused_sensor_degraded_flag();
     run_test_fused_wire_format_pin();
     run_test_fused_gate_reject_delta();
+    run_test_fused_altitude_floor_clamps();
     run_test_airlink_golden_gps_encode();
     run_test_airlink_golden_fused_encode();
     run_test_fused_hexdump_cadence_and_tx_failure();
