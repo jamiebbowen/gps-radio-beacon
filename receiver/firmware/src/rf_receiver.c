@@ -102,11 +102,21 @@ static uint32_t last_any_packet_ms = 0;
  *
  * last_identified_ms tracks OWN (or unbound-bindable) packets only; it
  * drives the auto re-scan so a co-channel foreign chatterbox cannot
- * suppress the "our beacon went silent, go look for it" recovery. */
+ * suppress the "our beacon went silent, go look for it" recovery.
+ *
+ * Livelock breaker (two rockets in a row on the same channel): rocket A
+ * lands and powers down, rocket B (different ID) powers up; while bound to
+ * A we would drop B forever, each auto re-scan parking back on B's chatter.
+ * After RF_FOREIGN_LIVELOCK_UNLOCK_AFTER consecutive re-acquires that all
+ * ended locked on foreign traffic, the next re-acquire deliberately drops
+ * the binding and lets the next ID claim the channel. */
 #define RF_ROCKET_UNBOUND  0xFF
+#define RF_FOREIGN_LIVELOCK_UNLOCK_AFTER  3
 static uint8_t  bound_rocket_id  = RF_ROCKET_UNBOUND;
 static uint32_t rf_foreign_drops = 0;
 static uint32_t last_identified_ms = 0;
+static uint8_t  rf_last_rx_foreign = 0;   /* newest ID-carrying packet was foreign */
+static uint8_t  foreign_lock_streak = 0;  /* consecutive re-acquires locked on foreign */
 static uint32_t scan_dwell_start = 0;
 static uint32_t scan_dwell_pkt_count = 0;
 static uint32_t scan_dwell_len_ms = RF_SCAN_DWELL_MS;  /* current dwell length */
@@ -218,6 +228,7 @@ static uint8_t RF_RocketFilter(uint8_t has_id, uint8_t id)
 {
     if (!has_id) {
         last_identified_ms = HAL_GetTick();  /* V1: can't tell, assume ours */
+        rf_last_rx_foreign = 0;
         return 1;
     }
     if (bound_rocket_id == RF_ROCKET_UNBOUND) {
@@ -225,9 +236,11 @@ static uint8_t RF_RocketFilter(uint8_t has_id, uint8_t id)
     }
     if (bound_rocket_id == id) {
         last_identified_ms = HAL_GetTick();
+        rf_last_rx_foreign = 0;
         return 1;
     }
     rf_foreign_drops++;
+    rf_last_rx_foreign = 1;
     return 0;
 }
 
@@ -440,7 +453,18 @@ uint8_t RF_Receiver_DataAvailable(void)
         if (printable) {
           memcpy(rf_ascii_buffer, last_packet.data, last_packet.length);
           rf_ascii_buffer[last_packet.length] = '\0';
-          (void)RF_Parser_ParseAsciiPacket(rf_ascii_buffer);
+          /* Callsigns name their airframe: "<CALL>-<rocket id> CH<n>". Bind
+           * from it or drop it like any other ID packet; a callsign with no
+           * parseable id (third-party beacon) passes - it can't hurt
+           * position data, only repaint the label. */
+          int cs_id = -1;
+          const char *dash = strchr(rf_ascii_buffer, '-');
+          if (dash && isdigit((unsigned char)dash[1])) {
+            cs_id = atoi(dash + 1);
+          }
+          if (cs_id < 0 || RF_RocketFilter(1, (uint8_t)cs_id)) {
+            (void)RF_Parser_ParseAsciiPacket(rf_ascii_buffer);
+          }
         }
       }
 #else
@@ -991,7 +1015,15 @@ static void RF_Scan_StartReacquire(void)
 {
   /* Deliberately keeps the airframe binding: the beacon we lost did not
    * change identities, and foreign traffic we pass while sweeping must not
-   * be able to claim us. */
+   * be able to claim us. Exception: repeated re-acquires that all ended
+   * locked onto someone else mean OUR airframe is almost certainly gone
+   * (landed, powered off) while another fired up on this channel - the
+   * sequential-rockets livelock. Drop the binding once and let the next
+   * ID heard claim the channel. */
+  if (foreign_lock_streak >= RF_FOREIGN_LIVELOCK_UNLOCK_AFTER) {
+    foreign_lock_streak = 0;
+    bound_rocket_id = RF_ROCKET_UNBOUND;
+  }
   scan_active = 1;
   scan_dwell_start = HAL_GetTick();
   scan_dwell_pkt_count = rf_lora_packets_received;
@@ -1072,9 +1104,16 @@ uint8_t RF_Receiver_ScanUpdate(void)
   
   /* Any CRC-valid packet on the current channel ends the scan. Uses the
    * raw LoRa packet counter (not the parser) so binary GPS, fused and
-   * callsign packets all count. */
+   * callsign packets all count. Track whether the locking traffic was
+   * foreign - consecutive foreign-ended re-acquires are the livelock
+   * signature (see RF_Scan_StartReacquire). */
   if (rf_lora_packets_received > scan_dwell_pkt_count) {
     scan_active = 0;
+    if (rf_last_rx_foreign) {
+      foreign_lock_streak++;
+    } else {
+      foreign_lock_streak = 0;
+    }
     if (scan_cad_phase) {
       /* CAD_RX reception is single-shot: after RX_DONE the chip idles in
        * standby, so continuous RX must be restored on the locked channel. */

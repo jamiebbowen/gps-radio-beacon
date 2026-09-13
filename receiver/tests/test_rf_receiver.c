@@ -756,6 +756,16 @@ TEST(test_nonzero_irq_status_latched)
     CHECK(checks > 0);
 }
 
+static void inject_callsign(const char *cs)
+{
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    memcpy(fake_pkt.data, cs, strlen(cs));
+    fake_pkt.length = (uint16_t)strlen(cs);
+    fake_pkt.rssi = -85;
+    fake_pkt.snr = 6;
+    fake_pkt_pending = 1;
+}
+
 static void put_i16_le(uint8_t *buf, int16_t v)
 {
     buf[0] = (uint8_t)(v & 0xFF);
@@ -1345,6 +1355,211 @@ TEST(test_tick_wraparound_ages)
 #   undef wrap_run
 }
 
+TEST(test_sequential_rocket_livelock_breaker)
+{
+    /* Two rockets, one day, one channel. Rocket A flies, lands, gets
+     * powered down. Rocket B (different ID) is racked on the same channel
+     * and starts beaconing while we're still bound to A. The binding is not
+     * a life sentence: after consecutive foreign-ended re-scans, the
+     * receiver releases it and lets the live airframe claim the channel. */
+    RF_Receiver_StopScan();
+    fake_mode = 5;
+    fake_rssi_inst = -120;
+    foreign_lock_streak = 0;
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+
+    /* Rocket A: heard, bound */
+    inject_heartbeat(OUR_ROCKET_ID, 0, 9, 60);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+
+    /* A goes dark; B keeps beaconing. Each re-acquire parks on B's
+     * chatter, ends on a foreign packet, and keeps A's binding... */
+    for (uint8_t cycle = 1; cycle <= RF_FOREIGN_LIVELOCK_UNLOCK_AFTER; cycle++) {
+        run_for(RF_AUTO_RESCAN_SILENCE_MS + 1000, 5000);
+        (void)RF_Receiver_ScanUpdate();
+        CHECK(RF_Receiver_IsScanning() == 1);
+        CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+        CHECK(foreign_lock_streak == cycle - 1);
+
+        inject_gps_packet(36.20, -115.40, FOREIGN_ROCKET_ID);
+        run_for(250, 250);
+        CHECK(RF_Receiver_ScanUpdate() == 1);        /* locked on B */
+        CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+        CHECK(foreign_lock_streak == cycle);
+        CHECK(RF_Receiver_DataAvailable() == 0);     /* B's fix dropped */
+    }
+
+    /* ...until the breaker fires on the next re-acquire: the binding is
+     * released and B's stream becomes the legitimate one. */
+    run_for(RF_AUTO_RESCAN_SILENCE_MS + 1000, 5000);
+    (void)RF_Receiver_ScanUpdate();
+    CHECK(RF_Receiver_IsScanning() == 1);
+    CHECK(RF_Receiver_GetBoundRocketId() == RF_ROCKET_UNBOUND);
+
+    inject_gps_packet(36.20, -115.40, FOREIGN_ROCKET_ID);
+    run_for(250, 250);
+    CHECK(RF_Receiver_ScanUpdate() == 1);
+    CHECK(RF_Receiver_GetBoundRocketId() == FOREIGN_ROCKET_ID);
+    CHECK(foreign_lock_streak == 0);
+
+    GPS_Data pos;
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+    CHECK_NEAR(pos.latitude, 36.20, 1e-4);          /* B's fix lands */
+
+    /* Reset so later tests start on our rocket again */
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+}
+
+TEST(test_callsign_binding_and_foreign_filter)
+{
+    /* Callsigns name their airframe ("<CALL>-<id> CH<ch>"), so they play
+     * by the same rules as the ID byte: bind when unbound, drop when
+     * foreign - otherwise the neighbor's ID packet repaints our display. */
+    RF_Receiver_StopScan();
+    fake_mode = 5;
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    CHECK(RF_Receiver_GetBoundRocketId() == RF_ROCKET_UNBOUND);
+
+    GPS_Data scratch;
+    char heard[RF_PARSER_MAX_CALLSIGN_LEN] = "";
+
+    /* Unbound: our callsign both displays AND claims the channel */
+    inject_callsign("KE0MZS-3 CH0");
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+    CHECK(RF_Receiver_GetParsedData(&scratch, heard, sizeof(heard), NULL) == 1);
+    CHECK(strcmp(heard, "KE0MZS-3 CH0") == 0);
+
+    /* Bound: the neighbor's callsign is dropped, label and binding hold */
+    uint32_t drops0 = RF_Receiver_GetForeignDrops();
+    inject_callsign("KD0ABC-7 CH0");
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetForeignDrops() == drops0 + 1);
+    heard[0] = '\0';
+    CHECK(RF_Receiver_GetParsedData(&scratch, heard, sizeof(heard), NULL) == 1);
+    CHECK(strcmp(heard, "KE0MZS-3 CH0") == 0);
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+
+    /* Third-party ID packet with no parseable rocket id ("W1AW BULLETIN")
+     * passes, as before: it can't hurt position data, only repaint the
+     * label - pinned here so the trade-off is conscious. */
+    inject_callsign("W1AW BULLETIN");
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetForeignDrops() == drops0 + 1);   /* not a drop */
+    heard[0] = '\0';
+    CHECK(RF_Receiver_GetParsedData(&scratch, heard, sizeof(heard), NULL) == 1);
+    CHECK(strcmp(heard, "W1AW BULLETIN") == 0);
+
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);            /* unbind for later tests */
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);     /* rebind ours */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetGPSData(&scratch) == RF_OK);
+}
+
+TEST(test_receiver_cold_boot_mid_flight)
+{
+    /* Late to the pad: the rocket is already in the air, streaming fused
+     * packets every ~1.2 s on CH5, and the receiver cold-boots straight
+     * into the channel scan from another channel. Worst case is one sweep
+     * to CH5 (dwells are per-channel), then the dense stream locks it
+     * immediately and the binding builds itself. */
+    RF_Receiver_StopScan();
+    fake_mode = 5;
+    fake_rssi_inst = -120;
+
+    /* Cold-boot emulation (direct static pokes is the established pattern
+     * in this file; the real power cycle zeros these). */
+    bound_rocket_id = RF_ROCKET_UNBOUND;
+    last_identified_ms = 0;
+    last_any_packet_ms = 0;
+    foreign_lock_streak = 0;
+    rf_packet_ready = 0;                 /* a prior test may leave one pending */
+    RF_Parser_Reset();
+    (void)LoRa_SetChannel(0);
+
+    RF_Receiver_StartScan();
+    CHECK(RF_Receiver_IsScanning() == 1);
+
+    /* Simulate: step 250 ms; the beacon on CH5 transmits every 1.2 s, and
+     * a packet is only on the air for us when the tuner sits on CH5. */
+    uint32_t next_tx_ms = now_ms + 400;
+    uint8_t locked = 0;
+    uint32_t boot_ms = now_ms;
+    for (uint32_t i = 0; i < 45 * 1000 / 250 && !locked; i++) {   /* up to 45 s */
+        now_ms += 250;
+        Test_SetTick(now_ms);
+        if ((int32_t)(now_ms - next_tx_ms) >= 0) {
+            next_tx_ms = now_ms + 1200;
+            if (RF_Receiver_GetChannel() == 5) {
+                inject_fused_packet(39.80, -105.20, OUR_ROCKET_ID);
+            }
+        }
+        (void)RF_Receiver_DataAvailable();
+        locked = RF_Receiver_ScanUpdate();
+    }
+    CHECK(locked == 1);
+    CHECK(RF_Receiver_GetChannel() == 5);
+    CHECK(now_ms - boot_ms < 40000UL);          /* 5 quiet dwells + lock */
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+
+    GPS_Data pos;
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+    CHECK_NEAR(pos.latitude, 39.80, 1e-4);
+    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);
+}
+
+TEST(test_receiver_cold_boot_mid_walk)
+{
+    /* Battery swap while hiking to the landed rocket: beacon is in
+     * battery-save (one fused packet per 60 s on CH3), receiver cold-boots
+     * on CH0. Boot scan dwell (6.5 s/channel) does not line up with the
+     * 60 s TX slot, so lock is statistical - the guarantee being pinned is
+     * "locks within a few laps, position restored", not worst-case time. */
+    RF_Receiver_StopScan();
+    fake_mode = 5;
+    fake_rssi_inst = -120;
+
+    bound_rocket_id = RF_ROCKET_UNBOUND;
+    last_identified_ms = 0;
+    last_any_packet_ms = 0;
+    foreign_lock_streak = 0;
+    rf_packet_ready = 0;
+    RF_Parser_Reset();
+    (void)LoRa_SetChannel(0);
+
+    RF_Receiver_StartScan();
+
+    uint32_t last_tx_ms = now_ms;               /* beacon just fired pre-reboot */
+    uint8_t locked = 0;
+    uint32_t boot_ms = now_ms;
+    for (uint32_t i = 0; i < 240UL * 1000 / 250 && !locked; i++) {  /* up to 4 min */
+        now_ms += 250;
+        Test_SetTick(now_ms);
+        if (now_ms - last_tx_ms >= 60000UL) {
+            last_tx_ms = now_ms;
+            if (RF_Receiver_GetChannel() == 3) {
+                inject_fused_packet(39.962, -105.021, OUR_ROCKET_ID);  /* landing site */
+            }
+        }
+        (void)RF_Receiver_DataAvailable();
+        locked = RF_Receiver_ScanUpdate();
+    }
+    CHECK(locked == 1);
+    CHECK(RF_Receiver_GetChannel() == 3);
+    CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);
+    CHECK(now_ms - boot_ms < 240000UL);
+
+    GPS_Data pos;
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+    CHECK_NEAR(pos.latitude, 39.962, 1e-4);
+    CHECK_NEAR(pos.longitude, -105.021, 1e-4);
+}
+
 int main(void)
 {
     Test_SetTick(now_ms);
@@ -1380,9 +1595,13 @@ int main(void)
     run_test_auto_rescan_after_prolonged_silence();
     run_test_foreign_beacon_filter();
     run_test_foreign_chatter_does_not_suppress_auto_rescan();
+    run_test_sequential_rocket_livelock_breaker();
+    run_test_callsign_binding_and_foreign_filter();
     run_test_over_horizon_walk_reacquisition();
     run_test_fringe_link_crc_forensics();
     run_test_tick_wraparound_ages();
+    run_test_receiver_cold_boot_mid_flight();
+    run_test_receiver_cold_boot_mid_walk();
 
     return TEST_SUMMARY();
 }

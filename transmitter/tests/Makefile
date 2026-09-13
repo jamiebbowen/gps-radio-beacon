@@ -21,7 +21,7 @@ BUILD    := build
 BINS     := $(BUILD)/test_ekf $(BUILD)/test_nmea_fields $(BUILD)/test_beacon \
             $(BUILD)/test_nav $(BUILD)/test_gps $(BUILD)/test_radio \
             $(BUILD)/test_launch_detect $(BUILD)/test_uart \
-            $(BUILD)/test_flight_profile
+            $(BUILD)/test_flight_profile $(BUILD)/test_flight_cadence
 
 .PHONY: all test coverage clean
 
@@ -69,6 +69,10 @@ $(BUILD)/test_uart: test_uart.cpp ../firmware/uart.cpp stubs/Arduino.h | $(BUILD
 $(BUILD)/test_flight_profile: test_flight_profile.cpp stubs/Arduino.h \
                               stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
+
+# Pure state->timing policy; no Arduino deps, links the real module.
+$(BUILD)/test_flight_cadence: test_flight_cadence.cpp ../firmware/flight_cadence.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -o $@ $^ $(LDFLAGS)
 
 test: $(BINS)
 	@rc=0; for b in $(BINS); do \

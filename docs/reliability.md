@@ -115,9 +115,18 @@ reports the field but always returns 0.
 
 ### 3.4 Coordinate validation
 
-- Rejects (0,0) "Null Island"
-- Rejects any movement >100 km from the last accepted fix (jump detection)
-- Validates lat/lon ranges (+/- 90, +/- 180)
+Two different filters live on the receiver and are easy to confuse:
+
+- **Receiver's own GPS** (`gps_parser.c`, our walking position): rejects
+  (0,0) "Null Island" and any impossible jump vs. the previous local fix.
+- **Rocket telemetry** (`rf_parser.c`): validates lat/lon ranges only.
+  Telemetry jumps are handled by other layers instead - the TX-side EKF
+  innovation gate rejects bad fixes before they are transmitted, the
+  stale-fused override keeps pure dead-reckoning from overwriting a fresh
+  raw fix, and the airframe binding (§6b) drops a foreign beacon's
+  otherwise-valid coordinates. A large *legitimate* jump (rocket found
+  after an over-the-horizon walk) is exactly what must pass, so no
+  distance gate is applied to rocket packets.
 
 ### 3.5 User-visible warnings
 
@@ -292,8 +301,21 @@ tests (`transmitter/tests`, `receiver/tests`).
 - **Radio wedge recovery**: a sustained (3 s) not-RX chip mode triggers RX
   re-entry, escalating to a full chip re-init after 3 retries; recoveries
   are SD-logged (`RF wedge recovered`).
-- **Auto re-scan**: after contact, > 90 s of radio silence re-starts the
-  channel scan instead of sitting deaf on a dead channel.
+- **Auto re-scan**: after contact, > 5 minutes (5x the battery-save
+  cadence) without an own/bindable packet re-starts the channel scan
+  instead of sitting deaf on a dead channel; foreign chatter on the channel
+  does not count as contact.
+- **Airframe binding**: position/fused packets and heartbeats carry
+  `rocket_id`; the receiver binds to the first airframe ID heard on the
+  tuned channel and drops foreign IDs before the parser sees them, so a
+  co-channel beacon running this same firmware cannot hijack the nav
+  display. Callsigns (`"<CALL>-<id> CH<n>"`) bind and filter by the same
+  rule. Legacy V1 packets (no ID byte) always pass - protection is mutual:
+  reflash every beacon.
+- **Sequential-rocket livelock breaker**: after 3 consecutive auto
+  re-scans all ended by foreign traffic (yesterday's rocket is gone, a new
+  one is up on this channel), the binding is released once and the next ID
+  heard claims the channel.
 - **Scan dwell re-arm**: the dwell timer now starts when the chip actually
   enters RX on a channel, not when the hop is commanded - worst-case lock
   time dropped from ~61 s to ~14 s (verified in field logs).

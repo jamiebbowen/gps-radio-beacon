@@ -8,6 +8,7 @@
 #include "include/launch_detect.h"
 #include "include/beacon.h"
 #include "include/nav.h"
+#include "include/flight_cadence.h"
 
 /**
  * Beacon State Machine Documentation
@@ -51,12 +52,9 @@
  * - Launch detection: BNO085 IMU sustained-acceleration detection
  * - GPS configuration: Optimized NMEA sentences for minimal data
  */
-typedef enum {
-    BEACON_STATE_PRE_LAUNCH,      // Pre-launch: interval TX, full packets
-    BEACON_STATE_LAUNCH,          // Launch: continuous fast packets
-    BEACON_STATE_POST_LAUNCH,     // Post-launch: paced full + fast fused packets
-    BEACON_STATE_BATTERY_SAVE     // Extended recovery: interval TX, full packets
-} beacon_state_t;
+/* beacon_state_t and all state -> timing mappings live in
+ * include/flight_cadence.h so the host tests pin them (see
+ * transmitter/tests/test_flight_cadence.cpp). */
 
 // Beacon state machine variables
 #if BENCH_TEST_FORCE_LAUNCH
@@ -99,39 +97,12 @@ void timer_isr_handler(void) {
             Serial.println(F("s"));
         }
         
-        // Beacon state machine timing logic
+        // Beacon state machine timing logic - intervals owned by
+        // flight_cadence (0 = continuous, used by LAUNCH).
         uint32_t time_since_last_tx = system_time_seconds - last_transmission_time;
-        
-        switch (beacon_state) {
-            case BEACON_STATE_PRE_LAUNCH:
-                // Pre-launch - transmit every PRE_LAUNCH_INTERVAL_SEC
-                if (time_since_last_tx >= PRE_LAUNCH_INTERVAL_SEC) {
-                    Serial.print(F("[Timer] Setting beacon flag. Time since last TX: "));
-                    Serial.println(time_since_last_tx);
-                    transmit_beacon_flag = 1;
-                }
-                break;
-                
-            case BEACON_STATE_LAUNCH:
-                // Launch detected - continuous sending
-                transmit_beacon_flag = 1;
-                break;
-                
-            case BEACON_STATE_POST_LAUNCH:
-                // Post-launch recovery: paced raw-GPS packets (see
-                // POST_LAUNCH_PACKET_INTERVAL_SEC - the fused stream
-                // already carries high-rate updates)
-                if (time_since_last_tx >= POST_LAUNCH_PACKET_INTERVAL_SEC) {
-                    transmit_beacon_flag = 1;
-                }
-                break;
-                
-            case BEACON_STATE_BATTERY_SAVE:
-                // Battery save mode - transmit every BATTERY_SAVE_INTERVAL_SEC
-                if (time_since_last_tx >= BATTERY_SAVE_INTERVAL_SEC) {
-                    transmit_beacon_flag = 1;
-                }
-                break;
+        uint32_t interval_s = flight_cadence_beacon_interval_s(beacon_state);
+        if (interval_s == 0 || time_since_last_tx >= interval_s) {
+            transmit_beacon_flag = 1;
         }
     }
 }
@@ -294,7 +265,7 @@ void loop() {
     if (beacon_state == BEACON_STATE_LAUNCH) {
         // Check if we should transition to post-launch state
         uint32_t time_since_launch = launch_detect_get_time_since_launch(system_time_seconds);
-        if (time_since_launch >= POST_LAUNCH_DURATION_SEC) {
+        if (flight_cadence_should_leave_launch(time_since_launch)) {
             beacon_state = BEACON_STATE_POST_LAUNCH;
             post_launch_start_time = system_time_seconds;
             transmit_beacon_flag = 1;
@@ -308,7 +279,7 @@ void loop() {
     // Check for transition from POST_LAUNCH to BATTERY_SAVE
     if (beacon_state == BEACON_STATE_POST_LAUNCH) {
         uint32_t time_in_post_launch = system_time_seconds - post_launch_start_time;
-        if (time_in_post_launch >= POST_LAUNCH_RECOVERY_DURATION_SEC) {
+        if (flight_cadence_should_leave_post_launch(time_in_post_launch)) {
             beacon_state = BEACON_STATE_BATTERY_SAVE;
             transmit_beacon_flag = 1;
             transmit_fast_flag = 0;
@@ -346,7 +317,7 @@ void loop() {
         }
     }
 
-    if (system_time_seconds - time_since_last_callsign_tx >= CALLSIGN_TRANSMIT_INTERVAL_SEC && !transmit_fast_flag) {
+    if (system_time_seconds - time_since_last_callsign_tx >= flight_cadence_callsign_interval_s() && !transmit_fast_flag) {
         beacon_transmit_callsign(transmit_fast_flag);
         time_since_last_callsign_tx = system_time_seconds;
     }
@@ -358,10 +329,7 @@ void loop() {
      * Kept separate from the GPS-packet TX path so both streams coexist. */
     static uint32_t last_fused_tx_ms = 0;
     uint32_t now_ms = millis();
-    bool active_phase = (beacon_state == BEACON_STATE_LAUNCH)
-                     || (beacon_state == BEACON_STATE_POST_LAUNCH);
-    uint32_t fused_interval_ms = active_phase ? FUSED_TX_INTERVAL_MS
-                                              : FUSED_TX_INTERVAL_IDLE_MS;
+    uint32_t fused_interval_ms = flight_cadence_fused_interval_ms(beacon_state);
     if (nav_is_valid() && (now_ms - last_fused_tx_ms >= fused_interval_ms)) {
         beacon_transmit_fused_data(system_time_seconds, transmit_fast_flag);
         last_fused_tx_ms = now_ms;

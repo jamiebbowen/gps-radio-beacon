@@ -56,7 +56,7 @@ Both transmitter and receiver use identical settings:
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | Frequency | 433.0 MHz | ISM band (8-channel plan, 433.00-434.75 MHz) |
-| Bandwidth | 62.5 kHz | Narrow: +3 dB sensitivity, ~0.82 s/fused packet (19 B), LDRO on |
+| Bandwidth | 62.5 kHz | Narrow: +3 dB sensitivity, ~1.0 s/fused packet (20 B), LDRO on |
 | Spreading Factor | 10 | SF10 (range over airtime) |
 | Coding Rate | 4/8 | Forward error correction (+1 dB class margin, +18% airtime) |
 | Sync Word | 0x12 | Private network; RX programs it explicitly (reg 0x0740 = `14 24`) |
@@ -120,7 +120,7 @@ Before deploying, verify:
 - Link Budget: ~150 dB on paper; in practice capped by the RX ambient floor
 
 ### Data Rate
-- SF10/CR4-8 @ 62.5kHz: ~0.49 kbps effective (fused packet ~0.99 s airtime)
+- SF10/CR4-8 @ 62.5kHz: ~0.49 kbps effective (20-byte fused packet ~1.0 s airtime)
 - Flight phase streams fused updates every 1.2 s (FUSED_TX_INTERVAL_MS);
   the raw GPS backup stream interleaves continuously
 - Much better edge-of-range behavior than previous 300 baud implementation
