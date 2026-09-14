@@ -669,6 +669,61 @@ TEST(test_write_recovers_lost_mount)
     CHECK(strstr(big, ",13.0,") != NULL);
 }
 
+TEST(test_dirty_card_boot_preserves_history)
+{
+    /* Launch-day case: card is NOT freshly formatted - it already carries
+     * several past sessions plus persistence files. Boot must not wipe or
+     * renumber anything; the new session must land in max_seq+1. */
+    wipe_card();
+    Test_SetTick(1000);
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+
+    /* Simulate three prior boot sessions by hand-rolling the files */
+    lfs_file_t f;
+    for (int i = 1; i <= 3; i++) {
+        char name[16], body[32];
+        snprintf(name, sizeof(name), "L%04d.TXT", i);
+        snprintf(body, sizeof(body), "session-%d-payload\n", i);
+        CHECK(lfs_file_opencfg(&lfs, &f, name, LFS_O_WRONLY | LFS_O_CREAT,
+                               &adhoc_file_cfg) == 0);
+        lfs_file_write(&lfs, &f, body, strlen(body));
+        lfs_file_close(&lfs, &f);
+    }
+    /* and the persistence files a reused card already holds */
+    CHECK(lfs_file_opencfg(&lfs, &f, "QLOCK.BIN", LFS_O_WRONLY | LFS_O_CREAT,
+                           &adhoc_file_cfg) == 0);
+    lfs_file_write(&lfs, &f, "\x02\x00", 2);
+    lfs_file_close(&lfs, &f);
+    CHECK(lfs_file_opencfg(&lfs, &f, "BEACON.TXT", LFS_O_WRONLY | LFS_O_CREAT,
+                           &adhoc_file_cfg) == 0);
+    lfs_file_write(&lfs, &f, "{\"callsign\":\"KE0MZS\"}", 21);
+    lfs_file_close(&lfs, &f);
+
+    /* Cycle without reformat - dirty card boots clean-init */
+    SD_Card_DeInit();
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+
+    /* New log goes to L0004, not a renumber or a reuse */
+    CHECK(SD_Card_EnsureLogFile() == SD_CARD_OK);
+    CHECK(strcmp(sd_info.current_log_file, "L0004.TXT") == 0);
+
+    /* Old content must be byte-identical after the new session starts */
+    SD_Card_Flush();
+    char buf[512];
+    char small[64];
+    CHECK(read_file("L0001.TXT", small, sizeof(small)) > 11);
+    CHECK(strstr(small, "session-1-payload") != NULL);
+    CHECK(read_file("QLOCK.BIN", small, sizeof(small)) >= 1);
+    CHECK(read_file("BEACON.TXT", small, sizeof(small)) >= 10);
+
+    /* The new log is open and writable */
+    CHECK(SD_Card_LogEvent("dirty-card boot event") == SD_CARD_OK);
+    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    int nr = read_file("L0004.TXT", buf, sizeof(buf));
+    CHECK(nr > 10);
+    CHECK(strstr(buf, "dirty-card boot event") != NULL);
+}
+
 TEST(test_io_error_streak_steps_bus_down)
 {
     /* sd_card.c #include'd: drive the streak helper directly. Three write
@@ -721,6 +776,7 @@ int main(void)
     run_test_self_test_pass_and_write_failure();
     run_test_rotation_launchflag_and_write_failure();
     run_test_write_recovers_lost_mount();
+    run_test_dirty_card_boot_preserves_history();
     run_test_io_error_streak_steps_bus_down();
     run_test_timestamp_format();
 
