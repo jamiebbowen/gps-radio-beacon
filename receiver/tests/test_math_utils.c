@@ -30,6 +30,26 @@ TEST(test_normalize_angle) {
 }
 
 /* ------------------------------------------------------------------ */
+/* saved_beacon_implausibly_far (cross-state boot safety)              */
+/* ------------------------------------------------------------------ */
+
+TEST(test_saved_beacon_field_distance_ok) {
+    /* Typical recovery walk: last saved fix is a few km away */
+    CHECK(saved_beacon_implausibly_far(39.89f, -105.11f, 39.90f, -105.10f) == 0);
+}
+
+TEST(test_saved_beacon_deployment_distance_ok) {
+    /* Rocky Mountain-range cross: ~25 km - still within bounds */
+    CHECK(saved_beacon_implausibly_far(39.89f, -105.11f, 39.65f, -104.35f) == 0);
+}
+
+TEST(test_saved_beacon_cross_state_rejected) {
+    /* Denver saved, receiver powered up in Reno area: ~1200 km apart.
+     * Main-loop must discard the boot-restored beacon point. */
+    CHECK(saved_beacon_implausibly_far(39.89f, -105.11f, 39.50f, -119.80f) == 1);
+}
+
+/* ------------------------------------------------------------------ */
 /* calculate_distance (haversine)                                      */
 /* ------------------------------------------------------------------ */
 
@@ -163,6 +183,9 @@ TEST(test_bearing_across_antimeridian) {
 /* ------------------------------------------------------------------ */
 
 int main(void) {
+    run_test_saved_beacon_field_distance_ok();
+    run_test_saved_beacon_deployment_distance_ok();
+    run_test_saved_beacon_cross_state_rejected();
     run_test_normalize_angle();
     run_test_distance_zero_for_same_point();
     run_test_distance_one_degree_latitude();

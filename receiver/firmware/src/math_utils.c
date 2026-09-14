@@ -14,6 +14,13 @@
  * @param lon2 Longitude of second point in decimal degrees
  * @return Distance in meters
  */
+int saved_beacon_implausibly_far(float saved_lat, float saved_lon,
+                                 float local_lat, float local_lon)
+{
+  return calculate_distance(saved_lat, saved_lon, local_lat, local_lon)
+         > SAVED_BEACON_MAX_PLAUSIBLE_M;
+}
+
 float calculate_distance(float lat1, float lon1, float lat2, float lon2)
 {
   /* Convert degrees to radians */

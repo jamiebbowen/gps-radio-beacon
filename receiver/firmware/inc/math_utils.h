@@ -42,6 +42,18 @@ float calculate_bearing(float lat1, float lon1, float lat2, float lon2);
  */
 float normalize_angle(float angle);
 
+/**
+ * @brief Predicate: is a restored last-beacon position implausibly far
+ *        from the operator's own local fix? A rocket flight moves the
+ *        beacon a few km at most; > ~100 km means the SD-card restore was
+ *        from a different trip/state (cross-state launch). Used once at
+ *        first local fix after a last-beacon bootload.
+ * @return 1 if distance > SAVED_BEACON_MAX_PLAUSIBLE_M
+ */
+#define SAVED_BEACON_MAX_PLAUSIBLE_M  100000.0f
+int saved_beacon_implausibly_far(float saved_lat, float saved_lon,
+                                 float local_lat, float local_lon);
+
 #ifdef __cplusplus
 }
 #endif

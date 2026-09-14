@@ -1031,6 +1031,29 @@ int main(void)
          * the operator's own GPS fixes. Replaces the manual DECLIN.TXT
          * step unless the override file was present at boot - explicit
          * beats inferred (cross-state launches: tested in CO, fly in NV). */
+        /* Position mismatch: the receiver moved hundreds of miles since the
+         * saved beacon fix (cross-state launch). A rocket flight can't move
+         * the beacon that far, so the saved point is stale-then-wrong.
+         * Discard it - arrow would otherwise aim at another state until
+         * fresh RF/pad traffic lands. */
+        if (has_last_good_local_gps && has_last_good_remote_gps) {
+          static uint8_t cross_checked = 0;
+          if (!cross_checked) {
+            cross_checked = 1;
+            if (saved_beacon_implausibly_far(last_good_remote_gps.latitude,
+                                             last_good_remote_gps.longitude,
+                                             gps_data.latitude,
+                                             gps_data.longitude)) {
+              last_good_remote_gps.fix = 0;
+              has_valid_remote_gps     = 0;
+              has_last_good_remote_gps = 0;
+              remote_gps_data.fix      = 0;
+              if (sd_card_ok)
+                SD_Card_LogEvent("Last-beacon self-loc far from beacon - discarded");
+            }
+          }
+        }
+
         if (!declin_file_overrode && Compass_UpdateLocation(gps_data.latitude,
                                                             gps_data.longitude) == COMPASS_OK
             && sd_card_ok) {
