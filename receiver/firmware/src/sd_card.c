@@ -571,6 +571,26 @@ uint32_t SD_Card_TakeSyncCount(void)
     return n;
 }
 
+SD_Card_Status SD_Card_LogBase(const GPS_Data *base_gps)
+{
+    if (!sd_initialized || base_gps == NULL) return SD_CARD_ERROR;
+
+    /* Walk forensics: the operator's own position, logged on a slow timer
+     * so the recovery route survives in the record INCLUDING the over-the-
+     * -horizon blackout stretches where no NAV rows can exist. Follows the
+     * same lazy-file policy as events: no file until a real beacon packet
+     * (or scan lock / heartbeat) has established the session; a receiver
+     * carried around with no beacon in the air must leave no artifacts. */
+    if (!log_file_open) return SD_CARD_ERROR;
+
+    char ts[32];
+    SD_Card_GetTimestamp(ts, sizeof(ts));
+    snprintf(log_buffer, sizeof(log_buffer), "%s,BASE,%.6f,%.6f,%.1f,%d,%.1f\n",
+             ts, base_gps->latitude, base_gps->longitude,
+             base_gps->altitude, base_gps->satellites, base_gps->hdop);
+    return SD_Card_WriteLogEntry(log_buffer);
+}
+
 SD_Card_Status SD_Card_Flush(void)
 {
     if (!sd_initialized) return SD_CARD_ERROR;

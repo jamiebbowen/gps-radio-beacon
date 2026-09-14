@@ -312,6 +312,11 @@ TEST(test_all_log_row_formats)
     CHECK(SD_Card_LogNavigation(&fused, &base, 2.5f, 180.0f, 90.0f,
                                 12.0f, -4.0f, -88, 8) == SD_CARD_OK);
 
+    /* BASE (operator-position walk forensics) row */
+    base.hdop = 0.9f;
+    CHECK(SD_Card_LogBase(&base) == SD_CARD_OK);
+    CHECK(SD_Card_LogBase(NULL) == SD_CARD_ERROR);
+
     char big[4096];
     CHECK(SD_Card_Flush() == SD_CARD_OK);
     CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
@@ -323,6 +328,8 @@ TEST(test_all_log_row_formats)
     CHECK(strstr(big, "ERROR,test error") != NULL);
     CHECK(strstr(big, "NAV,FUS,39.9") != NULL);
     CHECK(strstr(big, "12.50,-3.25,40.00") != NULL);      /* velocities */
+    CHECK(strstr(big, ",BASE,") != NULL);
+    CHECK(strstr(big, "1650.0,0,0.9") != NULL);   /* alt, sats, hdop */
 }
 
 TEST(test_apis_reject_when_uninitialized)

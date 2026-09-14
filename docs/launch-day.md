@@ -71,3 +71,8 @@ bench checklist (`bench-checklist.md`) passed this weekend.
 12. Power the beacon down, note `TX reset` events and `RF wedge` counts in
     `tools/log_summary.py <card>` output; anything non-OK there is a
     hardware report card, not noise.
+13. Your own walk is logged too: the receiver writes its own GPS as BASE
+    rows every 30 s (including through beacon blackouts). `analyze_flight.py
+    --kml` now overlays the operator track on the flight replay, so you can
+    see where contact was lost and regained relative to terrain - that is
+    the raw material for tuning antenna placement and the re-acquire dwell.

@@ -35,6 +35,8 @@ SYNTHETIC_LOG = """Timestamp,Type,Data
 900.000,EVENT,RF LOST (>5min silence)
 1500.000,EVENT,RF foreign pkts=1 dropped CH0 rssi=-78dBm snr=4
 1560.000,EVENT,RF foreign pkts=5 dropped CH0 rssi=-77dBm snr=4
+1800.000,BASE,39.890123,-105.115100,1652.0,8,1.1
+1830.000,BASE,39.890200,-105.115050,1652.5,8,1.0
 2100.000,EVENT,RF bound rocket_id=7 CH0 433.00MHz
 """.strip() + "\n"
 
@@ -54,9 +56,12 @@ def run_report(lines: str) -> str:
 
 
 FAILURES = []
+CHECKED = 0
 
 
 def expect(needle, out):
+    global CHECKED
+    CHECKED += 1
     if needle not in out:
         FAILURES.append(f"missing report line: {needle!r}")
 
@@ -78,6 +83,7 @@ expect("RF bound rocket_id=7", out)
 expect("FOREIGN TRAFFIC: 25:00..26:00", out)              # foreign drop window
 expect("GPS: 1 rows", out)                                # NAV row accounting
 expect("RSSI [-85..-85]", out)
+expect("Operator track: 2 fixes, 30:00..30:30", out)      # BASE row accounting
 
 # The empty-section "OK" lines must NOT claim OK when content exists
 boot_idx = out.index("== Boot / reset ==")
@@ -92,5 +98,5 @@ if FAILURES:
     print(out)
     sys.exit(1)
 
-print(f"log_summary self-test: all {10} expectations passed")
+print(f"log_summary self-test: all {CHECKED} expectations passed")
 sys.exit(0)

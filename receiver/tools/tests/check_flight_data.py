@@ -29,7 +29,7 @@ def main():
     for path in logs:
         with open(path, newline="") as f:
             nav_lines = sum(1 for line in f if ",NAV," in line)
-        rows = load_nav_rows(path)
+        rows, _base = load_nav_rows(path)
         if len(rows) != nav_lines:
             print(f"FAIL: {path}: {nav_lines} NAV lines in file but parser "
                   f"returned {len(rows)} rows - log format drift?")

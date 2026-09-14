@@ -51,35 +51,52 @@ def haversine_m(lat1, lon1, lat2, lon2):
 
 
 def load_nav_rows(path):
-    """Parse the log file, returning a list of NAV row dicts sorted by time.
+    """Parse the log file, returning (NAV rows, BASE rows), each time-sorted.
 
     Columns are resolved by header name so the parser works with both the
     current 20-column format (with PktSrc/velocity/SNR columns) and the
     legacy 12-column format. The old positional parser broke silently when
     the PktSrc column was inserted at index 2: float("GPS") raised and every
     row was skipped.
+
+    BASE rows (receiver's own position, slow-timer logged) are the operator
+    track; they continue through beacon blackouts where NAV rows can't
+    exist.
     """
-    rows = []
+    rows, base = [], []
     with open(path, newline="") as f:
         for r in csv.DictReader(f):
-            if r.get("Type") != "NAV":
-                continue
-            try:
-                rows.append({
-                    "t":        float(r["Timestamp"]),
-                    "lat":      float(r["BeaconLat"]),
-                    "lon":      float(r["BeaconLon"]),
-                    "alt":      float(r["BeaconAlt_m"]),
-                    "sats":     int(r["BeaconSats"]),
-                    "base_lat": float(r["BaseLat"]),
-                    "base_lon": float(r["BaseLon"]),
-                    "dist_km":  float(r["Distance_km"]),
-                    "rssi":     int(r["RSSI_dBm"]),
-                })
-            except (KeyError, TypeError, ValueError):
-                continue
+            t = r.get("Type")
+            if t == "NAV":
+                try:
+                    rows.append({
+                        "t":        float(r["Timestamp"]),
+                        "lat":      float(r["BeaconLat"]),
+                        "lon":      float(r["BeaconLon"]),
+                        "alt":      float(r["BeaconAlt_m"]),
+                        "sats":     int(r["BeaconSats"]),
+                        "base_lat": float(r["BaseLat"]),
+                        "base_lon": float(r["BaseLon"]),
+                        "dist_km":  float(r["Distance_km"]),
+                        "rssi":     int(r["RSSI_dBm"]),
+                    })
+                except (KeyError, TypeError, ValueError):
+                    continue
+            elif t == "BASE":
+                try:
+                    base.append({
+                        "t":   float(r["Timestamp"]),
+                        # BASE rows are positional after the fixed prefix:
+                        # <ts>,BASE,lat,lon,alt,sats,hdop
+                        "lat": float(list(r.values())[2]),
+                        "lon": float(list(r.values())[3]),
+                        "alt": float(list(r.values())[4]),
+                    })
+                except (KeyError, TypeError, ValueError):
+                    continue
     rows.sort(key=lambda r: r["t"])
-    return rows
+    base.sort(key=lambda r: r["t"])
+    return rows, base
 
 
 def central_diff(rows, key):
@@ -131,7 +148,7 @@ def predict_max_range_m(anchor_rssi_dbm, anchor_range_m, sensitivity_dbm):
     return anchor_range_m * (10 ** (margin_db / 20.0))
 
 
-def write_kml(rows, launch_idx, apogee_idx, out_path, base_time=None):
+def write_kml(rows, launch_idx, apogee_idx, out_path, op_rows=None, base_time=None):
     """Emit a Google-Earth KML with a time-animated 3-D flight replay.
 
     Produces three things inside the document:
@@ -182,6 +199,38 @@ def write_kml(rows, launch_idx, apogee_idx, out_path, base_time=None):
     flight_duration = rows[-1]["t"] - pad["t"]
     apogee_agl = apogee["alt"] - rows[0]["alt"]
 
+    # Operator walk track (BASE rows): lets the replay overlay the recovery
+    # route on the flight - including the over-the-horizon stretches where
+    # no NAV packets existed. Static line + time-animated hiker placemark.
+    op_block = ""
+    if op_rows:
+        op_coord_str = " ".join(
+            f"{r['lon']:.7f},{r['lat']:.7f},{r['alt']:.1f}" for r in op_rows)
+        op_when = "\n        ".join(
+            f"<when>{iso(r['t'])}</when>" for r in op_rows)
+        op_coords = "\n        ".join(
+            f"<gx:coord>{r['lon']:.7f} {r['lat']:.7f} {r['alt']:.1f}</gx:coord>"
+            for r in op_rows)
+        op_block = f"""
+  <Placemark>
+    <name>Operator Track</name>
+    <styleUrl>#operatorTrack</styleUrl>
+    <LineString><tessellate>1</tessellate>
+      <coordinates>{op_coord_str}</coordinates>
+    </LineString>
+  </Placemark>
+
+  <Placemark>
+    <name>Operator (animated)</name>
+    <styleUrl>#operatorTrack</styleUrl>
+    <gx:Track>
+      <altitudeMode>absolute</altitudeMode>
+        {op_when}
+        {op_coords}
+    </gx:Track>
+  </Placemark>
+"""
+
     doc = f"""<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">
 <Document>
@@ -206,6 +255,14 @@ def write_kml(rows, launch_idx, apogee_idx, out_path, base_time=None):
     <LineStyle><color>ff00ffff</color><width>4</width></LineStyle>
   </Style>
 
+  <Style id="operatorTrack">
+    <IconStyle>
+      <color>ff00ff00</color>
+      <Icon><href>http://maps.google.com/mapfiles/kml/shapes/hiker.png</href></Icon>
+    </IconStyle>
+    <LineStyle><color>ff00ff00</color><width>3</width></LineStyle>
+  </Style>
+
   <Placemark>
     <name>Flight Path</name>
     <styleUrl>#trajectory</styleUrl>
@@ -227,6 +284,8 @@ def write_kml(rows, launch_idx, apogee_idx, out_path, base_time=None):
         {coord_lines}
     </gx:Track>
   </Placemark>
+
+  {op_block}
 
   {pm("Launch Pad", pad,
       "http://maps.google.com/mapfiles/kml/paddle/grn-blank.png",
@@ -480,7 +539,7 @@ def write_mp4(rows, launch_idx, apogee_idx, out_path,
 def analyze(log_path, sensitivity_dbm=DEFAULT_SENSITIVITY_DBM,
             kml_path=None, mp4_path=None, mp4_fps=30,
             mp4_speedup=1.0, mp4_duration=None, mp4_pre_launch_s=2.0):
-    rows = load_nav_rows(log_path)
+    rows, op_rows = load_nav_rows(log_path)
     if len(rows) < 5:
         print(f"Not enough NAV rows in {log_path} ({len(rows)} found)")
         return 1
@@ -633,7 +692,7 @@ def analyze(log_path, sensitivity_dbm=DEFAULT_SENSITIVITY_DBM,
                   f"alt={row['alt']:.0f}m  range={row['r_pad_m']:.0f}m")
 
     if kml_path:
-        write_kml(rows, launch_idx, apogee_idx, kml_path)
+        write_kml(rows, launch_idx, apogee_idx, kml_path, op_rows=op_rows)
         print()
         print(f"KML written: {kml_path}")
         print("  Open in Google Earth Pro; use the time slider to replay the")

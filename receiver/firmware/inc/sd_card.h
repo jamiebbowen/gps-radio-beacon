@@ -167,6 +167,13 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
                                      float roll_deg, int16_t rssi, int8_t snr);
 
 /**
+ * @brief Log the receiver's own position (BASE row) - walk forensics that
+ *        also cover beacon-blackout stretches (no NAV rows there).
+ * @retval SD_CARD_ERROR if uninitialized/no open session file
+ */
+SD_Card_Status SD_Card_LogBase(const GPS_Data *base_gps);
+
+/**
  * @brief Save last known beacon location to BEACON.TXT for persistence across power cycles
  * @param lat Beacon latitude in decimal degrees
  * @param lon Beacon longitude in decimal degrees

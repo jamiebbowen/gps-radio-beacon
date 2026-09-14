@@ -1022,6 +1022,19 @@ int main(void)
       }
       prev_valid_local = has_valid_local_gps;
     }
+
+    /* Walk forensics: BASE rows every 30 s, including (especially) through
+     * beacon blackouts where no NAV rows exist - after the flight you can
+     * overlay the recovery route with the radio dead zones and see exactly
+     * where contact was lost and regained. */
+    if (has_valid_local_gps) {
+      static uint32_t last_base_row_ms = 0;
+      uint32_t now_base = HAL_GetTick();
+      if (now_base - last_base_row_ms >= 30000) {
+        last_base_row_ms = now_base;
+        (void)SD_Card_LogBase(&local_gps_data);
+      }
+    }
     
     /* If we don't have valid current GPS data but have last known good data,
        use that for navigation calculations */

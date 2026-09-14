@@ -64,6 +64,7 @@ class Session:
         self.hb_states = {}         # gps state -> count
         self.hb_max_rst = 0
         self.hb_times = []          # t of each heartbeat
+        self.base_times = []        # t of each BASE (operator position) row
         self.nav = {"GPS": [], "FUS": []}   # (t, rssi, snr, flags_hex)
         self.nav_gaps = {"GPS": [], "FUS": []}
 
@@ -133,6 +134,8 @@ def parse_file(path, sess):
                     sess.add_event(t, msg)
             elif kind == "ERROR":
                 sess.errors.append((t, msg))
+            elif kind == "BASE":
+                sess.base_times.append(t)
             elif kind == "HEARTBEAT":
                 m = HEARTBEAT_RE.search("HEARTBEAT " + msg)
                 if m:
@@ -219,6 +222,11 @@ def report(sess, label):
             f"{src}: {len(rows)} rows, {gap_txt}, "
             f"RSSI [{min(rssis)}..{max(rssis)}] dBm, "
             f"SNR [{min(snrs)}..{max(snrs)}] dB")
+    if sess.base_times:
+        telem.append(
+            f"Operator track: {len(sess.base_times)} fixes, "
+            f"{fmt_s(sess.base_times[0])}..{fmt_s(sess.base_times[-1])} "
+            f"(BASE rows cover the beacon-blackout walk too)")
         if src == "FUS":
             dr = sum(1 for _, _, _, fl in rows
                      if fl.strip().upper().endswith("D"))

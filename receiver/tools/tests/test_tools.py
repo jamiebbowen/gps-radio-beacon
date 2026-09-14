@@ -77,6 +77,46 @@ def write_log(text: str, directory: Path, name="L0000001.TXT") -> Path:
 
 # ── analyze_flight.py ─────────────────────────────────────────────────
 
+class TestBaseTrack(unittest.TestCase):
+    def test_base_rows_parse_and_render_into_kml(self):
+        """BASE rows (operator position, logged on a slow timer even through
+        beacon blackouts) must appear in the KML as a second animated
+        track, so a live test overlays rocket + recovery walk."""
+        with tempfile.TemporaryDirectory() as td:
+            log = write_log(synthetic_flight() +
+                "1.5,BASE,45.0000,-75.0000,100.0,8,1.1\n"
+                "31.5,BASE,45.0010,-75.0005,101.0,8,1.0\n", Path(td))
+            rows, base = af.load_nav_rows(log)
+            self.assertEqual(len(base), 2)
+            self.assertEqual(base[0]["t"], 1.5)
+            self.assertAlmostEqual(base[1]["lat"], 45.0010, places=6)
+
+            launch_idx = af.find_launch_idx(rows, rows[0]["alt"])
+            apogee_idx = max(range(len(rows)), key=lambda i: rows[i]["alt"])
+            out = Path(td) / "flight.kml"
+            af.write_kml(rows, launch_idx, apogee_idx, out, op_rows=base,
+                         base_time=af.dt.datetime(2026, 8, 1, 12, 0, 0))
+            text = out.read_text()
+            ET.parse(out)  # raises if malformed
+            self.assertIn("Operator Track", text)
+            self.assertIn("Operator (animated)", text)
+            # One pair of <when>s per BASE point (plus the rocket's rows)
+            self.assertEqual(text.count("<when>"), len(rows) + len(base))
+
+    def test_kml_without_base_rows_omits_operator_track(self):
+        with tempfile.TemporaryDirectory() as td:
+            log = write_log(synthetic_flight(), Path(td))
+            rows, base = af.load_nav_rows(log)
+            self.assertEqual(base, [])
+            launch_idx = af.find_launch_idx(rows, rows[0]["alt"])
+            apogee_idx = max(range(len(rows)), key=lambda i: rows[i]["alt"])
+            out = Path(td) / "flight.kml"
+            af.write_kml(rows, launch_idx, apogee_idx, out, op_rows=base)
+            text = out.read_text()
+            ET.parse(out)
+            self.assertNotIn("Operator Track", text)
+
+
 class TestHaversine(unittest.TestCase):
     def test_zero_distance(self):
         self.assertAlmostEqual(af.haversine_m(45, -75, 45, -75), 0.0)
@@ -102,7 +142,7 @@ class TestLoadNavRows(unittest.TestCase):
                 "2.0,STAT,L,hello",           # non-NAV row: skipped
                 "3.0,NAV,L,not-a-number,x,y,z,w,v,u,1.0,0,0,0,0,0,0,-90,8",  # malformed
             ])
-            rows = af.load_nav_rows(write_log(body + "\n", Path(td)))
+            rows, _ = af.load_nav_rows(write_log(body + "\n", Path(td)))
             self.assertEqual([r["t"] for r in rows], [1.0, 4.0])
             self.assertEqual(rows[0]["rssi"], -60)
 
@@ -111,7 +151,7 @@ class TestLoadNavRows(unittest.TestCase):
                          "BeaconSats,BaseLat,BaseLon,Distance_km,RSSI_dBm")
         legacy_row = "7.5,NAV,45.0,-75.0,100.0,8,45.0,-75.0,0.0,-70"
         with tempfile.TemporaryDirectory() as td:
-            rows = af.load_nav_rows(write_log(legacy_header + "\n" + legacy_row + "\n", Path(td)))
+            rows, _ = af.load_nav_rows(write_log(legacy_header + "\n" + legacy_row + "\n", Path(td)))
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["t"], 7.5)
             self.assertEqual(rows[0]["sats"], 8)
@@ -162,7 +202,7 @@ class TestKml(unittest.TestCase):
     def test_kml_is_well_formed_with_track_and_placemarks(self):
         with tempfile.TemporaryDirectory() as td:
             log = write_log(synthetic_flight(), Path(td))
-            rows = af.load_nav_rows(log)
+            rows, _base = af.load_nav_rows(log)
             launch_idx = af.find_launch_idx(rows, rows[0]["alt"])
             apogee_idx = max(range(len(rows)), key=lambda i: rows[i]["alt"])
             out = Path(td) / "flight.kml"
