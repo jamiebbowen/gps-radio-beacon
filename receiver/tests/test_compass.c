@@ -316,6 +316,25 @@ TEST(test_update_heading_offset_and_wrap)
     Compass_SetHeadingOffset(98.5f);   /* restore */
 }
 
+TEST(test_set_declination_overrides_site)
+{
+    fresh_init();
+    /* Boot default: Denver declination 8.5 E + mounting 90 = 98.5 total */
+    CHECK_NEAR(heading_offset, 98.5, 0.01);
+
+    /* New site via SD DECLIN.TXT path: e.g. Nevada 11.9 E -> total 101.9 */
+    Compass_SetDeclination(11.9f);
+    CHECK_NEAR(heading_offset, 101.9, 0.01);
+
+    Compass_Data d = {0};
+    set_euler(300.0f, -45.0f, 22.5f);
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+    CHECK_NEAR(d.heading, 41.9, 0.15);   /* 300 + 101.9 -> wraps */
+
+    Compass_SetDeclination(8.5f);        /* restore Denver */
+    CHECK_NEAR(heading_offset, 98.5, 0.01);
+}
+
 TEST(test_update_raw_sensor_burst)
 {
     fresh_init();
@@ -999,6 +1018,7 @@ int main(void)
     run_test_init_wrong_chip_id();
     run_test_init_survives_nak_writes_and_bad_status();
     run_test_update_heading_offset_and_wrap();
+    run_test_set_declination_overrides_site();
     run_test_update_raw_sensor_burst();
     run_test_heading_valid_via_restored_cal();
     run_test_heading_valid_latch();

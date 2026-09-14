@@ -724,6 +724,49 @@ TEST(test_dirty_card_boot_preserves_history)
     CHECK(strstr(buf, "dirty-card boot event") != NULL);
 }
 
+TEST(test_declination_loader)
+{
+    wipe_card();
+    Test_SetTick(1000);
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+
+    /* Absent file: default survives */
+    float deg = -999.0f;
+    CHECK(SD_Card_LoadDeclination(&deg) == SD_CARD_ERROR);
+    CHECK(deg == -999.0f);
+
+    /* Valid site override (e.g., mid-Nevada) */
+    lfs_file_t f;
+    CHECK(lfs_file_opencfg(&lfs, &f, "DECLIN.TXT", LFS_O_WRONLY | LFS_O_CREAT,
+                           &adhoc_file_cfg) == 0);
+    lfs_file_write(&lfs, &f, "11.9\n", 5);
+    lfs_file_close(&lfs, &f);
+    CHECK(SD_Card_LoadDeclination(&deg) == SD_CARD_OK);
+    CHECK(deg > 11.89f && deg < 11.91f);
+
+    /* Garbage content must not override */
+    wipe_card();
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+    CHECK(lfs_file_opencfg(&lfs, &f, "DECLIN.TXT", LFS_O_WRONLY | LFS_O_CREAT,
+                           &adhoc_file_cfg) == 0);
+    lfs_file_write(&lfs, &f, "garbage", 7);
+    lfs_file_close(&lfs, &f);
+    deg = -999.0f;
+    CHECK(SD_Card_LoadDeclination(&deg) == SD_CARD_ERROR);
+    CHECK(deg == -999.0f);
+
+    /* Out of physical range is rejected too */
+    wipe_card();
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+    CHECK(lfs_file_opencfg(&lfs, &f, "DECLIN.TXT", LFS_O_WRONLY | LFS_O_CREAT,
+                           &adhoc_file_cfg) == 0);
+    lfs_file_write(&lfs, &f, "95.0", 4);
+    lfs_file_close(&lfs, &f);
+    deg = -999.0f;
+    CHECK(SD_Card_LoadDeclination(&deg) == SD_CARD_ERROR);
+    CHECK(deg == -999.0f);
+}
+
 TEST(test_io_error_streak_steps_bus_down)
 {
     /* sd_card.c #include'd: drive the streak helper directly. Three write
@@ -777,6 +820,7 @@ int main(void)
     run_test_rotation_launchflag_and_write_failure();
     run_test_write_recovers_lost_mount();
     run_test_dirty_card_boot_preserves_history();
+    run_test_declination_loader();
     run_test_io_error_streak_steps_bus_down();
     run_test_timestamp_format();
 

@@ -892,6 +892,33 @@ SD_Card_Status SD_Card_LoadQuatLock(uint8_t *conv)
 }
 
 /* ========================================================================= */
+/* Site configuration                                                        */
+/* ========================================================================= */
+
+/** Load magnetic-declination override from DECLIN.TXT (ASCII degrees, e.g.
+ * "11.9" for mid-Nevada). Present-file + parse + sane range => OK;
+ * anything else => ERROR and the compile-time default stays in effect. */
+SD_Card_Status SD_Card_LoadDeclination(float *deg)
+{
+    if (!deg) return SD_CARD_ERROR;
+    if (!sd_initialized || !lfs_mounted) return SD_CARD_ERROR;
+
+    lfs_file_t f;
+    if (LFS_OPEN(&lfs, &f, "DECLIN.TXT", LFS_O_RDONLY) != 0) return SD_CARD_ERROR;
+    char buf[16];
+    lfs_ssize_t r = lfs_file_read(&lfs, &f, buf, sizeof(buf) - 1);
+    lfs_file_close(&lfs, &f);
+    if (r <= 0 || r > (lfs_ssize_t)(sizeof(buf) - 1)) return SD_CARD_ERROR;
+    buf[r] = '\0';
+
+    char *endp;
+    float v = strtof(buf, &endp);
+    if (endp == buf || v < -30.0f || v > 30.0f) return SD_CARD_ERROR;
+    *deg = v;
+    return SD_CARD_OK;
+}
+
+/* ========================================================================= */
 /* Format (destroys all data)                                                */
 /* ========================================================================= */
 

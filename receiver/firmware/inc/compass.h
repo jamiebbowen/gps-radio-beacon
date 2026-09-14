@@ -80,6 +80,8 @@ uint8_t Compass_GetFoundDeviceCount(void);
 const uint8_t* Compass_GetFoundAddresses(void);
 uint8_t Compass_DisplayI2CScan(void);
 uint8_t Compass_SetHeadingOffset(float offset_deg);
+/** Set the magnetic-declination term only; mounting offset stays baked in. */
+uint8_t Compass_SetDeclination(float decl_deg);
 
 /* Quaternion->heading convention lock. 0 = not locked yet; 1-8 = locked
  * convention. Once it locks (which needs a simultaneously level+mag-OK

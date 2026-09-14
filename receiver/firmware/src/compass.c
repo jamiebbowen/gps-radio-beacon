@@ -1418,6 +1418,17 @@ uint8_t Compass_SetHeadingOffset(float offset_deg)
   return COMPASS_OK;
 }
 
+/**
+ * @brief Set only the magnetic-declination term; mounting offset stays
+ *        baked in. For site changes (Denver default +8.5degE vs a DECLIN.TXT
+ *        override loaded at boot).
+ */
+uint8_t Compass_SetDeclination(float decl_deg)
+{
+  heading_offset = decl_deg + COMPASS_MOUNTING_OFFSET_DEG;
+  return COMPASS_OK;
+}
+
 /* Function removed to avoid duplication */
 
 /**

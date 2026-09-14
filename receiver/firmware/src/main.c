@@ -610,6 +610,18 @@ int main(void)
         quatlock_loaded_at_boot = 1;  /* already durable; don't re-save each boot */
       }
     }
+    /* Site-local magnetic declination: Compass_Init baked in the Denver
+     * default; if DECLIN.TXT exists on card, use it. Drop the file on the
+     * card per field site (e.g., "11.9" for mid-Nevada; + = East of true). */
+    if (sd_card_ok) {
+      float decl = 0;
+      if (SD_Card_LoadDeclination(&decl) == SD_CARD_OK) {
+        (void)Compass_SetDeclination(decl);
+        char dmsg[48];
+        snprintf(dmsg, sizeof(dmsg), "DECLIN override %.1fdegE", (double)decl);
+        SD_Card_LogEvent(dmsg);
+      }
+    }
     /* BNO055 initialized successfully - try to restore saved calibration */
     if (sd_card_ok) {
       uint8_t cal_data[BNO055_CAL_DATA_LEN];

@@ -247,6 +247,13 @@ SD_Card_Status SD_Card_SaveQuatLock(uint8_t conv);
  */
 SD_Card_Status SD_Card_LoadQuatLock(uint8_t *conv);
 
+/**
+ * @brief Load a magnetic-declination override from DECLIN.TXT (ASCII deg).
+ * @retval SD_CARD_OK if a file was present and in [-30..+30]; else ERROR
+ *         and the compile-time Denver default stays in effect.
+ */
+SD_Card_Status SD_Card_LoadDeclination(float *deg);
+
 /** Worst write/sync burst in ms since the last call (clears after read). */
 uint32_t SD_Card_TakeMaxWriteMs(void);
 
