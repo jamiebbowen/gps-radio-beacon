@@ -71,9 +71,9 @@
 | Parameter | Transmitter | Receiver | Match? |
 |-----------|-------------|----------|--------|
 | **Frequency** | 433.0 MHz | 433.0 MHz | ✅ |
-| **Bandwidth** | 125 kHz | 125 kHz | ✅ |
-| **Spreading Factor** | 7 (SF7) | 7 (SF7) | ✅ |
-| **Coding Rate** | 4/7 | 4/7 | ✅ |
+| **Bandwidth** | 62.5 kHz | 62.5 kHz | ✅ |
+| **Spreading Factor** | 10 (SF10) | 10 (SF10) | ✅ |
+| **Coding Rate** | 4/8 | 4/8 | ✅ |
 | **Sync Word** | 0x12 | 0x12 | ✅ |
 | **TX Power** | 22 dBm | 22 dBm | ℹ️ Doesn't need to match |
 | **Preamble** | 16 | 8 | ✅ Longer TX preamble only overlaps more |
@@ -276,13 +276,13 @@ Before deploying, verify:
 
 ### LoRa Settings Match:
 - [ ] Frequency: 433.0 MHz
-- [ ] Bandwidth: 125 kHz
-- [ ] Spreading Factor: 7
-- [ ] Coding Rate: 4/7
+- [ ] Bandwidth: 62.5 kHz
+- [ ] Spreading Factor: 10
+- [ ] Coding Rate: 4/8
 - [ ] Sync Word: 0x12
 
 ### Packet Format Matches:
-- [ ] Binary typed packets: GPS 13 B / fused 16 B / heartbeat 8 B (+ callsign)
+- [ ] Binary typed packets V2: GPS 14 B / fused 20 B / heartbeat 8 B (+ callsign)
 - [ ] Same struct layout and scaling in rf_packet.h (TX) vs rf_parser.c (RX)
 - [ ] Legacy ASCII path ($$data$$CHKSUM) only if USE_BINARY_PACKETS=0
 

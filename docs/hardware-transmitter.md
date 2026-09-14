@@ -52,7 +52,7 @@
 - Frequency: **433.0 MHz** (ISM band; 8-channel plan 433.00-434.75 MHz)
 - Bandwidth: **62.5 kHz** (narrow: +3 dB sensitivity, 2x airtime)
 - Spreading Factor: **10** (SF10 - range-first; fused stream at ~0.8 Hz in flight)
-- Coding Rate: **4/7**
+- Coding Rate: **4/8**
 - Sync Word: **0x12** (private network)
 - TX Power: **22 dBm** (~158mW at 3.3V, ~2W at 5V)
 - Preamble: **16 symbols** (TX) / 8 (RX is tolerant: longer only overlaps more)
@@ -237,11 +237,11 @@ Set in `mpu_config.h`:
 Match these with receiver:
 ```cpp
 #define LORA_FREQUENCY      433.0       // MHz
-#define LORA_BANDWIDTH      125.0       // kHz
-#define LORA_SPREADING      7           // SF7
-#define LORA_CODING_RATE    7           // 4/7
+#define LORA_BANDWIDTH      62.5        // kHz (narrow, +3 dB)
+#define LORA_SPREADING      10          // SF10 (range-first)
+#define LORA_CODING_RATE    8           // 4/8 (edge-of-link margin)
 #define LORA_SYNC_WORD      0x12        // Private
-#define LORA_TX_POWER       22          // dBm (158mW)
+#define LORA_TX_POWER       22          // dBm chip drive (E22 PA output ~33 dBm)
 ```
 
 ### Launch Detection
@@ -427,11 +427,11 @@ Transmitted every 5 minutes for FCC compliance.
 | Parameter | Value | Must Match |
 |-----------|-------|------------|
 | Frequency | 433.0 MHz | ✅ YES |
-| Bandwidth | 125 kHz | ✅ YES |
-| Spreading Factor | 7 | ✅ YES |
-| Coding Rate | 4/6 | ✅ YES |
+| Bandwidth | 62.5 kHz | ✅ YES |
+| Spreading Factor | 10 | ✅ YES |
+| Coding Rate | 4/8 | ✅ YES |
 | Sync Word | 0x12 | ✅ YES |
-| Packet Format | Binary typed packets (GPS 13 B / fused 19 B / heartbeat 8 B) | ✅ YES |
+| Packet Format | Binary typed packets V2 (GPS 14 B / fused 20 B / heartbeat 8 B; +rocket_id vs legacy V1 GPS 13 B / fused 19 B) | ✅ YES |
 
 **TX Power does NOT need to match** (transmitter can use higher power)
 

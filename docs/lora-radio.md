@@ -116,7 +116,7 @@ Before deploying, verify:
 
 ### Link Budget
 - TX Power: +22 dBm (chip max; module PA not driven)
-- RX Sensitivity (SF10, BW62.5, CR4/6): ~-133 dBm datasheet, before local noise floor
+- RX Sensitivity (SF10, BW62.5, CR4/8): ~-133 dBm datasheet, before local noise floor
 - Link Budget: ~150 dB on paper; in practice capped by the RX ambient floor
 
 ### Data Rate

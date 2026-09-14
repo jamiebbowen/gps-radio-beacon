@@ -17,7 +17,7 @@ It supersedes the earlier scattered write-ups:
 | Layer | Component | Guards against |
 |---|---|---|
 | Hardware | LoRa CRC | Bit errors |
-| Hardware | LoRa FEC (CR 4/7) | Noise corruption |
+| Hardware | LoRa FEC (CR 4/8) | Noise corruption |
 | Hardware | GPS multi-constellation | Poor satellite geometry |
 | Transmitter | Min 4 satellites | Low-accuracy positions |
 | Transmitter | GGA fix-quality >= 1 | No-solution packets |
