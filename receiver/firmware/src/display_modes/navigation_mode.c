@@ -266,8 +266,11 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
 
   /* Show navigation data if we have remote position (live RF or SD-loaded beacon) */
   if (last_rf_packet_time > 0 || has_valid_remote_gps) {
-    char narrow[NAV_NARROW_COLS + 2];  /* +1 null, +1 guard */
-    char wide[NAV_WIDE_COLS   + 2];
+    /* Scratch buffers sized for worst-case snprintf expansion (channels up
+     * to 4095, MHz part up to 4095), not the display cells - the display
+     * clips; snprintf truncation warnings were spurious-but-noisy. */
+    char narrow[NAV_NARROW_COLS + 12];
+    char wide[NAV_WIDE_COLS + 12];
 
     /* Row 0: Distance */
     if (distance_to_tx >= 0.0f) {
@@ -638,7 +641,7 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
      * instead of staring at "No RF Data" wondering if the link is up. */
     HeartbeatPacket_t hb;
     uint32_t hb_age_ms = 0;
-    char wide[NAV_WIDE_COLS + 2];
+    char wide[NAV_WIDE_COLS + 12]; /* -Wformat-truncation: see note above */
 
     Display_DrawTextRowCol(0, 0, has_valid_local_gps ? "L:Fix" : "L:No GPS Fix");
 

@@ -13,11 +13,19 @@ make clean
 
 ## What is covered
 
-| Module | Test file | Line coverage |
+| Module | Test file | Line coverage (Sept 2026) |
 |---|---|---|
-| `rf_parser.c` — all 3 RF packet formats from the transmitter | `test_rf_parser.c` | ~91% |
-| `gps_parser.c` — local NMEA parser (checksum, GGA/RMC, jump filter) | `test_gps_parser.c` | ~89% |
+| `rf_parser.c` — all 3 RF packet formats from the transmitter | `test_rf_parser.c` | 100% |
+| `gps_parser.c` — local NMEA parser (checksum, GGA/RMC, jump filter) | `test_gps_parser.c` | 100% |
 | `math_utils.c` — haversine distance, bearing, angle normalization | `test_math_utils.c` | 100% |
+| `rf_receiver.c` — scan/wedge/reacquisiton/blackout pacing | `test_rf_receiver.c` | 99.3% |
+| `button.c` — debounce/short/long-press policy | `test_button.c` | 100% |
+| `display.c` — SSD1309 driver incl. headless I2C fault ladder | `test_display.c` | 100% |
+| `gps.c` — sentence RX path, FIFO drop-oldest, watchdog | `test_gps.c` | 97.0% |
+| `sd_card.c` — LittleFS logging incl. dirty-card & IO-error throttle | `test_sd_card.c` | 87.1% |
+| `lora.c` — SX1268 driver incl. CAD/DC-DC regime | `test_lora.c` | 100% |
+| `compass.c` — BNO055 incl. declination lattice & quat-lock | `test_compass.c` | 100% |
+| `navigation_mode.c` — L/O/D arrow, state decay | `test_navigation_mode.c` | (not measured: UI-critical only) |
 
 (The transmitter's EKF is tested separately in `transmitter/tests/`, ~100%.)
 

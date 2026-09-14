@@ -32,7 +32,9 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
                            uint8_t rx_fix_ok, uint8_t rx_sats,
                            uint8_t compass_ok, uint8_t sd_ok)
 {
-    char buf[24];
+    /* Sized for worst-case formatted expansion (sats up to 255, fix up to
+     * 255), not just visible columns - display clips to its cell width. */
+    char buf[32];
 
     Display_DrawTextRowCol(0, 4, "PRE-FLIGHT CHECK");
 
