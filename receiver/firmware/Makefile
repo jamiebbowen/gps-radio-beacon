@@ -37,6 +37,7 @@ C_SOURCES = \
 	$(SRC_DIR)/rf_parser.c \
 	$(SRC_DIR)/sd_card.c \
 	$(SRC_DIR)/sd_diskio.c \
+	$(SRC_DIR)/syscalls.c \
 	$(SRC_DIR)/lfs_sd_bd.c \
 	lib/littlefs/lfs.c \
 	lib/littlefs/lfs_util.c \
@@ -101,7 +102,7 @@ LDSCRIPT = STM32F401CCUx_FLASH.ld
 
 # Linker flags
 LDFLAGS = $(CPU)
-LDFLAGS += -specs=nano.specs -specs=nosys.specs -u _printf_float -u _scanf_float
+LDFLAGS += -specs=nano.specs -u _printf_float -u _scanf_float
 LDFLAGS += -Wl,--gc-sections
 LDFLAGS += -Wl,-Map=$(BUILD_DIR)/$(PROJECT).map,--cref
 LDFLAGS += -T $(LDSCRIPT)
