@@ -222,6 +222,7 @@ static void fresh_init(void)
     /* Reset cross-test statics via direct access */
     compass_cal_restored = 0;
     heading_offset = 0.0f;
+    decl_location_applied = 0;
     quat_conv_locked = 0;
     compass_i2c_error_streak = 0;
     compass_last_recover_ms = 0;
@@ -350,9 +351,10 @@ TEST(test_location_table_and_precedence)
     decl = Compass_DeclinationFromLocation(29.4f, -98.5f);
     CHECK(decl > 4.2f && decl < 6.6f);
 
-    /* Edge clamp: outside-grid points saturate at the corner value */
+    /* Edge clamp: outside-grid points saturate at the corner value.
+     * Row 0 = 25N ... row 4 = 45N, so the NW corner is [4][0]. */
     decl = Compass_DeclinationFromLocation(50.0f, -130.0f);
-    CHECK(decl == declin_grid[0][0]);     /* NW corner: +15.6 */
+    CHECK(decl == declin_grid[4][0]);     /* NW corner: +15.6 */
 
     /* Cross-state session: first credible fix overrides the Denver default
      * once, and later GPS updates do NOT pivot the arrow mid-flight. */
@@ -361,10 +363,15 @@ TEST(test_location_table_and_precedence)
     Compass_UpdateLocation(39.5f, -119.8f);   /* rocket flew to NV */
     CHECK_NEAR(heading_offset, 98.5f + (Compass_DeclinationFromLocation(39.89f, -105.1f) - 8.5f), 0.01);
 
-    /* Impossible fix is rejected - keeps default */
-    CHECK(Compass_UpdateLocation(0.0f, 0.0f) != COMPASS_OK);
-
     Compass_SetDeclination(8.5f);             /* restore */
+}
+
+TEST(test_location_update_rejects_impossible_fix)
+{
+    fresh_init();
+    /* (0,0) is in the grid-domain gate reject list: it must NOT apply */
+    CHECK(Compass_UpdateLocation(0.0f, 0.0f) != COMPASS_OK);
+    CHECK_NEAR(heading_offset, 98.5f, 0.01);  /* Denver default intact */
 }
 
 TEST(test_update_raw_sensor_burst)
@@ -1052,6 +1059,7 @@ int main(void)
     run_test_update_heading_offset_and_wrap();
     run_test_set_declination_overrides_site();
     run_test_location_table_and_precedence();
+    run_test_location_update_rejects_impossible_fix();
     run_test_update_raw_sensor_burst();
     run_test_heading_valid_via_restored_cal();
     run_test_heading_valid_latch();

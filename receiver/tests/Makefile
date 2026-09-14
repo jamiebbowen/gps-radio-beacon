@@ -29,7 +29,7 @@ BINS     := $(addprefix $(BUILD)/test_,$(MODULES)) $(BUILD)/test_navigation_mode
 # navigation_mode.c lives in display_modes/ and needs the real math_utils
 $(BUILD)/test_navigation_mode: test_navigation_mode.c \
         $(SRC_DIR)/display_modes/navigation_mode.c \
-        $(SRC_DIR)/math_utils.c test_harness.h | $(BUILD)
+        $(SRC_DIR)/math_utils.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< \
 	    $(SRC_DIR)/display_modes/navigation_mode.c $(SRC_DIR)/math_utils.c \
 	    $(LDFLAGS)
@@ -68,7 +68,13 @@ all: test
 $(BUILD):
 	mkdir -p $(BUILD)
 
-$(BUILD)/test_%: test_%.c $(SRC_DIR)/%.c test_harness.h | $(BUILD)
+# Every test binary re-reads firmware headers (e.g. inc/<module>.h) via
+# stubs/; add the whole header set as a dependency so edits to constants
+# and prototypes pick up rebuilds. (A stale ONLY-test_compass.c binary
+# was the exact cause of a 2026-09-14 green-here/red-CI event.)
+HEADERS := $(wildcard ../firmware/inc/*.h ../firmware/inc/display_modes/*.h test_harness.h)
+
+$(BUILD)/test_%: test_%.c $(SRC_DIR)/%.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< $(LDFLAGS)
 
 test: $(BINS)
