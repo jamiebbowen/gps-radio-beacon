@@ -144,6 +144,50 @@
                                                     * Note: uncalibrated heading is meaningless; only trust
                                                     * heading when heading_valid=1 (mag_cal >= 1). */
 
+/* -----------------------------------------------------------------------
+ * Magnetic declination by location (~2025, continental-US grid)
+ * -----------------------------------------------------------------------
+ * Denver is the compile-time default (COMPASS_MAGNETIC_DECLINATION_DEG
+ * above). When the operator's own GPS fixes with plausible coordinates,
+ * Compass_UpdateLocation() interpolates this bilinear table and applies
+ * the site-local value instead, so a Nevada launch no longer relies on
+ * someone remembering a DECLIN.TXT. DECLIN.TXT (declined in the boot
+ * path) still wins when present - explicit operator intent outranks
+ * the table. Table values are approximate to within ~0.5-1 deg, which
+ * is far tighter than is needed for arrow-pointing direction-finding. */
+static const float declin_grid[5][13] = {
+  /* lon:       -125    -120    -115    -110    -105    -100     -95     -90     -85     -80     -75     -70     -65 */
+  /* 25N */ {  +12.6f, +11.6f, +10.4f,  +9.2f,  +7.9f,  +6.5f,  +4.9f,  +3.1f,  +1.1f,  -1.2f,  -3.8f,  -6.9f, -10.3f },
+  /* 30N */ {  +12.9f, +12.0f, +10.8f,  +9.6f,  +8.2f,  +6.6f,  +5.0f,  +2.9f,  +0.6f,  -2.0f,  -5.1f,  -8.7f, -12.4f },
+  /* 35N */ {  +13.5f, +12.6f, +11.4f, +10.1f,  +8.6f,  +6.9f,  +5.0f,  +2.8f,  +0.4f,  -2.5f,  -5.8f,  -9.5f, -13.4f },
+  /* 40N */ {  +14.4f, +13.5f, +12.2f, +10.8f,  +9.1f,  +7.2f,  +5.0f,  +2.6f,   0.0f,  -3.2f,  -6.8f, -10.7f, -14.8f },
+  /* 45N */ {  +15.6f, +14.7f, +13.3f, +11.5f,  +9.5f,  +7.3f,  +4.9f,  +2.2f,  -0.7f,  -4.0f,  -7.8f, -12.0f, -16.3f },
+};
+#define DECLIN_GRID_LON_MIN  (-125.0f)
+#define DECLIN_GRID_LON_STEP   (5.0f)
+#define DECLIN_GRID_LON_MAX   (-65.0f)
+#define DECLIN_GRID_LAT_MIN    (25.0f)
+#define DECLIN_GRID_LAT_STEP    (5.0f)
+#define DECLIN_GRID_LAT_MAX    (45.0f)
+
+float Compass_DeclinationFromLocation(float lat_deg, float lon_deg)
+{
+  if (lat_deg < DECLIN_GRID_LAT_MIN) lat_deg = DECLIN_GRID_LAT_MIN;
+  if (lat_deg > DECLIN_GRID_LAT_MAX) lat_deg = DECLIN_GRID_LAT_MAX;
+  if (lon_deg < DECLIN_GRID_LON_MIN) lon_deg = DECLIN_GRID_LON_MIN;
+  if (lon_deg > DECLIN_GRID_LON_MAX) lon_deg = DECLIN_GRID_LON_MAX;
+
+  float fx = (lon_deg - DECLIN_GRID_LON_MIN) / DECLIN_GRID_LON_STEP;
+  float fy = (lat_deg - DECLIN_GRID_LAT_MIN) / DECLIN_GRID_LAT_STEP;
+  int x0 = (int)fx; if (x0 > 11) x0 = 11;         /* bilinear neighborhood */
+  int y0 = (int)fy; if (y0 > 3)  y0 = 3;
+  float tx = fx - (float)x0;
+  float ty = fy - (float)y0;
+  const float a = declin_grid[y0  ][x0],  b = declin_grid[y0  ][x0+1];
+  const float c = declin_grid[y0+1][x0],  d = declin_grid[y0+1][x0+1];
+  return a*(1.0f-tx)*(1.0f-ty) + b*tx*(1.0f-ty) + c*(1.0f-tx)*ty + d*tx*ty;
+}
+
 /* BNO055 axis remapping (applied in Compass_Init)
  * AXIS_MAP_CONFIG 0x24 = 0b00_10_01_00:
  *   bits[5:4]=2 (new Z <- physical Z)
@@ -201,6 +245,29 @@ static uint8_t found_i2c_addresses[128] = {0}; /* Array to store found I2C addre
 
 /* Calibration variables - BNO055 handles calibration internally */
 static float heading_offset = 0.0f; /* Optional heading offset for declination */
+
+/* The operator device doesn't drive 500 miles *during* a flight. Apply the
+ * first table result once; subsequent fixes are ignored so a GPS jitter
+ * spike mid-flight can't pivot the arrow. DECLIN.TXT's explicit value has
+ * already been chosen by the operator, so they outrank us (main.c guards). */
+static uint8_t decl_location_applied = 0;
+
+static void Compass_SetDebug(uint8_t msg_type, const char *msg);
+
+uint8_t Compass_UpdateLocation(float lat_deg, float lon_deg)
+{
+  if (decl_location_applied) return COMPASS_OK;
+  /* Sanity gate matches the GPS parser's: plausible US-like coords only. */
+  if (lat_deg < 18.0f || lat_deg > 50.0f || lon_deg < -130.0f || lon_deg > -60.0f)
+    return COMPASS_ERROR;
+  float decl = Compass_DeclinationFromLocation(lat_deg, lon_deg);
+  heading_offset = decl + COMPASS_MOUNTING_OFFSET_DEG;
+  decl_location_applied = 1;
+  char msg[48];
+  snprintf(msg, sizeof(msg), "Site declination: %+.1f deg", (double)decl);
+  Compass_SetDebug(3, msg);
+  return COMPASS_OK;
+}
 
 /* Set once Compass_SetCalibrationData() successfully restores saved offsets.
  * The BNO055 status register will still report mag_cal=0 until fresh motion

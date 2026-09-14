@@ -115,6 +115,11 @@ static uint8_t force_display_update = 0;
  * per-boot re-save + log spam; it only NEWS-locks once). */
 static uint8_t quatlock_loaded_at_boot = 0;
 
+/* When DECLIN.TXT supplies a site value at boot, it wins over any
+ * GPS-derived table update later in the session (explicit operator
+ * intent > inferred one. See Compass_UpdateLocation callsite comment). */
+static uint8_t declin_file_overrode = 0;
+
 /* Worst main-loop iteration time since last RFSTATS emission (forensics:
  * blocking SD writes / radio wedge / display stalls surface here, every
  * minute). Per-segment max attribution below so the worst patcher is
@@ -611,12 +616,15 @@ int main(void)
       }
     }
     /* Site-local magnetic declination: Compass_Init baked in the Denver
-     * default; if DECLIN.TXT exists on card, use it. Drop the file on the
-     * card per field site (e.g., "11.9" for mid-Nevada; + = East of true). */
+     * default; DECLIN.TXT on card overrides that with explicit operator
+     * intent, and so do *fewer* manual steps than the table-based auto
+     * update. Precedence: DECLIN.TXT > auto (see Compass_UpdateLocation,
+     * applied in the main loop on first local GPS fix). */
     if (sd_card_ok) {
       float decl = 0;
       if (SD_Card_LoadDeclination(&decl) == SD_CARD_OK) {
         (void)Compass_SetDeclination(decl);
+        declin_file_overrode = 1;   /* beats the GPS-derived table update */
         char dmsg[48];
         snprintf(dmsg, sizeof(dmsg), "DECLIN override %.1fdegE", (double)decl);
         SD_Card_LogEvent(dmsg);
@@ -1018,6 +1026,23 @@ int main(void)
         memcpy(&last_good_local_gps, &gps_data, sizeof(GPS_Data));
         has_last_good_local_gps = 1;
         last_good_gps_time = HAL_GetTick();
+
+        /* Site-local declination: folded in automatically the first time
+         * the operator's own GPS fixes. Replaces the manual DECLIN.TXT
+         * step unless the override file was present at boot - explicit
+         * beats inferred (cross-state launches: tested in CO, fly in NV). */
+        if (!declin_file_overrode && Compass_UpdateLocation(gps_data.latitude,
+                                                            gps_data.longitude) == COMPASS_OK
+            && sd_card_ok) {
+          static uint8_t decl_logged = 0;
+          if (!decl_logged) {
+            decl_logged = 1;
+            char dmsg[64];
+            snprintf(dmsg, sizeof(dmsg), "DECLIN from location %.4f,%.4f",
+                     (double)gps_data.latitude, (double)gps_data.longitude);
+            SD_Card_LogEvent(dmsg);
+          }
+        }
         
         /* Local-GPS rows are deliberately not logged - the NAV rows carry
          * the base position already; duplicating it just wears the card. */

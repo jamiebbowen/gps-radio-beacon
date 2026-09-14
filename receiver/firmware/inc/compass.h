@@ -82,6 +82,13 @@ uint8_t Compass_DisplayI2CScan(void);
 uint8_t Compass_SetHeadingOffset(float offset_deg);
 /** Set the magnetic-declination term only; mounting offset stays baked in. */
 uint8_t Compass_SetDeclination(float decl_deg);
+/** Position-aware declination: applies the CONUS bilinear grid value for
+ *  the caller's lat/lon exactly once per boot (first-call wins). Returns
+ *  COMPASS_ERROR_GENERIC_FAIL when the coords are outside the grid's
+ *  plausible domain - caller keeps the compile-time default. */
+uint8_t Compass_UpdateLocation(float lat_deg, float lon_deg);
+/** Table lookup only (no side effect); exported for tests. */
+float Compass_DeclinationFromLocation(float lat_deg, float lon_deg);
 
 /* Quaternion->heading convention lock. 0 = not locked yet; 1-8 = locked
  * convention. Once it locks (which needs a simultaneously level+mag-OK
