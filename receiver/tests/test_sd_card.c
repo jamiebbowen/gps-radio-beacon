@@ -101,6 +101,17 @@ int lfs_sd_bd_init(void)        { return bd_init_result; }
 int lfs_sd_bd_is_ready(void)    { return bd_init_result == 0; }
 uint32_t lfs_sd_bd_capacity_mb(void) { return 1; }
 
+/* Runtime speed-down reflex: count how often firmware asks the diskio layer
+ * to step the bus down. Real hardware: sd_diskio.c walks the ladder. */
+int stepdown_calls = 0;
+uint8_t SD_StepSpeedDown(void)      /* matches diskio: returns new divider */
+{
+    static const uint8_t seq[] = { 4, 8, 16, 16 };
+    int i = stepdown_calls < 4 ? stepdown_calls : 3;
+    stepdown_calls++;
+    return seq[i];
+}
+
 /* sd_card.c's per-file caches are sized 4096; our cfg.cache_size is 512,
  * which is fine (buffer only needs to be >= cache_size). */
 
@@ -658,6 +669,23 @@ TEST(test_write_recovers_lost_mount)
     CHECK(strstr(big, ",13.0,") != NULL);
 }
 
+TEST(test_io_error_streak_steps_bus_down)
+{
+    /* sd_card.c #include'd: drive the streak helper directly. Three write
+     * errors in a row must ask the diskio ladder to step down once; a good
+     * write resets the streak (so isolated transients don't throttle). */
+    stepdown_calls = 0;
+    sd_io_err_streak = 0;
+    sd_note_write_err();
+    sd_note_write_err();
+    CHECK(stepdown_calls == 0);            /* no throttle on 2 transients */
+    sd_io_err_streak = 0;                  /* good write in between */
+    sd_note_write_err();
+    sd_note_write_err();
+    sd_note_write_err();
+    CHECK(stepdown_calls == 1);            /* 3 consecutive -> one step */
+}
+
 TEST(test_timestamp_format)
 {
     char ts[32];
@@ -693,6 +721,7 @@ int main(void)
     run_test_self_test_pass_and_write_failure();
     run_test_rotation_launchflag_and_write_failure();
     run_test_write_recovers_lost_mount();
+    run_test_io_error_streak_steps_bus_down();
     run_test_timestamp_format();
 
     return TEST_SUMMARY();

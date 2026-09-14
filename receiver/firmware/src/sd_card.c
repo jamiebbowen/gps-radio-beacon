@@ -28,6 +28,9 @@
 #include "display.h"
 #include "lfs.h"
 #include "lfs_sd_bd.h"
+/* sd_diskio.h drags in old FatFS headers the host test harness lacks;
+ * forward-declare the one symbol we need instead. */
+uint8_t SD_StepSpeedDown(void);
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -78,6 +81,8 @@ static void sd_note_big_sync(uint32_t dur_ms)
 static uint8_t  sd_dirty      = 0;
 static uint8_t  sd_dirty_rows = 0;
 static uint32_t sd_last_write = 0;
+
+#define SD_IO_ERR_STEPDOWN_STREAK  3
 static uint8_t       log_file_open  = 0;
 static SD_Card_Info  sd_info;
 static char          log_buffer[SD_CARD_LOG_BUFFER_SIZE];
@@ -405,6 +410,27 @@ static uint8_t sd_try_log_recovery(void)
 /* Log write helper                                                          */
 /* ========================================================================= */
 
+/* Runtime speed-down reflex: N consecutive write failures means the
+ * current prescaler is the suspect; drop a rung. Slower is always
+ * electrically safe, and next boot re-runs the ladder fresh anyway. */
+static uint8_t  sd_io_err_streak = 0;
+
+static void sd_note_write_ok(void) { sd_io_err_streak = 0; }
+
+static void sd_note_write_err(void)
+{
+    if (++sd_io_err_streak >= SD_IO_ERR_STEPDOWN_STREAK) {
+        sd_io_err_streak = 0;
+        uint8_t div = SD_StepSpeedDown();
+        char ts[16];
+        SD_Card_GetTimestamp(ts, sizeof(ts));
+        snprintf(log_buffer, sizeof(log_buffer),
+                 "%s,ERROR,SD bus stepped down to /%u after %u IO errors\n",
+                 ts, (unsigned)div, (unsigned)SD_IO_ERR_STEPDOWN_STREAK);
+        if (log_file_open) lfs_file_write(&lfs, &log_file, log_buffer, strlen(log_buffer));
+    }
+}
+
 static SD_Card_Status SD_Card_WriteLogEntry(const char *entry)
 {
     /* (No NULL guard: this helper is static and every call site passes a
@@ -432,6 +458,7 @@ static SD_Card_Status SD_Card_WriteLogEntry(const char *entry)
     lfs_ssize_t w = lfs_file_write(&lfs, &log_file, entry, len);
     if (w < 0 || (size_t)w != len) {
         sd_info.write_errors++;
+        sd_note_write_err();      /* runtime-speed throttle on error streaks */
         /* Recover the handle and retry once so a transient glitch doesn't
          * cost the entry that tripped on it. */
         if (had_log && sd_try_log_recovery()) {
@@ -442,11 +469,13 @@ static SD_Card_Status SD_Card_WriteLogEntry(const char *entry)
                 sd_dirty = 1;
                 sd_dirty_rows++;
                 sd_last_write = HAL_GetTick();
+                sd_note_write_ok();
                 return SD_CARD_OK;
             }
         }
         return SD_CARD_ERROR;
     }
+    sd_note_write_ok();
     sd_info.bytes_written += (uint32_t)w;
     log_sequence++;
     sd_dirty = 1;

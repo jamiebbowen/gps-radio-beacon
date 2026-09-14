@@ -451,6 +451,19 @@ void SD_SetFastSpeed(void)
   sd_spi_div = 16;
 }
 
+/** Step the bus one rung slower at runtime. Slower is always electrically
+ *  safe, and the row/date doesn't care which prescaler was programmed. Used
+ *  when write errors start showing up: speed is the suspicious variable. */
+uint8_t SD_StepSpeedDown(void)
+{
+  static const uint8_t next_slower[] = { [2] = 4, [4] = 8, [8] = 16, [16] = 16 };
+  if (sd_spi_div < 2 || sd_spi_div > 16) return sd_spi_div;   /* no speedup in place */
+  sd_spi_div = next_slower[sd_spi_div];
+  sd_set_prescaler(sd_spi_div == 16 ? 0x3 : sd_spi_div == 8 ? 0x2
+                  : sd_spi_div == 4 ? 0x1 : 0x0);
+  return sd_spi_div;
+}
+
 /**
  * @brief  Send a command packet to SD card
  */

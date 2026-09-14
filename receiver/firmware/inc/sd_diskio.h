@@ -30,6 +30,8 @@ DRESULT SD_ioctl (BYTE pdrv, BYTE cmd, void *buff);
 void SD_SetFastSpeed (void);
 /** Actual SD SPI prescaler divider in effect (2/4/8/16; 0 = not set). */
 uint8_t SD_FastSpeedEnabled(void);
+/** Runtime: step the bus one rung slower (error-driven throttle). Returns new divider. */
+uint8_t SD_StepSpeedDown(void);
 
 extern uint8_t sd_diag_cmd_resp;   /* R1 from last CMD24 */
 extern uint8_t sd_diag_data_token; /* data response token from last block write */
