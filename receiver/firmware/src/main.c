@@ -1268,6 +1268,15 @@ int main(void)
                 last_logged_callsign[sizeof(last_logged_callsign) - 1] = '\0';
               }
             }
+
+            /* Bench firmware on a flight line: durable breadcrumb the first
+             * time the ~30 s callsign cadence implicates a TESTING build. */
+            static uint8_t tst_logged = 0;
+            if (!tst_logged && RF_Receiver_TestingBuildSuspect()) {
+              tst_logged = 1;
+              SD_Card_EnsureLogFile();
+              SD_Card_LogError("TX testing-build cadence (callsign ~30s) - flashing bench firmware?");
+            }
           }
         }
       } else {

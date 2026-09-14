@@ -131,6 +131,15 @@ static HeartbeatPacket_t last_heartbeat;
 static uint8_t heartbeat_pending = 0;
 static uint32_t last_heartbeat_time = 0;   /* 0 = never heard one */
 
+/* Bench-firmware detector. A beacon flashed with TESTING_MODE=1 sounds
+ * identical to production BUT IDs every 30 s instead of every 5 min (and
+ * has never-launched-friendly cadence tables nobody wants on a real
+ * flight). Two own callsigns closer than 150 s is producible by no
+ * production build; one such interval flags the suspect. Advisory only -
+ * the preflight page surfaces it, nothing is gated on it. */
+static uint32_t last_callsign_ms = 0;
+static uint8_t  testing_build_suspect = 0;
+
 /* Ambient noise-floor monitor.
  * GetRssiInst is sampled ~1 Hz while the radio sits in continuous RX and
  * the link has been quiet (see RF_NOISE_LINK_QUIET_MS). The floor estimate
@@ -464,6 +473,15 @@ uint8_t RF_Receiver_DataAvailable(void)
           }
           if (cs_id < 0 || RF_RocketFilter(1, (uint8_t)cs_id)) {
             (void)RF_Parser_ParseAsciiPacket(rf_ascii_buffer);
+            /* Own callsign arrived: cadence tells the flash variant */
+            uint32_t now_cs = HAL_GetTick();
+            if (last_callsign_ms != 0) {
+              uint32_t iv = now_cs - last_callsign_ms;
+              if (iv >= 15000UL && iv <= 150000UL) {
+                testing_build_suspect = 1;
+              }
+            }
+            last_callsign_ms = now_cs;
           }
         }
       }
@@ -810,6 +828,8 @@ static uint8_t RF_SetChannelCtx(uint8_t channel, uint8_t new_context)
   last_heartbeat_time = 0;
   if (new_context) {
     bound_rocket_id = RF_ROCKET_UNBOUND;
+    last_callsign_ms = 0;
+    testing_build_suspect = 0;
   }
   return RF_OK;
 }
@@ -940,6 +960,14 @@ uint8_t RF_Receiver_GetBoundRocketId(void)
 uint32_t RF_Receiver_GetForeignDrops(void)
 {
   return rf_foreign_drops;
+}
+
+/** 1 when the tuned beacon's callsign cadence matches a TESTING_MODE build
+ *  (see the detector comment at the top of this file). Resets with the
+ *  airframe binding on channel change. */
+uint8_t RF_Receiver_TestingBuildSuspect(void)
+{
+  return testing_build_suspect;
 }
 
 /**

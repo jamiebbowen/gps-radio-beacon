@@ -91,6 +91,10 @@ uint32_t RF_Receiver_GetWedgesRecovered(void);
 uint8_t  RF_Receiver_GetBoundRocketId(void);   /* 0xFF = unbound */
 uint32_t RF_Receiver_GetForeignDrops(void);
 
+/* 1 = the tuned beacon ID's at a ~30 s cadence: it was flashed with
+ * TESTING_MODE=1 (production IDs every 5 min). Preflight advisory. */
+uint8_t RF_Receiver_TestingBuildSuspect(void);
+
 /* Boot-time per-channel noise sweep: tunes every rocket channel, takes a
  * handful of GetRssiInst samples, and reports the per-channel median via
  * nf_dbm_out[LORA_CHANNEL_COUNT] (untouched entries are left at the

@@ -29,6 +29,10 @@ between them are cross-referenced where relevant.
 
 ## Operations / troubleshooting
 
+- [`launch-day.md`](launch-day.md) - Field runbook: pad workflow, flight,
+  recovery walk, crowded channels, and post-flight log review.
+- [`bench-checklist.md`](bench-checklist.md) - Hardware power-up checks
+  after flashing and before launch weekends.
 - [`sd-card-troubleshooting.md`](sd-card-troubleshooting.md) - Diagnostics
   for the receiver SD-card logger.
 - [`flight-analysis.md`](flight-analysis.md) - Using

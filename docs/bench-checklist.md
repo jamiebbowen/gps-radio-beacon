@@ -7,6 +7,21 @@ launch weekend. Total time: ~5 minutes with the beacon on the bench.
 Firmware verified by this checklist: display geometry fixes, compass error
 reporting, SD self-test, LED packet pulse, LoRa link.
 
+## 0. Transmitter USB banner (after every flash)
+
+Connect the beacon over USB and watch the first seconds of boot:
+
+- [ ] `[Radio] Fused time-on-air: NNNN ms, cadence 1500 ms` — the on-air
+      time must clear the cadence with a real gap; a `WARNING` line here
+      means a packet-format or radio-config change ate the PA duty margin.
+- [ ] The callsign line shows the intended `KE0MZS-<id> CH<n>` for this
+      airframe.
+- [ ] If you INTENDED a testing flash: confirm the receiver's PRE-FLIGHT
+      page shows the starred callsign (`TST *KE0MZS-n CHn*`) within ~60 s -
+      that path verifies both the beacon and the bench-build detector.
+      If you intended production: starred callsign = you flashed a
+      TESTING_MODE build; reflash before the pad.
+
 ## 1. Boot sequence (just watch the screen)
 
 - [ ] **Test pattern**: `TL` top-left, `TR` top-right, `BL` bottom-left,

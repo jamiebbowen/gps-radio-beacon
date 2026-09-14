@@ -9,6 +9,8 @@
 #include "display_modes/preflight_mode.h"
 #include "display.h"
 #include "packet_format.h"   /* HB_GPS_* */
+#include "rf_receiver.h"     /* RF_Receiver_TestingBuildSuspect */
+#include "rf_parser.h"       /* RF_PARSER_MAX_CALLSIGN_LEN */
 #include <stdio.h>
 
 /**
@@ -34,8 +36,28 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
 
     Display_DrawTextRowCol(0, 4, "PRE-FLIGHT CHECK");
 
-    /* TX link */
-    if (link_ok) {
+    /* TX link. A healthy beacon within metres on the rail reads way above
+     * -75 dBm; anything lower on the pad means antenna/IPEX/polarization
+     * trouble - exactly the failure you want to catch BEFORE flight, when
+     * the telemetry budget is spent on trees, not free space. Advisory:
+     * the verdict still flies on link_ok, the row just refuses to say OK.
+     * A TESTING_MODE flash replaces the row with the STARRED callsign
+     * (its ~30 s ID cadence tripped the detector): unmissable IF you're
+     * about to fly a bench build, harmless if it's a deliberate test. */
+    if (link_ok && RF_Receiver_TestingBuildSuspect()) {
+        GPS_Data scratch;
+        char cs[RF_PARSER_MAX_CALLSIGN_LEN] = "";
+        RF_Receiver_GetParsedData(&scratch, cs, sizeof(cs), NULL);
+        if (cs[0]) {
+            /* 21-col budget: "TST " + "*" + callsign(max 15) + "*" = 21 */
+            snprintf(buf, sizeof(buf), "TST *%.15s*", cs);
+        } else {
+            snprintf(buf, sizeof(buf), "TX LINK  TST BUILD?");
+        }
+    } else if (link_ok && rssi < -75) {
+        snprintf(buf, sizeof(buf), "TX LINK  WEAK %ddBm",
+                 (int)rssi);
+    } else if (link_ok) {
         snprintf(buf, sizeof(buf), "TX LINK  OK %lus %ddBm",
                  (unsigned long)link_age_s, (int)rssi);
     } else {

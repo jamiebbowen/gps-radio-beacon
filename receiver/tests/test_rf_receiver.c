@@ -1736,6 +1736,44 @@ TEST(test_packet_soup_state_coherence)
     CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
 }
 
+TEST(test_testing_build_cadence_detector)
+{
+    /* Production beacons ID every 300 s; a TESTING_MODE flash IDs every
+     * 30 s. Two own-callsigns closer than 150 s apart is producible by no
+     * production build, so the preflight page can ask "bench firmware?" */
+    RF_Receiver_StopScan();
+    fake_mode = 5;
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);      /* clears any stale cadence */
+    CHECK(RF_Receiver_TestingBuildSuspect() == 0);
+
+    /* Production rhythm: 300 s gap -> clean */
+    inject_callsign("KE0MZS-3 CH0");
+    run_for(250, 250);
+    run_for(300000, 5000);
+    inject_callsign("KE0MZS-3 CH0");
+    run_for(250, 250);
+    CHECK(RF_Receiver_TestingBuildSuspect() == 0);
+
+    /* Testing rhythm: 30 s gap -> flagged */
+    run_for(15000, 5000);                           /* out of the 15 s floor */
+    inject_callsign("KE0MZS-3 CH0");
+    run_for(250, 250);
+    run_for(30000, 5000);
+    inject_callsign("KE0MZS-3 CH0");
+    run_for(250, 250);
+    CHECK(RF_Receiver_TestingBuildSuspect() == 1);
+
+    /* Channel context change clears the suspicion with the binding */
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    CHECK(RF_Receiver_TestingBuildSuspect() == 0);
+
+    /* Restore default posture */
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    run_for(250, 250);
+    GPS_Data pos;
+    CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+}
+
 TEST(test_heartbeat_uptime_regression_keeps_tracking)
 {
     /* TX WDT hang -> beacon hard-resets mid-flight: heartbeat uptime
@@ -1814,6 +1852,7 @@ int main(void)
     run_test_receiver_cold_boot_mid_flight();
     run_test_receiver_cold_boot_mid_walk();
     run_test_packet_soup_state_coherence();
+    run_test_testing_build_cadence_detector();
     run_test_heartbeat_uptime_regression_keeps_tracking();
 
     return TEST_SUMMARY();

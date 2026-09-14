@@ -132,11 +132,21 @@ void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps,
   }
   
   /* Display last packet data in ASCII */
-  if (RF_Receiver_GetLastPacketASCII(ascii_buffer, sizeof(ascii_buffer)) > 0) {   
+  if (RF_Receiver_GetLastPacketASCII(ascii_buffer, sizeof(ascii_buffer)) > 0) {
     /* Split the ASCII buffer into two lines for display */
     if (strlen(ascii_buffer) > 0) {
-      memcpy(line1, ascii_buffer, 15);
-      line1[15] = '\0';
+      /* Bench-build star: matches the preflight "TST *callsign*" cue -
+       * a 30 s ID cadence wraps the ID in asterisks wherever it shows. */
+      uint8_t tst = RF_Receiver_TestingBuildSuspect();
+      size_t first = tst ? 14 : 15;
+      size_t off = 0;
+      if (tst) line1[off++] = '*';
+      memcpy(line1 + off, ascii_buffer, first);
+      line1[off + first] = '\0';
+      if (tst) {
+        size_t l = strlen(line1);
+        if (l < sizeof(line1) - 2) { line1[l] = '*'; line1[l + 1] = '\0'; }
+      }
       Display_DrawTextRowCol(6, 0, line1);
       
       if (strlen(ascii_buffer) > 15) {
