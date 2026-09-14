@@ -387,36 +387,56 @@ static void SD_SPI_Init(void)
 /**
  * @brief  Switch SPI1 to high-speed mode after SD card init.
  * @note   Called once from lfs_sd_bd_init() after the CMD0/ACMD41/CMD9
- *         sequence completes at the 82 kHz init clock. The SD spec allows
- *         up to 25 MHz after init, but on this board's SPI1 wiring 2.6 MHz
- *         (prescaler 8) was unreliable - mounts and reformats both failed.
- *         Prescaler 16 gives APB2 21MHz / 16 = ~1.3 MHz, which is still
- *         ~16x faster than init speed (per-sector write drops from ~50 ms
- *         to ~3 ms) but far more tolerant of trace length / connector
- *         impedance than 2.6 MHz. If future board revisions improve SI we
- *         can re-try a lower prescaler here.
+ *         sequence completes at the 82 kHz init clock.
+ *
+ *         History: prescaler 16 (~1.3 MHz on this clock tree) is the known-good
+ *         setting; prescaler 8 (~2.6 MHz) reportedly produced garbage mounts in
+ *         a troubleshooting pass. Whether that was causative is uncertain - so
+ *         instead of trusting the comment, measure: switch to /8, then read a
+ *         fixed sector several times and require byte-identical readbacks
+ *         before keeping it. On any mismatch we drop back to /16.
  */
-void SD_SetFastSpeed(void)
+static uint8_t sd_fast_speed_ok = 0;  /* 1 = kept the fast prescaler */
+
+uint8_t SD_FastSpeedEnabled(void) { return sd_fast_speed_ok; }
+
+static void sd_set_prescaler(uint32_t br_bits)
 {
-  /* Change the baud-rate prescaler with the least possible collateral damage:
-   * just disable SPE, poke CR1.BR[2:0], re-enable SPE. This avoids the full
-   * HAL_SPI_DeInit/Init sequence, which re-runs HAL_SPI_MspInit and briefly
-   * reconfigures PA5/6/7 + CS - that glitch was causing subsequent card
-   * reads/writes to return garbage (seen as both lfs_mount and lfs_format
-   * failing with Err: 13 at 2.6 MHz and 1.3 MHz via HAL_SPI_Init).
-   *
-   * On STM32F4, BR bits can only be changed while SPE=0.
-   * BR[2:0] = 0b011 -> fPCLK/16 -> 21 MHz / 16 = ~1.3 MHz.
-   *
-   * Also mirror the new value into hspi1.Init so HAL's internal bookkeeping
-   * matches hardware, in case any later HAL_SPI_* call reads it back. */
   __HAL_SPI_DISABLE(&hspi1);
   uint32_t cr1 = hspi1.Instance->CR1;
   cr1 &= ~SPI_CR1_BR_Msk;
-  cr1 |=  (0x3U << SPI_CR1_BR_Pos); /* prescaler = 16 */
+  cr1 |=  (br_bits << SPI_CR1_BR_Pos);
   hspi1.Instance->CR1 = cr1;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  hspi1.Init.BaudRatePrescaler = (br_bits == 0x2) ? SPI_BAUDRATEPRESCALER_8
+                                                  : SPI_BAUDRATEPRESCALER_16;
   __HAL_SPI_ENABLE(&hspi1);
+}
+
+void SD_SetFastSpeed(void)
+{
+  if (!SD_Type) return;             /* nothing to speed up on a dead card */
+
+  /* Try prescaler 8 first. */
+  sd_set_prescaler(0x2);
+
+  /* Self-verification: the SAME sector must read back byte-identical across
+   * repeated reads at the new rate; take the last sector too so the high end
+   * of the address space is covered. (Read-only: nothing on the card changes.) */
+  static BYTE a[512], b[512];
+  uint8_t ok = 1;
+  for (int i = 0; i < 4 && ok; i++) {
+    DRESULT r1 = SD_read(0, a, 0, 1);
+    DRESULT r2 = SD_read(0, b, 0, 1);
+    if (r1 != RES_OK || r2 != RES_OK || memcmp(a, b, 512) != 0) ok = 0;
+  }
+  if (ok) {
+    sd_fast_speed_ok = 1;
+    return;
+  }
+
+  /* Fast setting didn't verify - drop back to the known-good /16. */
+  sd_set_prescaler(0x3);
+  sd_fast_speed_ok = 0;
 }
 
 /**

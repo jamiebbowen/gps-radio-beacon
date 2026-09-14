@@ -953,23 +953,23 @@ int main(void)
         char st_msg[180];
         if (RF_Receiver_GetNoiseFloor(&nf)) {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums sd=%lums syncs=%lu rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums sd=%lums syncs=%lu fastspi=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered(), (int)nf,
                    (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max,
-                   (unsigned long)sd_syncs,
+                   (unsigned long)sd_syncs, (unsigned)SD_FastSpeedEnabled(),
                    (unsigned long)m_rf, (unsigned long)m_gps,
                    (unsigned long)m_disp, (unsigned long)m_cmp,
                    (unsigned long)loops_d, (unsigned long)sd_werr);
         } else {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums sd=%lums syncs=%lu rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums sd=%lums syncs=%lu fastspi=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered(),
                    (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max,
-                   (unsigned long)sd_syncs,
+                   (unsigned long)sd_syncs, (unsigned)SD_FastSpeedEnabled(),
                    (unsigned long)m_rf, (unsigned long)m_gps,
                    (unsigned long)m_disp, (unsigned long)m_cmp,
                    (unsigned long)loops_d, (unsigned long)sd_werr);
