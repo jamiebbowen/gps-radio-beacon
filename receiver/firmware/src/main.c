@@ -953,7 +953,7 @@ int main(void)
         char st_msg[180];
         if (RF_Receiver_GetNoiseFloor(&nf)) {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums sd=%lums syncs=%lu fastspi=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums sd=%lums syncs=%lu spidiv=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered(), (int)nf,
@@ -964,7 +964,7 @@ int main(void)
                    (unsigned long)loops_d, (unsigned long)sd_werr);
         } else {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums sd=%lums syncs=%lu fastspi=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums sd=%lums syncs=%lu spidiv=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered(),

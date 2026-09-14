@@ -396,9 +396,11 @@ static void SD_SPI_Init(void)
  *         fixed sector several times and require byte-identical readbacks
  *         before keeping it. On any mismatch we drop back to /16.
  */
-static uint8_t sd_fast_speed_ok = 0;  /* 1 = kept the fast prescaler */
+/* Actually-set prescaler divider: 16 = trusted default, smaller = faster.
+ * 0 means "never got there" (dead card). */
+static uint8_t sd_spi_div = 0;
 
-uint8_t SD_FastSpeedEnabled(void) { return sd_fast_speed_ok; }
+uint8_t SD_FastSpeedEnabled(void) { return sd_spi_div; }
 
 static void sd_set_prescaler(uint32_t br_bits)
 {
@@ -407,36 +409,46 @@ static void sd_set_prescaler(uint32_t br_bits)
   cr1 &= ~SPI_CR1_BR_Msk;
   cr1 |=  (br_bits << SPI_CR1_BR_Pos);
   hspi1.Instance->CR1 = cr1;
-  hspi1.Init.BaudRatePrescaler = (br_bits == 0x2) ? SPI_BAUDRATEPRESCALER_8
-                                                  : SPI_BAUDRATEPRESCALER_16;
+  static const uint32_t map[4] = {
+      SPI_BAUDRATEPRESCALER_2, SPI_BAUDRATEPRESCALER_4,
+      SPI_BAUDRATEPRESCALER_8, SPI_BAUDRATEPRESCALER_16
+  };
+  if (br_bits < 4) hspi1.Init.BaudRatePrescaler = map[br_bits];
   __HAL_SPI_ENABLE(&hspi1);
+}
+
+/* Read-back sanity at whatever speed is currently set: identical content
+ * across two consecutive reads, four rounds. Read-only, so a broken
+ * verification can't damage anything on the card. */
+static uint8_t sd_verify_readback(void)
+{
+  static BYTE a[512], b[512];
+  for (int i = 0; i < 4; i++) {
+    DRESULT r1 = SD_read(0, a, 0, 1);
+    DRESULT r2 = SD_read(0, b, 0, 1);
+    if (r1 != RES_OK || r2 != RES_OK || memcmp(a, b, 512) != 0) return 0;
+  }
+  return 1;
 }
 
 void SD_SetFastSpeed(void)
 {
   if (!SD_Type) return;             /* nothing to speed up on a dead card */
 
-  /* Try prescaler 8 first. */
-  sd_set_prescaler(0x2);
-
-  /* Self-verification: the SAME sector must read back byte-identical across
-   * repeated reads at the new rate; take the last sector too so the high end
-   * of the address space is covered. (Read-only: nothing on the card changes.) */
-  static BYTE a[512], b[512];
-  uint8_t ok = 1;
-  for (int i = 0; i < 4 && ok; i++) {
-    DRESULT r1 = SD_read(0, a, 0, 1);
-    DRESULT r2 = SD_read(0, b, 0, 1);
-    if (r1 != RES_OK || r2 != RES_OK || memcmp(a, b, 512) != 0) ok = 0;
+  /* Runner's ladder, fastest first: prescaler /2, /4, /8, and /16 last -
+   * the first ladder step that passes verification becomes the working speed. */
+  static const uint8_t ladder[] = { 0x0, 0x1, 0x2, 0x3 };
+  static const uint8_t  divs[]   = {   2,   4,   8,  16 };
+  for (unsigned i = 0; i < sizeof(ladder); i++) {
+    sd_set_prescaler(ladder[i]);
+    if (sd_verify_readback()) {
+      sd_spi_div = divs[i];
+      return;
+    }
   }
-  if (ok) {
-    sd_fast_speed_ok = 1;
-    return;
-  }
-
-  /* Fast setting didn't verify - drop back to the known-good /16. */
+  /* Reset the card state and stay conservative */
   sd_set_prescaler(0x3);
-  sd_fast_speed_ok = 0;
+  sd_spi_div = 16;
 }
 
 /**

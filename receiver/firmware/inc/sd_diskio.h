@@ -28,7 +28,7 @@ DRESULT SD_write (BYTE pdrv, const BYTE *buff, DWORD sector, UINT count);
 #endif
 DRESULT SD_ioctl (BYTE pdrv, BYTE cmd, void *buff);
 void SD_SetFastSpeed (void);
-/** 1 if the guarded prescaler-8 fast clock verified OK this boot. */
+/** Actual SD SPI prescaler divider in effect (2/4/8/16; 0 = not set). */
 uint8_t SD_FastSpeedEnabled(void);
 
 extern uint8_t sd_diag_cmd_resp;   /* R1 from last CMD24 */
