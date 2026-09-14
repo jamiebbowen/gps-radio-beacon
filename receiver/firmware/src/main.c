@@ -158,6 +158,7 @@ uint32_t last_ping_time = 0;
 void SystemClock_Config(void);
 void MX_GPIO_Init(void);
 void Error_Handler(void);
+static void LogPendingCrashRecord(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -536,6 +537,10 @@ int main(void)
              (unsigned)sys_vdd_mv);
     SD_Card_LogEvent(rst_msg);
   }
+
+  /* A HardFault leaves CPU evidence in the reserved crash region - log it
+   * now, alongside the reset-cause line above. */
+  if (sd_card_ok) LogPendingCrashRecord();
 
   /* Clear the reset flags unconditionally: if SD init failed above, a set
    * IWDGRSTF would otherwise survive into a later boot and be logged then
@@ -1724,12 +1729,83 @@ void SysTick_Handler(void)
   HAL_IncTick();
 }
 
-void HardFault_Handler(void)
+/* ------------------------------------------------------------------ */
+/* Crash forensics                                                     */
+/* ------------------------------------------------------------------ */
+/* A HardFault used to leave only "RESET src=SOFT" on the next boot -
+ * an unexplained restart with zero evidence. Instead we snapshot the
+ * stacked registers + fault status regs into a reserved word-block at
+ * the top of RAM (excluded from both .data init and .bss zeroing, see
+ * STM32F401CCUx_FLASH.ld CRASHRAM), reset, and log it on the next boot.
+ *
+ * Deliberately NO LittleFS write here: the SD subsystem knows nothing
+ * about crash-context safety; the record is pure static RAM, so the
+ * handler stays a few instructions and cannot itself crash. */
+#define CRASH_MAGIC 0x43525348u   /* "CRSH" */
+typedef struct {
+  uint32_t magic;
+  uint32_t seq;                     /* consecutive crash count          */
+  uint32_t r0, r1, r2, r3, r12, lr, pc, psr;  /* exception frame      */
+  uint32_t cfsr, hfsr, bfar;        /* fault status from the SCB        */
+  uint32_t msp, psp;                /* both stack pointers (overflow?)  */
+} CrashRecord;                      /* 15 words = 60 B <= 64 B reserved */
+
+__attribute__((section(".crash_record")))
+static CrashRecord g_crash;
+
+__attribute__((naked)) void HardFault_Handler(void)
 {
-  /* Corrupt CPU state: reboot now, not after the 32 s IWDG timeout. */
+  /* Which stack was in use at the fault, per EXC_RETURN bit 2 */
+  __asm volatile (
+    "tst lr, #4            \n"
+    "ite eq                \n"
+    "mrseq r0, msp         \n"
+    "mrsne r0, psp         \n"
+    "b    HardFault_Capture\n"
+  );
+}
+
+__attribute__((used)) static void HardFault_Capture(uint32_t *frame)
+{
+  g_crash.r0 = frame[0]; g_crash.r1 = frame[1];
+  g_crash.r2 = frame[2]; g_crash.r3 = frame[3];
+  g_crash.r12 = frame[4]; g_crash.lr = frame[5];
+  g_crash.pc = frame[6];  g_crash.psr = frame[7];
+  g_crash.cfsr = SCB->CFSR;
+  g_crash.hfsr = SCB->HFSR;
+  g_crash.bfar = SCB->BFAR;
+  g_crash.msp = __get_MSP(); g_crash.psp = __get_PSP();
+  if (g_crash.magic != CRASH_MAGIC) g_crash.seq = 0;
+  g_crash.seq++;
+  g_crash.magic = CRASH_MAGIC;
+  __DSB();
   NVIC_SystemReset();
   while (1) {}
 }
+
+/** Consume + log any pending crash record. Call after SD init at boot. */
+static void LogPendingCrashRecord(void)
+{
+  if (g_crash.magic != CRASH_MAGIC) return;
+  char msg[128];
+  snprintf(msg, sizeof(msg),
+           "FAULT#%lu pc=%08lX lr=%08lX cfsr=%08lX bfar=%08lX",
+           (unsigned long)g_crash.seq, (unsigned long)g_crash.pc,
+           (unsigned long)g_crash.lr, (unsigned long)g_crash.cfsr,
+           (unsigned long)g_crash.bfar);
+  SD_Card_EnsureLogFile();
+  SD_Card_LogEvent(msg);
+  /* Register dump on a second row - keeping rows under 100 chars each */
+  snprintf(msg, sizeof(msg),
+           "FAULT r0=%08lX r1=%08lX r2=%08lX r3=%08lX r12=%08lX msp=%08lX psp=%08lX psr=%08lX",
+           (unsigned long)g_crash.r0, (unsigned long)g_crash.r1,
+           (unsigned long)g_crash.r2, (unsigned long)g_crash.r3,
+           (unsigned long)g_crash.r12, (unsigned long)g_crash.msp,
+           (unsigned long)g_crash.psp, (unsigned long)g_crash.psr);
+  SD_Card_LogEvent(msg);
+  g_crash.magic = 0;      /* consumed */
+}
+
 
 #ifdef  USE_FULL_ASSERT
 /**

@@ -44,7 +44,11 @@ _Min_Stack_Size = 0x1000; /* required amount of stack (was 0x400 - overflowed wi
 MEMORY
 {
   FLASH (rx)      : ORIGIN = 0x08000000, LENGTH = 256K
-  RAM (xrw)       : ORIGIN = 0x20000000, LENGTH = 64K
+  /* Top 64 bytes of RAM reserved for the crash record: it must survive a
+   * warm reset (NVIC_SystemReset from HardFault_Handler), so it lives in
+   * its own region that no normal section (incl. .bss) may ever touch. */
+  RAM (xrw)       : ORIGIN = 0x20000000, LENGTH = 64K - 64
+  CRASHRAM (rw)   : ORIGIN = 0x2000FFC0, LENGTH = 64
   CCMRAM (rw)     : ORIGIN = 0x10000000, LENGTH = 0K
 }
 
@@ -143,6 +147,14 @@ SECTIONS
     _ebss = .;         /* define a global symbol at bss end */
     __bss_end__ = _ebss;
   } >RAM
+
+  /* Crash record: NOLOAD so neither .data init nor .bss zeroing invalidate
+   * a record written just before NVIC_SystemReset. Place after .bss so
+   * heap/stack accounting in ._user_heap_stack stays against RAM only. */
+  .crash_record (NOLOAD) :
+  {
+    KEEP(*(.crash_record))
+  } >CRASHRAM
 
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack :
