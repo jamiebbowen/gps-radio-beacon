@@ -163,7 +163,13 @@ def print_section(title, lines, empty="OK"):
 
 def report(sess, label):
     print(f"\n{'=' * 60}\n{label}\n{'=' * 60}")
-    span = (sess.t_last - sess.t_first) if sess.t_first is not None else 0
+    if sess.t_first is None:
+        # Header-only session (e.g. a boot + immediate power-off, or a card
+        # pulled before any event landed). Summarize instead of crashing.
+        print(f"  {sess.rows} log rows, no timestamped entries (boot-only session)")
+        print("\n== Boot / reset ==\n  n/a")
+        return
+    span = sess.t_last - sess.t_first
     print(f"  {sess.rows} log rows, span {fmt_s(span)} "
           f"({sess.t_first:.1f}s -> {sess.t_last:.1f}s)")
 
