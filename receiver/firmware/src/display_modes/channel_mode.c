@@ -24,7 +24,7 @@
  *    3 433.75  7 434.75
  *
  *   Pkts:123  Age:12s
- *   B2/hold B1: next ch
+ *   B2: next channel
  */
 void DisplayMode_ChannelSelect(void)
 {
@@ -62,5 +62,5 @@ void DisplayMode_ChannelSelect(void)
     }
     Display_DrawTextRowCol(6, 0, buffer);
 
-    Display_DrawTextRowCol(7, 0, "B2/hold B1: next ch");
+    Display_DrawTextRowCol(7, 0, "B2: next channel");
 }

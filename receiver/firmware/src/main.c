@@ -541,16 +541,8 @@ int main(void)
     snprintf(rst_msg, sizeof(rst_msg), "RESET src=%s vdd=%umV", src,
              (unsigned)sys_vdd_mv);
     SD_Card_LogEvent(rst_msg);
-
-    /* B2 bring-up: a silent button that "should be wired" almost always
-     * means the raw level never goes high (button legs miswired, ground
-     * pull, or a stuck pin). Log the raw level once so the card can tell
-     * us without a scope. */
-    if (Button2_RawLevel() == 0) {
-      SD_Card_LogEvent("B2 pin LOW at boot (check wiring)");
-    } else {
-      SD_Card_LogEvent("B2 pin HIGH at boot (idle as designed)");
-    }
+    /* Note: idle-level diagnostics live in the main loop (500 ms delay)
+     * so the weak internal pull-up has settled past ADC-credible. */
   }
 
   /* A HardFault leaves CPU evidence in the reserved crash region - log it
@@ -751,6 +743,21 @@ int main(void)
         }
       }
     }
+
+    /* B2 idle-level sanity, delayed past the pull-up settle: the weak
+     * internal PU takes its time to charge, and reading microseconds
+     * after init produced the false "LOW at boot" alarm seen in the field. */
+    {
+      static uint8_t b2_level_logged = 0;
+      if (!b2_level_logged && HAL_GetTick() > 500) {
+        b2_level_logged = 1;
+        if (sd_card_ok) {
+          SD_Card_LogEvent(Button2_RawLevel()
+                           ? "B2 pin idle HIGH (wired correctly)"
+                           : "B2 pin idle LOW (check wiring)");
+        }
+      }
+    }
     
     /* Check for button press to change display mode */
     if (Button_WasPressed()) {
@@ -760,24 +767,17 @@ int main(void)
       force_display_update = 1;  /* Show the new mode this iteration */
     }
 
-    /* Channel switching: button 2 on the Rocket Select page, or a long press
-     * of button 1 as a fallback for units without the second button wired.
-     * A long press anywhere else just cycles the page (a held press must
-     * never be a no-op). Button 2 off the Rocket Select page jumps straight
-     * home to Navigation. */
+    /* Channel switching belongs to button 2 on the Rocket Select page.
+     * Button 1 stays pure page-cycle; a long press anywhere cycles the page
+     * too (a held press must never be a no-op). Button 2 off the Rocket
+     * Select page jumps straight home to Navigation.
+     * (The old B1-long-press channel fallback is retired now that every unit
+     * has B2 wired: two routes to the same change were a hazard.) */
     uint8_t cycle_channel = 0;
     if (Button_WasLongPressed()) {
-      if (current_display_mode == DISPLAY_MODE_CHANNEL) {
-        cycle_channel = 1;
-      } else {
-        /* A long press only has a special meaning on the Rocket Select
-         * page. Anywhere else, fall back to the normal page cycle so a
-         * press held a beat too long still does SOMETHING - otherwise
-         * holds >=700 ms were silently swallowed and the button felt dead. */
-        current_display_mode = (current_display_mode + 1) % DISPLAY_MODE_COUNT;
-        mode_change_time = HAL_GetTick();
-        force_display_update = 1;
-      }
+      current_display_mode = (current_display_mode + 1) % DISPLAY_MODE_COUNT;
+      mode_change_time = HAL_GetTick();
+      force_display_update = 1;
     }
     if (Button2_WasPressed()) {
       if (current_display_mode == DISPLAY_MODE_CHANNEL) {
