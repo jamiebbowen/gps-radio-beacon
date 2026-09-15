@@ -316,6 +316,79 @@ TEST(test_rapid_press_sequence)
     CHECK(Button_WasPressed() == 0);
 }
 
+TEST(test_press_bounce_beyond_time_gate_caught_by_state_guard)
+{
+    /* Bounce edges > BUTTON_DEBOUNCE_MS after the press. The time-gate alone
+     * would accept them, so the state guard must be the reject."""
+     */
+    Button_Init();
+    advance(100);
+
+    press_edge();
+    advance(BUTTON_DEBOUNCE_MS + 20);     /* past the time gate */
+    /* Late bounce edge: pin is still low (= pressed), exti fires again */
+    exti_pending |= BUTTON_PIN;
+    EXTI15_10_IRQHandler();
+    /* Only one press must exist */
+    CHECK(Button_IsPressed() == 1);          /* state didn't bobble */
+
+    advance(100);
+    release_pin();
+    advance(1);
+    Button_Update();
+    CHECK(Button_WasPressed() == 1);         /* single press */
+    CHECK(Button_WasPressed() == 0);         /* no duplicate */
+}
+
+TEST(test_long_press_boundary)
+{
+    Button_Init();
+    advance(100);
+
+    /* 1 ms shy of the threshold: not yet a long press */
+    press_edge();
+    advance(BUTTON_LONG_PRESS_MS - 1);
+    Button_Update();
+    CHECK(Button_WasLongPressed() == 0);
+
+    /* Cross the threshold while still held: long-press fires */
+    advance(1);
+    Button_Update();
+    CHECK(Button_WasLongPressed() == 1);
+
+    /* Released after long-press: no short-press fire */
+    release_pin();
+    advance(1);
+    Button_Update();
+    CHECK(Button_WasPressed() == 0);
+    CHECK(Button_IsReleased() == 1);
+}
+
+TEST(test_second_press_bounce_retrigger_blocked)
+{
+    /* Press, release, then the EXTI fires again BEFORE Button_Update got to
+     * confirm the release (bounce in the bounce window): the debounced state
+     * is still PRESSED, so the edge must be rejected entirely."""
+     */
+    Button_Init();
+    advance(100);
+
+    press_edge();
+    advance(100);
+    release_pin();
+    /* Pin momentarily low again within the release-debounce window: falling
+     * edge fires before Update could confirm the release. */
+    fake_pin10 = GPIO_PIN_RESET;
+    exti_pending |= BUTTON_PIN;
+    EXTI15_10_IRQHandler();
+    fake_pin10 = GPIO_PIN_SET;
+
+    advance(1);
+    Button_Update();
+    CHECK(Button_WasPressed() == 1);       /* one press only */
+    CHECK(Button_WasPressed() == 0);
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void)
@@ -332,6 +405,9 @@ int main(void)
     run_test_button2_fires_on_press_edge();
     run_test_button2_stuck_pressed_blocks_retrigger();
     run_test_rapid_press_sequence();
+    run_test_press_bounce_beyond_time_gate_caught_by_state_guard();
+    run_test_long_press_boundary();
+    run_test_second_press_bounce_retrigger_blocked();
 
     return TEST_SUMMARY();
 }
