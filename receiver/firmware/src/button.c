@@ -16,11 +16,17 @@ static volatile uint8_t press_pending = 0;       /* Press seen, short/long undec
 static volatile uint8_t button_press_detected = 0;       /* Short press (set at release) */
 static uint8_t button_long_press_detected = 0;           /* Long press (set while held) */
 
-/* Button 2 (PB2, EXTI2). Fires on press (no long-press semantics), so it
- * only needs the debounce state, not a pending-outcome flag. */
+/* Button 2 (PB2, EXTI2). Press edges are edge-candidates, not events: the
+ * main loop confirms the pin is still held when the debounce window closes
+ * before exposing the press. That is the electrically-unsurprising fix for
+ * 'fires from vibration' - single falling edges caused by movement contact
+ * or marginal solder joints clear within BUTTON_DEBOUNCE_MS; real presses
+ * don't. */
 static volatile uint32_t last_button2_time = 0;
 static volatile Button_State_t button2_stable_state = BUTTON_RELEASED;
 static volatile uint8_t button2_press_detected = 0;
+static volatile uint8_t button2_press_candidate = 0;
+static volatile uint32_t button2_candidate_time = 0;
 
 /* Debounce time in milliseconds */
 #define BUTTON_DEBOUNCE_MS 50  /* Typical button bounce is 5-20ms, 50ms is safe */
@@ -73,6 +79,8 @@ void Button_Init(void)
     last_button2_time = HAL_GetTick();
     button2_stable_state = BUTTON_RELEASED;
     button2_press_detected = 0;
+    button2_press_candidate = 0;
+    button2_candidate_time = 0;
 }
 
 /**
@@ -176,39 +184,61 @@ void Button_Update(void)
 {
     uint32_t current_time = HAL_GetTick();
     Button_State_t raw_state = Button_GetState();
-    
+
     if (last_stable_state == BUTTON_PRESSED) {
-        /* Promote a held press to a long press while still held */
-        if (press_pending &&
-            (current_time - last_button_time) >= BUTTON_LONG_PRESS_MS) {
-            press_pending = 0;
-            button_long_press_detected = 1;
-        }
-        
-        /* Check for button release after debounce time */
+        /* Glitch rejection: the pin released BEFORE the debounce window
+         * closed = the falling edge was movement/contact noise, not a
+         * human press. Void it entirely - no press event. */
         if (raw_state == BUTTON_RELEASED &&
-            (current_time - last_button_time) >= BUTTON_DEBOUNCE_MS) {
+            (current_time - last_button_time) < BUTTON_DEBOUNCE_MS) {
             last_stable_state = BUTTON_RELEASED;
-            
-            /* Released before the long-press threshold: it's a short press */
-            if (press_pending) {
+            press_pending = 0;
+            last_button_time = current_time;    /* re-arm vs following edges */
+        } else {
+            /* Promote a held press to a long press while still held */
+            if (press_pending &&
+                (current_time - last_button_time) >= BUTTON_LONG_PRESS_MS) {
                 press_pending = 0;
-                button_press_detected = 1;
+                button_long_press_detected = 1;
             }
-            
-            /* Re-arm the debounce window at the release edge so any release
-             * bounce (falling edges) within the next BUTTON_DEBOUNCE_MS is
-             * rejected by the time gate in the ISR. */
-            last_button_time = current_time;
+
+            /* Check for button release after debounce time */
+            if (raw_state == BUTTON_RELEASED) {
+                last_stable_state = BUTTON_RELEASED;
+
+                /* Released before the long-press threshold: short press */
+                if (press_pending) {
+                    press_pending = 0;
+                    button_press_detected = 1;
+                }
+
+                /* Re-arm the debounce window at the release edge so any release
+                 * bounce (falling edges) within the next BUTTON_DEBOUNCE_MS is
+                 * rejected by the time gate in the ISR. */
+                last_button_time = current_time;
+            }
         }
     }
-    
-    /* Button 2 release detection (same time-gate/state-guard scheme) */
+
+    /* Button 2 release detection */
     if (button2_stable_state == BUTTON_PRESSED &&
         HAL_GPIO_ReadPin(BUTTON2_GPIO_PORT, BUTTON2_PIN) == GPIO_PIN_SET &&
         (current_time - last_button2_time) >= BUTTON_DEBOUNCE_MS) {
         button2_stable_state = BUTTON_RELEASED;
         last_button2_time = current_time;
+    }
+
+    /* Button 2 press confirmation: an edge becomes a press ONLY if the pin
+     * is still held low when the debounce window closes. The old instant-
+     * fire-on-edge scheme was exactly as twitchy as it sounds. */
+    if (button2_press_detected == 0 && button2_press_candidate &&
+        (current_time - button2_candidate_time) >= BUTTON_DEBOUNCE_MS) {
+        button2_press_candidate = 0;
+        if (HAL_GPIO_ReadPin(BUTTON2_GPIO_PORT, BUTTON2_PIN) == GPIO_PIN_RESET) {
+            button2_press_detected = 1;
+            button2_stable_state = BUTTON_PRESSED;
+            last_button2_time = current_time;   /* arm release detection */
+        }
     }
 }
 
@@ -257,9 +287,10 @@ void EXTI2_IRQHandler(void)
         
         if ((current_time - last_button2_time) >= BUTTON_DEBOUNCE_MS &&
             button2_stable_state == BUTTON_RELEASED) {
-            last_button2_time = current_time;
-            button2_stable_state = BUTTON_PRESSED;
-            button2_press_detected = 1;
+            /* Mark a candidate; the press only exists if the pin is still
+             * held at the end of the window (see Button_Update). */
+            button2_press_candidate = 1;
+            button2_candidate_time  = current_time;
         }
     }
 }

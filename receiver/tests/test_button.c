@@ -218,22 +218,37 @@ TEST(test_release_bounce_rejected_by_state_guard)
     CHECK(Button_IsReleased() == 1);
 }
 
-TEST(test_release_ignored_within_debounce_window)
+TEST(test_glitched_press_within_debounce_window_voided)
 {
+    /* Glitch semantics POST-hardening: a press released 10 ms in is NOT a
+     * press at all - pin must remain low through the debounce window. This
+     * is the vibration-resistant behavior the field flagged. */
     Button_Init();
     advance(100);
 
     press_edge();
-    /* Pin reads high only 10 ms after the press edge (mechanical chatter):
-     * the release must NOT latch until the debounce window has elapsed. */
     release_pin();
     advance(10);
-    Button_Update();
-    CHECK(Button_IsPressed() == 1);      /* still debouncing */
+    Button_Update();                    /* released before window closed */
+    CHECK(Button_IsPressed() == 0);     /* voided, not "still debouncing" */
+    CHECK(Button_IsReleased() == 1);
+    CHECK(Button_WasPressed() == 0);    /* no press event */
+}
 
-    advance(BUTTON_DEBOUNCE_MS);
+TEST(test_real_short_press_still_confirmable_after_hold)
+{
+    /* Same press shape, but the pin stays low through the window: real press. */
+    Button_Init();
+    advance(100);
+
+    press_edge();
+    advance(BUTTON_DEBOUNCE_MS + 10);   /* pin still low -> confirmed */
     Button_Update();
-    CHECK(Button_IsReleased() == 1);     /* now accepted */
+    CHECK(Button_IsPressed() == 1);
+
+    release_pin();
+    advance(1);
+    Button_Update();                    /* now-release: window long past */
     CHECK(Button_WasPressed() == 1);
 }
 
@@ -254,20 +269,18 @@ TEST(test_exti_for_other_line_ignored)
     exti_pending = 0;
 }
 
-TEST(test_button2_fires_on_press_edge)
+TEST(test_button2_fires_on_confirmed_press)
 {
     Button_Init();
     advance(100);
 
     press2_edge();
-    CHECK(Button2_WasPressed() == 1);    /* instant: no release wait */
-    CHECK(Button2_WasPressed() == 0);    /* one-shot */
-
-    /* Bounce edge within the debounce window: rejected */
-    exti_pending |= BUTTON2_PIN;
-    advance(5);
-    EXTI2_IRQHandler();
+    /* Not instant: confirmation requires the pin still held at window end */
     CHECK(Button2_WasPressed() == 0);
+    advance(BUTTON_DEBOUNCE_MS + 1);     /* pin still low */
+    Button_Update();
+    CHECK(Button2_WasPressed() == 1);
+    CHECK(Button2_WasPressed() == 0);    /* one-shot */
 
     /* Release and settle */
     release2_pin();
@@ -277,10 +290,34 @@ TEST(test_button2_fires_on_press_edge)
     /* A second real press is accepted after release + debounce */
     advance(100);
     press2_edge();
+    advance(BUTTON_DEBOUNCE_MS + 1);
+    Button_Update();
     CHECK(Button2_WasPressed() == 1);
     release2_pin();
     advance(BUTTON_DEBOUNCE_MS + 1);
     Button_Update();
+}
+
+TEST(test_button2_glitch_edge_voided)
+{
+    Button_Init();
+    advance(100);
+
+    /* Movement/contact noise: edge hits, pin clears before window closes */
+    press2_edge();
+    advance(BUTTON_DEBOUNCE_MS / 2);
+    release2_pin();
+    advance(BUTTON_DEBOUNCE_MS);
+    Button_Update();
+    CHECK(Button2_WasPressed() == 0);    /* glitch swallowed */
+    CHECK(Button2_IsHeld() == 0);
+
+    /* A real press right after still works */
+    advance(100);
+    press2_edge();
+    advance(BUTTON_DEBOUNCE_MS + 1);
+    Button_Update();
+    CHECK(Button2_WasPressed() == 1);
 }
 
 TEST(test_button2_stuck_pressed_blocks_retrigger)
@@ -289,6 +326,8 @@ TEST(test_button2_stuck_pressed_blocks_retrigger)
     advance(100);
 
     press2_edge();
+    advance(BUTTON_DEBOUNCE_MS + 1);    /* confirmation window passes, held */
+    Button_Update();
     CHECK(Button2_WasPressed() == 1);
 
     /* Still held: another edge long after debounce must NOT re-fire
@@ -400,9 +439,11 @@ int main(void)
     run_test_long_press_fires_while_held();
     run_test_press_bounce_rejected_by_time_gate();
     run_test_release_bounce_rejected_by_state_guard();
-    run_test_release_ignored_within_debounce_window();
+    run_test_glitched_press_within_debounce_window_voided();
+    run_test_real_short_press_still_confirmable_after_hold();
     run_test_exti_for_other_line_ignored();
-    run_test_button2_fires_on_press_edge();
+    run_test_button2_fires_on_confirmed_press();
+    run_test_button2_glitch_edge_voided();
     run_test_button2_stuck_pressed_blocks_retrigger();
     run_test_rapid_press_sequence();
     run_test_press_bounce_beyond_time_gate_caught_by_state_guard();
