@@ -28,7 +28,7 @@
 static uint32_t now_ms = 1000;   /* non-zero so debounce windows are sane */
 
 static GPIO_PinState fake_pin10 = GPIO_PIN_SET;   /* released (pull-up) */
-static GPIO_PinState fake_pin2  = GPIO_PIN_SET;
+static GPIO_PinState fake_pin2  = GPIO_PIN_RESET; /* B2 released (pull-down) */
 
 static uint32_t exti_pending = 0;   /* bitmask of pending EXTI lines */
 
@@ -83,17 +83,17 @@ static void release_pin(void)
     fake_pin10 = GPIO_PIN_SET;
 }
 
-/** Falling edge on button 2 */
+/** Rising edge on button 2 (B2 is wired to 3V3: active HIGH) */
 static void press2_edge(void)
 {
-    fake_pin2 = GPIO_PIN_RESET;
+    fake_pin2 = GPIO_PIN_SET;
     exti_pending |= BUTTON2_PIN;
     EXTI2_IRQHandler();
 }
 
 static void release2_pin(void)
 {
-    fake_pin2 = GPIO_PIN_SET;
+    fake_pin2 = GPIO_PIN_RESET;
 }
 
 /** Full clean short-press cycle: press, hold, release, settle */

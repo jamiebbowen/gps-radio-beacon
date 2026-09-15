@@ -16,12 +16,13 @@ static volatile uint8_t press_pending = 0;       /* Press seen, short/long undec
 static volatile uint8_t button_press_detected = 0;       /* Short press (set at release) */
 static uint8_t button_long_press_detected = 0;           /* Long press (set while held) */
 
-/* Button 2 (PB2, EXTI2). Press edges are edge-candidates, not events: the
- * main loop confirms the pin is still held when the debounce window closes
- * before exposing the press. That is the electrically-unsurprising fix for
- * 'fires from vibration' - single falling edges caused by movement contact
- * or marginal solder joints clear within BUTTON_DEBOUNCE_MS; real presses
- * don't. */
+/* Button 2 (PB2/BOOT1, EXTI2). Wired between PB2 and 3V3: ACTIVE HIGH.
+ * Rising edge = press candidate (see below); pin LOW = released.
+ * Press edges are edge-candidates, not events: the main loop confirms the
+ * pin is still held when the debounce window closes before exposing the
+ * press. That is the electrically-unsurprising fix for 'fires from
+ * vibration' - single rising edges caused by movement contact or marginal
+ * solder joints clear within BUTTON_DEBOUNCE_MS; real presses don't. */
 static volatile uint32_t last_button2_time = 0;
 static volatile Button_State_t button2_stable_state = BUTTON_RELEASED;
 static volatile uint8_t button2_press_detected = 0;
@@ -59,10 +60,12 @@ void Button_Init(void)
     HAL_NVIC_SetPriority(EXTI15_10_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
     
-    /* Configure PB2 (button 2) the same way on its own EXTI line */
+    /* Configure PB2 (button 2): wired to 3V3 -> ACTIVE HIGH. Pull-down so
+     * the input can't float mid-level (a floating High would masquerade as
+     * "pressed" and block the EXTI rising edge), rising-edge interrupt. */
     GPIO_InitStruct.Pin = BUTTON2_PIN;
-    GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+    GPIO_InitStruct.Pull = GPIO_PULLDOWN;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     HAL_GPIO_Init(BUTTON2_GPIO_PORT, &GPIO_InitStruct);
     
@@ -222,19 +225,18 @@ void Button_Update(void)
 
     /* Button 2 release detection */
     if (button2_stable_state == BUTTON_PRESSED &&
-        HAL_GPIO_ReadPin(BUTTON2_GPIO_PORT, BUTTON2_PIN) == GPIO_PIN_SET &&
+        HAL_GPIO_ReadPin(BUTTON2_GPIO_PORT, BUTTON2_PIN) == GPIO_PIN_RESET &&
         (current_time - last_button2_time) >= BUTTON_DEBOUNCE_MS) {
         button2_stable_state = BUTTON_RELEASED;
         last_button2_time = current_time;
     }
 
     /* Button 2 press confirmation: an edge becomes a press ONLY if the pin
-     * is still held low when the debounce window closes. The old instant-
-     * fire-on-edge scheme was exactly as twitchy as it sounds. */
+     * is still held HIGH when the debounce window closes. */
     if (button2_press_detected == 0 && button2_press_candidate &&
         (current_time - button2_candidate_time) >= BUTTON_DEBOUNCE_MS) {
         button2_press_candidate = 0;
-        if (HAL_GPIO_ReadPin(BUTTON2_GPIO_PORT, BUTTON2_PIN) == GPIO_PIN_RESET) {
+        if (HAL_GPIO_ReadPin(BUTTON2_GPIO_PORT, BUTTON2_PIN) == GPIO_PIN_SET) {
             button2_press_detected = 1;
             button2_stable_state = BUTTON_PRESSED;
             last_button2_time = current_time;   /* arm release detection */

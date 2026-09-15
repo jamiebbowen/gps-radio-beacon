@@ -753,8 +753,8 @@ int main(void)
         b2_level_logged = 1;
         if (sd_card_ok) {
           SD_Card_LogEvent(Button2_RawLevel()
-                           ? "B2 pin idle HIGH (wired correctly)"
-                           : "B2 pin idle LOW (check wiring)");
+                           ? "B2 pin idle HIGH (PRESSED at boot? wiring/short)"
+                           : "B2 pin idle LOW (wired correctly)");
         }
       }
     }

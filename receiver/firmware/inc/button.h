@@ -16,12 +16,12 @@
 #define BUTTON_GPIO_PORT GPIOB
 
 /* Second button: context action (select channel on Rocket Select page,
- * jump home to Navigation elsewhere). Active low to GND, internal pull-up.
- * PB2 sits next to PB10 on the Black Pill header. NOTE: PB2 is BOOT1 -
- * ignored on normal boots (BOOT0=0), but it must read LOW when entering the
- * DFU bootloader; if DFU entry is flaky with the button wired, hold this
- * button (forcing PB2 low) while tapping reset. Unwired pin is held high by
- * the pull-up and simply never fires. */
+ * jump home to Navigation elsewhere). Wired between PB2 and 3V3:
+ * ACTIVE HIGH, internal pull-down. PB2 sits next to PB10 on the Black Pill
+ * header, and the board's BOOT1 pulldown doesn't fight us (firmware sets
+ * pull-down too). NOTE: PB2 is BOOT1 - ignored on normal boots (BOOT0=0),
+ * but it must read LOW when entering the DFU bootloader; if DFU entry ever
+ * acts up, tap reset with the button untouched (PB2 low at reset). */
 #define BUTTON2_PIN GPIO_PIN_2  /* PB2 - Select/home button */
 #define BUTTON2_GPIO_PORT GPIOB
 
