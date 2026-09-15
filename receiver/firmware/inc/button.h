@@ -39,6 +39,8 @@ uint8_t Button_IsReleased(void);
 uint8_t Button_WasPressed(void);      /* Debounced short-press detection (fires at release) */
 uint8_t Button_WasLongPressed(void);  /* Long-press detection (fires while held, ~700ms) */
 uint8_t Button2_WasPressed(void);     /* Second button press detection (fires on press) */
+uint8_t Button2_RawLevel(void);       /* Raw pin level right now (1=high idle, 0=low) */
+uint8_t Button2_IsHeld(void);         /* Debounced held state (transition-logging support) */
 void Button_Update(void);             /* Call this regularly for debouncing */
 
 #endif /* BUTTON_H */

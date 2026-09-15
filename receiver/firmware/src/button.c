@@ -154,6 +154,19 @@ uint8_t Button2_WasPressed(void)
     return 0;
 }
 
+/* Diagnostics: raw pin level directly, and debounced state transitions,
+ * plus init-time "is this line sane?" reading. Useful when a freshly
+ * wired button is silent in the field. */
+uint8_t Button2_RawLevel(void)
+{
+    return HAL_GPIO_ReadPin(BUTTON2_GPIO_PORT, BUTTON2_PIN) == GPIO_PIN_SET ? 1 : 0;
+}
+
+uint8_t Button2_IsHeld(void)
+{
+    return button2_stable_state == BUTTON_PRESSED ? 1 : 0;
+}
+
 /**
  * @brief Update button state (long-press promotion and release detection)
  * @retval None

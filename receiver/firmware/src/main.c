@@ -541,6 +541,16 @@ int main(void)
     snprintf(rst_msg, sizeof(rst_msg), "RESET src=%s vdd=%umV", src,
              (unsigned)sys_vdd_mv);
     SD_Card_LogEvent(rst_msg);
+
+    /* B2 bring-up: a silent button that "should be wired" almost always
+     * means the raw level never goes high (button legs miswired, ground
+     * pull, or a stuck pin). Log the raw level once so the card can tell
+     * us without a scope. */
+    if (Button2_RawLevel() == 0) {
+      SD_Card_LogEvent("B2 pin LOW at boot (check wiring)");
+    } else {
+      SD_Card_LogEvent("B2 pin HIGH at boot (idle as designed)");
+    }
   }
 
   /* A HardFault leaves CPU evidence in the reserved crash region - log it
@@ -726,8 +736,21 @@ int main(void)
                         led_on ? GPIO_PIN_RESET : GPIO_PIN_SET);
     }
     
-    /* Update button state */
+    /* Update button state. Transition log settles the "is B2 electrically
+     * alive at all?" question faster than any bench-scope debate: the card
+     * records every debounced press/release at 1 Hz fidelity. */
     Button_Update();
+    {
+      static uint8_t b2_last_held = 0xFF;   /* 0xFF = first pass = boot log */
+      uint8_t held_now = Button2_IsHeld();
+      if (held_now != b2_last_held) {
+        b2_last_held = held_now;
+        if (sd_card_ok) {
+          SD_Card_LogEvent(held_now ? "B2 press (electrical)"
+                                    : "B2 released");
+        }
+      }
+    }
     
     /* Check for button press to change display mode */
     if (Button_WasPressed()) {
