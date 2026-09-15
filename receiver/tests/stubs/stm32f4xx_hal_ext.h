@@ -49,6 +49,7 @@ typedef struct {
 #define GPIO_MODE_IT_RISING        0u
 #define GPIO_NOPULL                0u
 #define GPIO_PULLUP                0u
+#define GPIO_PULLDOWN              0u
 #define GPIO_SPEED_FREQ_LOW        0u
 #define GPIO_SPEED_FREQ_HIGH       0u
 #define GPIO_SPEED_FREQ_VERY_HIGH  0u
