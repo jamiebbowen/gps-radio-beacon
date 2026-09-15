@@ -77,10 +77,11 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 # Every test binary re-reads firmware headers (e.g. inc/<module>.h) via
-# stubs/; add the whole header set as a dependency so edits to constants
-# and prototypes pick up rebuilds. (A stale ONLY-test_compass.c binary
-# was the exact cause of a 2026-09-14 green-here/red-CI event.)
-HEADERS := $(wildcard ../firmware/inc/*.h ../firmware/inc/display_modes/*.h test_harness.h)
+# stubs/; add the whole header set AND the stub headers as dependencies so
+# edits to constants/prototypes/stub internals always rebuild. (This is the
+# same stale-binary trap that caused green-here/red-CI events on both
+# 2026-09-14 (stale test_compass.c) and 2026-09-15 (stale stub header).)
+HEADERS := $(wildcard ../firmware/inc/*.h ../firmware/inc/display_modes/*.h test_harness.h stubs/*.h)
 
 $(BUILD)/test_%: test_%.c $(SRC_DIR)/%.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< $(LDFLAGS)
