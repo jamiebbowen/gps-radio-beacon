@@ -103,6 +103,10 @@ void nav_get_fused(NavFused_t *out) { *out = fake_fused; }
 static uint32_t fake_gps_rejects = 0;
 uint32_t nav_get_gps_rejects(void) { return fake_gps_rejects; }
 
+/* beacon.cpp's V3 heartbeat reports the boot's reset cause; on real
+ * hardware firmware.ino captures RSTC->RCAUSE into this global. */
+volatile uint8_t g_boot_rcause = 0;
+
 /* Include the module under test AFTER the fakes (it only needs their
  * declarations from the headers; definitions resolve at link within
  * this translation unit). */
@@ -337,6 +341,7 @@ TEST(test_heartbeat_contents_and_rate_limit)
 
     CHECK(beacon_transmit_heartbeat(&c, 42, 0) == 1);
     CHECK(tx_len == sizeof(HeartbeatPacket_t));
+    CHECK(sizeof(HeartbeatPacket_t) == HEARTBEAT_PACKET_SIZE);  /* =9 */
     const HeartbeatPacket_t *hb = (const HeartbeatPacket_t *)tx_buf;
     CHECK(hb->packet_type == PACKET_TYPE_HEARTBEAT);
     CHECK(hb->rocket_id   == ROCKET_ID);
@@ -345,6 +350,13 @@ TEST(test_heartbeat_contents_and_rate_limit)
     CHECK(hb->fix_quality == 0);
     CHECK(hb->uptime_s    == 42);
     CHECK(hb->gps_health  == 0x21);
+    /* V3: reset cause travels with the heartbeat (WDT boot = 0x20) */
+    g_boot_rcause = HB_RESET_WDT;
+    now_ms += HEARTBEAT_INTERVAL_SEC * 1000UL + 1;
+    CHECK(beacon_transmit_heartbeat(&c, 50, 0) == 1);
+    hb = (const HeartbeatPacket_t *)tx_buf;
+    CHECK(hb->reset_info  == HB_RESET_WDT);
+    g_boot_rcause = 0;
 
     /* Within HEARTBEAT_INTERVAL_SEC: rate limited, no TX */
     uint32_t count_before = tx_count;

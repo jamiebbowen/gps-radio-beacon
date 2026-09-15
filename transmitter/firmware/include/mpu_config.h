@@ -6,8 +6,11 @@
 
 #include <Arduino.h>
 
-// System clock configuration  
+// System clock configuration (Arduino core already defines F_CPU;
+// redefine only when missing, keeping the tools' warning surface clean.)
+#ifndef F_CPU
 #define F_CPU 120000000UL  // 120MHz
+#endif
 
 // Pin assignments for ItsyBitsy M4 Express
 // E22-400M33S LoRa Module (SX1268) - SPI Interface

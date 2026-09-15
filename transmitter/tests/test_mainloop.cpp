@@ -60,7 +60,10 @@ static struct {
 #define WDT_CLEAR_CLEAR_KEY_Val      0xA5
 static struct { struct { uint8_t reg; } RCAUSE; } fake_rstc;
 #define RSTC (&fake_rstc)
-#define RSTC_RCAUSE_WDT 0x10
+#define RSTC_RCAUSE_WDT     0x20
+#define RSTC_RCAUSE_BODCORE 0x02
+#define RSTC_RCAUSE_BODVDD  0x04
+#define RSTC_RCAUSE_POR     0x01
 
 /* ------------------------------------------------------------------ */
 /* Radio fakes: count every packet by type                             */

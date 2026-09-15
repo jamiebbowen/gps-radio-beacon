@@ -30,11 +30,13 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
                            uint8_t tx_fix, uint8_t tx_sats, uint8_t tx_hb_state,
                            uint8_t tx_sensor_degraded,
                            uint8_t rx_fix_ok, uint8_t rx_sats,
-                           uint8_t compass_ok, uint8_t sd_ok)
+                           uint8_t compass_ok, uint8_t sd_ok,
+                           uint16_t rx_vdd_mv)
 {
     /* Sized for worst-case formatted expansion (sats up to 255, fix up to
-     * 255), not just visible columns - display clips to its cell width. */
-    char buf[32];
+     * 255, 32-bit link age + signed dBm), not just visible columns -
+     * display clips to its cell width. */
+    char buf[40];
 
     Display_DrawTextRowCol(0, 4, "PRE-FLIGHT CHECK");
 
@@ -93,8 +95,20 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
     }
     Display_DrawTextRowCol(3, 0, buf);
 
-    /* Compass */
-    Display_DrawTextRowCol(4, 0, compass_ok ? "COMPASS  OK" : "COMPASS  CHK");
+    /* Compass + RX rail voltage. The rail's only watchdog otherwise is a
+     * per-minute RFSTATS line; by then a brown-out may have already
+     * scrambled SD state mid-session. 3.20V is ~the lowest the LDO can
+     * still maintain regulation with the current draw profile. */
+    if (rx_vdd_mv > 0 && rx_vdd_mv < 3200) {
+        snprintf(buf, sizeof(buf), "PWR LOW  %u.%02uV",
+                 rx_vdd_mv / 1000, (rx_vdd_mv % 1000) / 10);
+        Display_DrawTextRowCol(4, 0, buf);
+    } else {
+        snprintf(buf, sizeof(buf), "COMPASS  %s%u.%uV",
+                 compass_ok ? "OK " : "CHK",
+                 rx_vdd_mv / 1000, (rx_vdd_mv % 1000) / 100);
+        Display_DrawTextRowCol(4, 0, buf);
+    }
 
     /* SD card (advisory: receiver works without it, but no track log) */
     Display_DrawTextRowCol(5, 0, sd_ok ? "SD CARD  OK" : "SD CARD  WARN nolog");
@@ -106,8 +120,10 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
     Display_DrawTextRowCol(6, 0, tx_sensor_degraded ? "TX IMU   CHK dead!"
                                                     : "TX IMU   OK");
 
-    /* Verdict */
-    if (link_ok && tx_gps_ok && rx_fix_ok && compass_ok) {
+    /* Verdict: battery rail is now a gate too */
+    if (rx_vdd_mv > 0 && rx_vdd_mv < 3200) {
+        Display_DrawTextRowCol(7, 3, "PWR LOW - CHANGE PACK");
+    } else if (link_ok && tx_gps_ok && rx_fix_ok && compass_ok) {
         Display_DrawTextRowCol(7, 2, "** READY TO FLY **");
     } else {
         Display_DrawTextRowCol(7, 3, "NOT READY - CHK");

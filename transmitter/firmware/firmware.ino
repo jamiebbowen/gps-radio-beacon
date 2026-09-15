@@ -144,14 +144,23 @@ void timer_init(void) {
     // This is simpler and sufficient for this application
 }
 
+/* Reset-cause forensics: captured before anything can disturb RSTC, sent
+ * out with every heartbeat (V3 field). The receiver logs a row when a
+ * cause other than plain POR kicks in mid-flight (brown-out or WD hung). */
+volatile uint8_t g_boot_rcause = 0;
+
 void setup() {
+    g_boot_rcause = RSTC->RCAUSE.reg;   /* survives the reset, capture first */
+
     // Initialize USB Serial for debugging (optional)
     Serial.begin(115200);
-    
+
     /* A WDT-forced reboot must be visible: it means the firmware hung in
-     * the field. RCAUSE survives the reset. */
-    if (RSTC->RCAUSE.reg & RSTC_RCAUSE_WDT) {  /* .bit.WDT collides with the WDT macro */
+     * the field. */
+    if (g_boot_rcause & RSTC_RCAUSE_WDT) {  /* .bit.WDT collides with the WDT macro */
         Serial.println(F("[Boot] *** Recovered from WATCHDOG RESET (firmware hang) ***"));
+    } else if (g_boot_rcause & (RSTC_RCAUSE_BODCORE | RSTC_RCAUSE_BODVDD)) {
+        Serial.println(F("[Boot] *** Recovered from BROWN-OUT (supply sag) ***"));
     }
     
     // Initialize hardware

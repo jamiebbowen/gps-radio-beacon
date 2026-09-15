@@ -117,6 +117,10 @@ void nav_get_fused(NavFused_t *out) { *out = fake_fused; }
 static uint32_t fake_gps_rejects = 0;
 uint32_t nav_get_gps_rejects(void) { return fake_gps_rejects; }
 
+/* beacon.cpp's V3 heartbeat carries the TX boot's RSTC_RCAUSE; firmware.ino
+ * owns the global. Host builds stand it up here. */
+volatile uint8_t g_boot_rcause = 0;
+
 #include "../firmware/beacon.cpp"
 
 /* ------------------------------------------------------------------ */

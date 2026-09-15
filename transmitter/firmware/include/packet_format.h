@@ -42,9 +42,26 @@ typedef struct __attribute__((packed)) {
     uint8_t  fix_quality;   // GGA fix quality (0 = none)
     uint16_t uptime_s;      // Seconds since beacon boot (saturates at 65535)
     uint8_t  gps_health;    // GPS receiver health, see HB_GPS_* below
+    uint8_t  reset_info;    // V3: raw SAMD51 RSTC_RCAUSE of the boot that
+                            // started this session (see HB_RESET_CAUSE_*).
+                            // Receiver's uptime-regression check still fires
+                            // for mid-flight resets; this adds the WHY.
 } HeartbeatPacket_t;
-#define HEARTBEAT_PACKET_SIZE     8
+#define HEARTBEAT_PACKET_SIZE     9
+#define HEARTBEAT_PACKET_SIZE_V2  8   // without reset_info
 #define HEARTBEAT_PACKET_SIZE_V1  7   // legacy layout without gps_health
+
+/* reset_info: verbatim SAMD51 RSTC_RCAUSE register. From the CMSIS header
+ * (component/rstc.h): POR bit0, BODCORE bit1, BODVDD bit2, NVM bit3,
+ * EXT bit4, WDT bit5, SYST bit6, BACKUP bit7. */
+#define HB_RESET_POR     0x01        /* Power-on reset                   */
+#define HB_RESET_BODCORE 0x02        /* Brown-out, core rail (VDDCORE)   */
+#define HB_RESET_BODVDD  0x04        /* Brown-out drain, 3.3V rail       */
+#define HB_RESET_NVM     0x08        /* NVM underway reboot              */
+#define HB_RESET_EXT     0x10        /* External reset pin               */
+#define HB_RESET_WDT     0x20        /* Watchdog timeout                 */
+#define HB_RESET_SYST    0x40        /* NVIC system reset request        */
+#define HB_RESET_BACKUP  0x80        /* Backup/hibernate exit            */
 
 /* gps_health encoding: low nibble = state, high nibble = watchdog recovery
  * attempts (0-3). Answers the pad question "is the GPS still ACQUIRING, or

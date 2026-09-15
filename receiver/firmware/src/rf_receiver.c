@@ -428,6 +428,7 @@ uint8_t RF_Receiver_DataAvailable(void)
           last_packet_time = HAL_GetTick();
         }
       } else if ((last_packet.length == HEARTBEAT_PACKET_SIZE
+               || last_packet.length == HEARTBEAT_PACKET_SIZE_V2
                || last_packet.length == HEARTBEAT_PACKET_SIZE_V1)
               && last_packet.data[0] == PACKET_TYPE_HEARTBEAT) {
         /* No-fix keepalive. Deliberately does NOT set rf_packet_ready or

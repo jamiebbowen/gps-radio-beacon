@@ -24,7 +24,8 @@ SRC_DIR  := ../firmware/src
 
 # Modules with a matching test_<module>.c and $(SRC_DIR)/<module>.c
 MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass
-BINS     := $(addprefix $(BUILD)/test_,$(MODULES)) $(BUILD)/test_navigation_mode
+BINS     := $(addprefix $(BUILD)/test_,$(MODULES)) \
+            $(BUILD)/test_navigation_mode $(BUILD)/test_preflight_mode
 
 # navigation_mode.c lives in display_modes/ and needs the real math_utils
 $(BUILD)/test_navigation_mode: test_navigation_mode.c \
@@ -33,6 +34,13 @@ $(BUILD)/test_navigation_mode: test_navigation_mode.c \
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< \
 	    $(SRC_DIR)/display_modes/navigation_mode.c $(SRC_DIR)/math_utils.c \
 	    $(LDFLAGS)
+
+# preflight_mode.c likewise lives in display_modes/ (RF layer stubbed in the
+# test file itself; no math_utils dep)
+$(BUILD)/test_preflight_mode: test_preflight_mode.c \
+        $(SRC_DIR)/display_modes/preflight_mode.c $(HEADERS) | $(BUILD)
+	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< \
+	    $(SRC_DIR)/display_modes/preflight_mode.c $(LDFLAGS)
 
 # rf_receiver.c calls into the real parser, so its test links rf_parser.c
 # too (the LoRa driver + HAL are faked inside test_rf_receiver.c).

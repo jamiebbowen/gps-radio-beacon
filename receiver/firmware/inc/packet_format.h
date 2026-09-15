@@ -29,12 +29,11 @@ typedef struct __attribute__((packed)) {
 #define PACKET_TYPE_FUSED       0x04  // EKF-fused position + velocity (TX nav module)
 #define PACKET_TYPE_HEARTBEAT   0x05  // No-fix keepalive (see HeartbeatPacket_t)
 
-/* Heartbeat: 8 bytes. The transmitter sends this instead of a GPS packet
- * when it has no transmittable fix (no fix / <4 sats), so the channel scan
- * can lock and the operator can see the beacon is alive on the pad. Must
- * stay in sync with the transmitter's copy of this header. The receiver
- * also accepts the older 7-byte layout (no gps_health) from beacons on
- * previous firmware; gps_health then decodes as HB_GPS_UNKNOWN. */
+/* Heartbeat: V3 = 9 bytes (V2 = 8, V1 = 7). The transmitter sends this
+ * instead of a GPS packet when it has no transmittable fix (no fix / <4
+ * sats), so the channel scan can lock and the operator can see the beacon
+ * is alive on the pad. Must stay in sync with the transmitter's copy of
+ * this header. Shorter legacy layouts zero-fill (unknown reset_info 00). */
 typedef struct __attribute__((packed)) {
     uint8_t  packet_type;   // PACKET_TYPE_HEARTBEAT
     uint8_t  rocket_id;     // ROCKET_ID of the airframe
@@ -43,8 +42,11 @@ typedef struct __attribute__((packed)) {
     uint8_t  fix_quality;   // GGA fix quality (0 = none)
     uint16_t uptime_s;      // Seconds since beacon boot (saturates at 65535)
     uint8_t  gps_health;    // GPS receiver health, see HB_GPS_* below
+    uint8_t  reset_info;    // V3: SAMD51 RSTC_RCAUSE on the TX boot that
+                            // started this session (HB_RESET_* bit masks).
 } HeartbeatPacket_t;
-#define HEARTBEAT_PACKET_SIZE     8
+#define HEARTBEAT_PACKET_SIZE     9
+#define HEARTBEAT_PACKET_SIZE_V2  8   // legacy layout without reset_info
 #define HEARTBEAT_PACKET_SIZE_V1  7   // legacy layout without gps_health
 
 /* gps_health encoding: low nibble = state, high nibble = watchdog recovery
@@ -58,6 +60,25 @@ typedef struct __attribute__((packed)) {
 #define HB_GPS_RESETS(h)   ((uint8_t)(((h) >> 4) & 0x0F))
 #define HB_GPS_HEALTH(state, resets) \
     ((uint8_t)((((resets) & 0x0F) << 4) | ((state) & 0x0F)))
+
+/* reset_info bits (verbatim SAMD51 RSTC_RCAUSE, component/rstc.h) */
+#define HB_RESET_POR     0x01        /* Power-on reset                   */
+#define HB_RESET_BODCORE 0x02        /* Brown-out, core rail (VDDCORE)   */
+#define HB_RESET_BODVDD  0x04        /* Brown-out drain, 3.3V rail       */
+#define HB_RESET_NVM     0x08        /* NVM underway reboot              */
+#define HB_RESET_EXT     0x10        /* External reset pin               */
+#define HB_RESET_WDT     0x20        /* Watchdog timeout                 */
+#define HB_RESET_SYST    0x40        /* NVIC system reset request        */
+#define HB_RESET_BACKUP  0x80        /* Backup/hibernate exit            */
+#define HB_RESET_NAME(i)  ( \
+    ((i) & HB_RESET_WDT)     ? "WDT"  : \
+    ((i) & HB_RESET_BODCORE) ? "BOD-c" : \
+    ((i) & HB_RESET_BODVDD)  ? "BOD-v" : \
+    ((i) & HB_RESET_EXT)     ? "EXT"  : \
+    ((i) & HB_RESET_POR)     ? "POR"  : \
+    ((i) & HB_RESET_SYST)    ? "SYST" : \
+    ((i) & HB_RESET_NVM)     ? "NVM"  : \
+    ((i) & HB_RESET_BACKUP)  ? "BKP"  : "?" )
 
 // Flags byte bit definitions
 #define FLAG_LAUNCH_DETECTED    0x80  // Bit 7: 1 = launched, 0 = on ground

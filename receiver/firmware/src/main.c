@@ -877,17 +877,27 @@ int main(void)
       HeartbeatPacket_t hb;
       if (RF_Receiver_GetHeartbeat(&hb)) {
         /* Beacon-side resets are otherwise indistinguishable from a LOST
-         * window at review time: the heartbeat uptime field regresses.
-         * (Covers TX WDT resets and supply sags - the lfs-of-the-air.) */
+         * window at review time: the heartbeat uptime field regresses, and
+         * V3 heartbeats add the boot's RCAUSE so we know WHAT. POR alone
+         * is the power-cycling-a-new-pack case; everything else needs a
+         * close look during post-flight. (Covers TX WDT resets and supply
+         * sags - the lfs-of-the-air.) */
         static uint16_t prev_hb_uptime = 0;
-        if (hb.uptime_s < prev_hb_uptime) {
-          char r_msg[48];
-          snprintf(r_msg, sizeof(r_msg), "TX reset: uptime %us -> %us",
-                   (unsigned)prev_hb_uptime, (unsigned)hb.uptime_s);
+        static uint8_t  prev_hb_reset_info = 0;
+        static uint8_t  prev_hb_init = 0;
+        if (hb.uptime_s < prev_hb_uptime
+            || (prev_hb_init && prev_hb_reset_info != hb.reset_info)) {
+          char r_msg[96];
+          snprintf(r_msg, sizeof(r_msg),
+                   "TX reset: uptime %us -> %us cause=%s(0x%02X)",
+                   (unsigned)prev_hb_uptime, (unsigned)hb.uptime_s,
+                   HB_RESET_NAME(hb.reset_info), (unsigned)hb.reset_info);
           SD_Card_EnsureLogFile();
           SD_Card_LogError(r_msg);
         }
         prev_hb_uptime = hb.uptime_s;
+        prev_hb_reset_info = hb.reset_info;
+        prev_hb_init = 1;
 
         int16_t hb_rssi;
         int8_t  hb_snr;
@@ -896,14 +906,15 @@ int main(void)
          * / GARBLED (bytes but no NMEA) / unk (pre-health TX firmware) */
         static const char *hb_gps_names[] = {"unk", "SILENT", "GARBLED", "acq"};
         uint8_t hb_gps = HB_GPS_STATE(hb.gps_health);
-        char hb_msg[80];
+        char hb_msg[112];   /* fits field-127 up/rssi + unknown rc name     */
         snprintf(hb_msg, sizeof(hb_msg),
-                 "HEARTBEAT id=%u CH%u sats=%u fix=%u up=%us rssi=%d gps=%s rst=%u",
+                 "HEARTBEAT id=%u CH%u sats=%u fix=%u up=%us rssi=%d gps=%s rst=%u rc=%s",
                  (unsigned)hb.rocket_id, (unsigned)hb.channel,
                  (unsigned)hb.satellites, (unsigned)hb.fix_quality,
                  (unsigned)hb.uptime_s, (int)hb_rssi,
                  (hb_gps <= HB_GPS_ACQUIRING) ? hb_gps_names[hb_gps] : "?",
-                 (unsigned)HB_GPS_RESETS(hb.gps_health));
+                 (unsigned)HB_GPS_RESETS(hb.gps_health),
+                 HB_RESET_NAME(hb.reset_info));
         SD_Card_EnsureLogFile();
         SD_Card_LogEvent(hb_msg);
       }
@@ -1562,7 +1573,7 @@ int main(void)
                             remote_gps_data.fused_sensor_degraded,
                             has_valid_local_gps, (uint8_t)local_gps_data.satellites,
                             compass_data.heading_valid && !compass_data.heading_stale,
-                            sd_card_ok);
+                            sd_card_ok, (uint16_t)sys_vdd_mv);
       break;
     }
       

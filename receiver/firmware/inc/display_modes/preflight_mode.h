@@ -31,12 +31,16 @@ extern "C" {
  * @param rx_sats      receiver satellite count
  * @param compass_ok   1 = compass heading valid
  * @param sd_ok        1 = SD card logging available (advisory only)
+ * @param rx_vdd_mv    receiver 3.3V rail, measured via VREFINT. Sagged
+ *                     (< ~3.20V) = low battery pack / brown-out risk -
+ *                     shown on the compass row and gates READY TO FLY.
  */
 void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
                            uint8_t tx_fix, uint8_t tx_sats, uint8_t tx_hb_state,
                            uint8_t tx_sensor_degraded,
                            uint8_t rx_fix_ok, uint8_t rx_sats,
-                           uint8_t compass_ok, uint8_t sd_ok);
+                           uint8_t compass_ok, uint8_t sd_ok,
+                           uint16_t rx_vdd_mv);
 
 #ifdef __cplusplus
 }

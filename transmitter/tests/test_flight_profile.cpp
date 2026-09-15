@@ -100,6 +100,10 @@ float gps_nmea_to_decimal(const char *n, char d)
 /* Real modules wired together (this is the point of the scenario)     */
 /* ------------------------------------------------------------------ */
 
+/* beacon.cpp's V3 heartbeat carries the boot reset cause; firmware.ino owns
+ * the global that hosts it on real hardware */
+volatile uint8_t g_boot_rcause = 0;
+
 #include "../firmware/launch_detect.cpp"
 #include "../firmware/nav.cpp"
 #include "../firmware/ekf.cpp"

@@ -446,6 +446,44 @@ TEST(test_heartbeat_lifecycle)
     CHECK(RF_Receiver_SetChannel(0) == RF_OK);
 }
 
+TEST(test_heartbeat_v3_reset_cause)
+{
+    /* V3 (9-byte) heartbeat: the boot reset cause must come through; the
+     * invalid-cause macro gives a readable chip name for every bit. */
+    HeartbeatPacket_t hb = {
+        .packet_type = PACKET_TYPE_HEARTBEAT,
+        .rocket_id   = OUR_ROCKET_ID,
+        .channel     = 0,
+        .satellites  = 4,
+        .fix_quality = 1,
+        .uptime_s    = 61,
+        .gps_health  = HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0),
+        .reset_info  = HB_RESET_WDT,
+    };
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    memcpy(fake_pkt.data, &hb, sizeof(hb));
+    fake_pkt.length = HEARTBEAT_PACKET_SIZE;   /* = 9 */
+    fake_pkt_pending = 1;
+    run_for(250, 250);
+
+    HeartbeatPacket_t out;
+    CHECK(RF_Receiver_GetHeartbeat(&out) == 1);
+    CHECK(out.reset_info == HB_RESET_WDT);
+    CHECK(strcmp(HB_RESET_NAME(HB_RESET_WDT),     "WDT")   == 0);
+    CHECK(strcmp(HB_RESET_NAME(HB_RESET_BODVDD),  "BOD-v") == 0);
+    CHECK(strcmp(HB_RESET_NAME(HB_RESET_POR),     "POR")   == 0);
+    CHECK(strcmp(HB_RESET_NAME(HB_RESET_EXT),     "EXT")   == 0);
+    CHECK(strcmp(HB_RESET_NAME(HB_RESET_SYST),    "SYST")  == 0);
+    CHECK(strcmp(HB_RESET_NAME(0), "?") == 0);
+
+    /* V2 (8-byte) heartbeat: reset_info zero-filled decodes as cause=? */
+    inject_heartbeat(OUR_ROCKET_ID, 0, 5, 12);
+    fake_pkt.length = HEARTBEAT_PACKET_SIZE_V2;
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&out) == 1);
+    CHECK(out.reset_info == 0);
+}
+
 TEST(test_position_packet_flow)
 {
     inject_gps_packet(40.0, -105.0, OUR_ROCKET_ID);
@@ -1824,6 +1862,7 @@ int main(void)
     run_test_channel_cycling_covers_all_channels();
     run_test_callsign_captured_in_binary_mode();
     run_test_heartbeat_lifecycle();
+    run_test_heartbeat_v3_reset_cause();
     run_test_band_garbage_packets_are_ignored();
     run_test_final_packet_position_persists_through_blackout();
     run_test_position_packet_flow();
