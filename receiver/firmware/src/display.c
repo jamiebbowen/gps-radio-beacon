@@ -100,11 +100,51 @@ static uint32_t display_last_probe_ms = 0;
 #define DISPLAY_I2C_STREAK_LIMIT   32
 #define DISPLAY_I2C_PROBE_MS       10000
 
+/* ----------------------------------------------------------------
+ * Bus speed ladder for the shared I2C1 (SSD1309 display + BNO055 compass).
+ * Default fast (400 kHz); proven error streaks drop one rung; a sustained
+ * quiet window at the slow rung re-tests the fast rung (one shot), and
+ * only imposes headless as a last resort. */
+#define DISPLAY_I2C_KHZ_DEFAULT  400
+#define DISPLAY_I2C_KHZ_SLOW     100
+static uint32_t display_i2c_khz = DISPLAY_I2C_KHZ_DEFAULT;
+static uint32_t display_i2c_slow_since_ms = 0;   /* entered-slow timestamp */
+#define DISPLAY_I2C_RAMPUP_QUIET_MS  120000u     /* 2 min clean -> try fast */
+
+/** Current I2C1 clock for observability. */
+uint32_t Display_I2CClockKHz(void) { return display_i2c_khz; }
+
+/** Re-init I2C1 at a new clock. Used for runtime speed changes. */
+static void display_i2c_set_clock(uint32_t khz)
+{
+  hi2c_display.Init.ClockSpeed = khz * 1000u;
+  (void)HAL_I2C_DeInit(&hi2c_display);
+  (void)HAL_I2C_Init(&hi2c_display);
+  display_i2c_khz = khz;
+}
+
+/** Was the display still responding at the current clock? Cheap probe. */
+static uint8_t display_i2c_fast_ok(void)
+{
+  return HAL_I2C_IsDeviceReady(&hi2c_display, SSD1309_I2C_ADDR << 1, 1, 50)
+         == HAL_OK;
+}
+
 static void Display_NoteI2CResult(HAL_StatusTypeDef st)
 {
   if (st == HAL_OK) {
     display_i2c_error_streak = 0;
-  } else if (++display_i2c_error_streak >= DISPLAY_I2C_STREAK_LIMIT) {
+    return;
+  }
+  if (++display_i2c_error_streak >= DISPLAY_I2C_STREAK_LIMIT) {
+    /* First failure point when fast: try slower before giving up. */
+    if (display_i2c_khz > DISPLAY_I2C_KHZ_SLOW) {
+      display_i2c_set_clock(DISPLAY_I2C_KHZ_SLOW);
+      display_i2c_slow_since_ms = HAL_GetTick();
+      display_i2c_error_streak = 0;
+      return;   /* slower rung comes up; next errors re-streak there */
+    }
+    /* Already slow (or tried both) and still wedged: go headless */
     display_i2c_failed = 1;
   }
 }
@@ -139,6 +179,22 @@ void Display_Update(void)
   if (display_i2c_failed) {
     Display_TryBusRecovery();
     return;
+  }
+
+  /* Hesitant ramp-up: only after a long enough uninterrupted clean run at
+   * the slow speed, probe the fast speed once. If it survives tonight, we
+   * stay fast; if anything trips again, the streak logic drops us back. */
+  if (display_i2c_khz < DISPLAY_I2C_KHZ_DEFAULT &&
+      DISPLAY_I2C_KHZ_SLOW == display_i2c_khz &&
+      display_i2c_error_streak == 0 &&
+      (HAL_GetTick() - display_i2c_slow_since_ms) >= DISPLAY_I2C_RAMPUP_QUIET_MS) {
+    display_i2c_set_clock(DISPLAY_I2C_KHZ_DEFAULT);
+    if (!display_i2c_fast_ok()) {
+      display_i2c_set_clock(DISPLAY_I2C_KHZ_SLOW);
+      display_i2c_slow_since_ms = HAL_GetTick();   /* new quiet window */
+    }
+    /* else: leave the clock fast; the streak path will re-throttle on any
+     * real bus trouble */
   }
 
   /* Always rotate buffer for fixed 90° orientation */
@@ -476,9 +532,12 @@ static void Display_I2C_Init(void)
   
   /* Configure I2C */
   hi2c_display.Instance = I2C1;
-  /* Standard mode (100 kHz): shared bus with the BNO055, which is more
-   * reliable at 100 kHz on this wiring than fast mode. */
-  hi2c_display.Init.ClockSpeed = 100000;
+  /* Try fast mode first: SSD1309 + BNO055 both support Fast Mode per their
+   * datasheets. Verify with a device probe; if the wiring marginalizes it
+   * out, fall back to the always-good 100 kHz. Runtime streak logic drops
+   * to slow under sustained trouble and re-tries fast after a clean
+   * window (see Display_Update, 2 min rule). */
+  hi2c_display.Init.ClockSpeed = DISPLAY_I2C_KHZ_DEFAULT * 1000u;
   hi2c_display.Init.DutyCycle = I2C_DUTYCYCLE_2;
   hi2c_display.Init.OwnAddress1 = 0;
   hi2c_display.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
@@ -486,9 +545,19 @@ static void Display_I2C_Init(void)
   hi2c_display.Init.OwnAddress2 = 0;
   hi2c_display.Init.GeneralCallMode = I2C_GENERALCALL_DISABLED;
   hi2c_display.Init.NoStretchMode = I2C_NOSTRETCH_DISABLED;
-  
+
   if (HAL_I2C_Init(&hi2c_display) != HAL_OK) {
     display_i2c_failed = 1;  /* run headless - never hang the receiver */
+    return;
+  }
+  display_i2c_khz = DISPLAY_I2C_KHZ_DEFAULT;
+
+  if (!display_i2c_fast_ok()) {
+    display_i2c_set_clock(DISPLAY_I2C_KHZ_SLOW);
+    if (!display_i2c_fast_ok()) {
+      display_i2c_failed = 1;
+      display_i2c_khz = DISPLAY_I2C_KHZ_SLOW;
+    }
   }
 }
 

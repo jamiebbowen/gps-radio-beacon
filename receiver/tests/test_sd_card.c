@@ -112,6 +112,14 @@ uint8_t SD_StepSpeedDown(void)      /* matches diskio: returns new divider */
     return seq[i];
 }
 
+int stepup_calls = 0;
+uint8_t SD_FastSpeedEnabled(void) { return (uint8_t)(16 >> stepup_calls); }
+uint8_t SD_StepSpeedUpTry(void)
+{
+    stepup_calls++;
+    return (uint8_t)(16 >> stepup_calls);   /* model: try always works */
+}
+
 /* sd_card.c's per-file caches are sized 4096; our cfg.cache_size is 512,
  * which is fine (buffer only needs to be >= cache_size). */
 
@@ -784,6 +792,30 @@ TEST(test_io_error_streak_steps_bus_down)
     CHECK(stepdown_calls == 1);            /* 3 consecutive -> one step */
 }
 
+TEST(test_io_stepup_requires_streak_and_cooldown)
+{
+    /* Asymmetric: step-up waits (a) 60 consecutive OK writes and (b) a
+     * 2-minute cooldown since the last step-down. An incident shouldn't
+     * see an instant re-fast. */
+    stepup_calls = 0;
+    sd_io_ok_streak = 0;
+    Test_SetTick(500);                     /* t = 500 ms */
+
+    /* Cooldown not met: a 2-minute gap since the last step-down. */
+    sd_last_stepdown_ms = 400;             /* stepped down 100 ms ago */
+    for (int i = 0; i < 62; i++) sd_note_write_ok();
+    CHECK(stepup_calls == 0);
+
+    /* Cooldown met: jump the clock far ahead before the step-down. */
+    sd_last_stepdown_ms = 400;
+    Test_SetTick(400 + SD_IO_STEPUP_COOLDOWN_MS + 1000);
+    sd_note_write_ok();
+    CHECK(stepup_calls == 1);
+    /* Another 60 OKs back-to-back -> only one attempt per streak */
+    for (int i = 0; i < 120; i++) sd_note_write_ok();
+    CHECK(stepup_calls <= 2);
+}
+
 TEST(test_timestamp_format)
 {
     char ts[32];
@@ -822,6 +854,7 @@ int main(void)
     run_test_dirty_card_boot_preserves_history();
     run_test_declination_loader();
     run_test_io_error_streak_steps_bus_down();
+    run_test_io_stepup_requires_streak_and_cooldown();
     run_test_timestamp_format();
 
     return TEST_SUMMARY();

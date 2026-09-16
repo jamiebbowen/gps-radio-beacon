@@ -465,6 +465,29 @@ uint8_t SD_StepSpeedDown(void)
   return sd_spi_div;
 }
 
+/** Hesitant step UP one rung, verified before kept. Returns the resulting
+ *  divider (caller compares to the previous value to log transitions). If
+ *  the verify fails, puts us back where we were and leaves a "tried and
+ *  rejected" thumbprint for the log. */
+uint8_t SD_StepSpeedUpTry(void)
+{
+  static const uint8_t next_faster[] = { [16] = 8, [8] = 4, [4] = 2, [2] = 2 };
+  if (sd_spi_div < 2 || sd_spi_div > 16) return sd_spi_div;
+  uint8_t prev = sd_spi_div;
+  uint8_t try_div = next_faster[prev];
+  if (try_div == prev) return prev;
+
+  sd_set_prescaler(try_div == 2 ? 0x0 : try_div == 4 ? 0x1
+                                          : try_div == 8 ? 0x2 : 0x3);
+  if (sd_verify_readback()) {
+    sd_spi_div = try_div;
+  } else {
+    sd_set_prescaler(prev == 16 ? 0x3 : prev == 8 ? 0x2
+                                          : prev == 4 ? 0x1 : 0x0);
+  }
+  return sd_spi_div;
+}
+
 /**
  * @brief  Send a command packet to SD card
  */

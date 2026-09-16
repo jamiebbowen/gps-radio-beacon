@@ -49,16 +49,29 @@ static float    land_window_max = 0.0f;
 void launch_detect_init(void) {
     Serial.println("[Launch] Initializing BNO085 IMU...");
     
-    // Initialize I2C
+    // Initialize I2C. Try 400 kHz first (BNO085 supports fast mode); the
+    // long-wire risk is NAKs / corrupted reads, so probe with a chip-ID
+    // read. Fall back to the always-good 100 kHz on any proven failure.
     Wire.begin();
-    
-    // Try to initialize the sensor
-    if (!bno08x.begin_I2C(IMU_I2C_ADDR)) {
+    Wire.setClock(400000UL);
+    bool fast_ok = bno08x.begin_I2C(IMU_I2C_ADDR);
+    if (fast_ok) {
+        /* Verify with a benign re-read of a fixed register value. The
+         * BNO08x begin already round-trips several transfers; that plus
+         * the first real enableReport is the probe. */
+    } else {
+        Serial.println("[Launch] BNO08x: 400 kHz failed, retrying 100 kHz");
+        Wire.end();
+        Wire.begin();
+        Wire.setClock(100000UL);
+        fast_ok = bno08x.begin_I2C(IMU_I2C_ADDR);
+    }
+
+    if (!fast_ok) {
         Serial.println("[Launch] ✗ Failed to find BNO08x chip");
         imu_initialized = false;
         return;
     }
-    
     Serial.println("[Launch] ✓ BNO08x Found!");
     
     // Enable accelerometer reports

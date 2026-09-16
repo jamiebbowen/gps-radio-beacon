@@ -320,15 +320,27 @@ TEST(test_runtime_error_streak_goes_headless_and_recovers)
     Test_SetTick(0);
     CHECK(Display_Init() == DISPLAY_OK);
 
-    /* Mid-session bus wedge: every transmit fails. 6 commands + first data
-     * chunk = 7 errors per update -> headless on the 5th frame. */
+    /* Mid-session bus wedge: every transmit fails. The bus ladder first
+     * drops from the default 400 kHz to 100 kHz on a full error streak;
+     * only when slow-mode ALSO streaks does the bus go headless. */
     fake_i2c_tx_fail = 1;
     for (int i = 0; i < 8 && !display_i2c_failed; i++) {
         Display_Clear();
         Display_Update();
+        /* On the first trip of the streak limit we must NOT go headless -
+         * we step down to 100 kHz instead. */
+        if (i == 4) {
+            CHECK(display_i2c_khz == 100);
+            CHECK(display_i2c_failed == 0);
+        }
     }
-    CHECK(display_i2c_failed == 1);           /* streak limit tripped */
-    CHECK(display_i2c_error_streak >= DISPLAY_I2C_STREAK_LIMIT);
+    CHECK(display_i2c_khz == 100);
+    for (int i = 0; i < 8 && !display_i2c_failed; i++) {
+        Display_Clear();
+        Display_Update();
+    }
+    CHECK(display_i2c_failed == 1);           /* slow rung streaked too */
+
     uint32_t tx_at_headless = i2c_transmits;
 
     /* Headless frames cost zero I2C until the probe interval elapses */

@@ -31,6 +31,8 @@
 /* sd_diskio.h drags in old FatFS headers the host test harness lacks;
  * forward-declare the one symbol we need instead. */
 uint8_t SD_StepSpeedDown(void);
+uint8_t SD_StepSpeedUpTry(void);
+uint8_t SD_FastSpeedEnabled(void);
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -83,6 +85,14 @@ static uint8_t  sd_dirty_rows = 0;
 static uint32_t sd_last_write = 0;
 
 #define SD_IO_ERR_STEPDOWN_STREAK  3
+
+/* Hesitant ramp-back-up: only after 60 consecutive clean writes AND ≥2 min
+ * since ANY ladder change (step-down or step-up attempt). Tried step-ups
+ * are read-back verified by the diskio layer, and failures stay slow. */
+#define SD_IO_OK_STEPUP_STREAK     60
+#define SD_IO_STEPUP_COOLDOWN_MS   120000u
+static uint8_t  sd_io_ok_streak = 0;
+static uint32_t sd_last_stepdown_ms = 0;
 static uint8_t       log_file_open  = 0;
 static SD_Card_Info  sd_info;
 static char          log_buffer[SD_CARD_LOG_BUFFER_SIZE];
@@ -415,13 +425,37 @@ static uint8_t sd_try_log_recovery(void)
  * electrically safe, and next boot re-runs the ladder fresh anyway. */
 static uint8_t  sd_io_err_streak = 0;
 
-static void sd_note_write_ok(void) { sd_io_err_streak = 0; }
+static void sd_note_write_ok(void)
+{
+    sd_io_err_streak = 0;
+    /* Hesitant step-up: only when the current divider is slower than the
+     * boot-verified one is the bus worth re-trying. */
+    if (++sd_io_ok_streak >= SD_IO_OK_STEPUP_STREAK) {
+        uint32_t now = HAL_GetTick();
+        if (now - sd_last_stepdown_ms >= SD_IO_STEPUP_COOLDOWN_MS) {
+            sd_io_ok_streak = 0;
+            uint8_t before = SD_FastSpeedEnabled();
+            uint8_t after  = SD_StepSpeedUpTry();
+            sd_last_stepdown_ms = now;   /* any ladder change = new quiet window */
+            if (after != before && log_file_open) {
+                char ts[16];
+                SD_Card_GetTimestamp(ts, sizeof(ts));
+                snprintf(log_buffer, sizeof(log_buffer),
+                         "%s,EVENT,SD bus stepped up to /%u after %u clean writes\n",
+                         ts, (unsigned)after, (unsigned)SD_IO_OK_STEPUP_STREAK);
+                lfs_file_write(&lfs, &log_file, log_buffer, strlen(log_buffer));
+            }
+        }
+    }
+}
 
 static void sd_note_write_err(void)
 {
+    sd_io_ok_streak = 0;
     if (++sd_io_err_streak >= SD_IO_ERR_STEPDOWN_STREAK) {
         sd_io_err_streak = 0;
         uint8_t div = SD_StepSpeedDown();
+        sd_last_stepdown_ms = HAL_GetTick();
         char ts[16];
         SD_Card_GetTimestamp(ts, sizeof(ts));
         snprintf(log_buffer, sizeof(log_buffer),

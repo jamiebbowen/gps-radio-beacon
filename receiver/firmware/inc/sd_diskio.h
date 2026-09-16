@@ -32,6 +32,9 @@ void SD_SetFastSpeed (void);
 uint8_t SD_FastSpeedEnabled(void);
 /** Runtime: step the bus one rung slower (error-driven throttle). Returns new divider. */
 uint8_t SD_StepSpeedDown(void);
+/** Runtime: hesitant step one rung faster, verified before kept.
+ *  Returns the resulting divider. Call sparsely. */
+uint8_t SD_StepSpeedUpTry(void);
 
 extern uint8_t sd_diag_cmd_resp;   /* R1 from last CMD24 */
 extern uint8_t sd_diag_data_token; /* data response token from last block write */
