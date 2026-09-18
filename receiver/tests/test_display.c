@@ -104,6 +104,27 @@ static void reset_i2c_counters(void)
 /* Tests                                                               */
 /* ------------------------------------------------------------------ */
 
+TEST(test_init_sequence_contains_orientation_cmds)
+{
+    /* Rotation boundary: the default is now 0 = upright (redesigned case).
+     * The compile switch moves both segments+scan direction together; pin
+     * the values so an accidental dead-define can't silently rotate the
+     * operator's display. */
+    const uint8_t *seq = ssd1309_init_sequence;
+    size_t n = sizeof(ssd1309_init_sequence);
+    int saw_seg = 0, saw_scan = 0, saw_180 = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (seq[i] == (SSD1309_SEGREMAP | 0x00)) saw_seg = 1;      /* normal */
+        if (seq[i] == (SSD1309_SEGREMAP | 0x01)) saw_180 = 1;      /* flipped */
+        if (seq[i] == SSD1309_COMSCANDEC)        saw_scan = 1;
+    }
+    CHECK(saw_seg || saw_180);
+    CHECK(saw_scan);
+
+    CHECK(SSD1309_SEGREMAP_VAL == (SSD1309_SEGREMAP | 0x00));
+    CHECK(SSD1309_COMSCAN_VAL   == SSD1309_COMSCANINC);
+}
+
 TEST(test_init_sends_full_sequence_and_clears)
 {
     reset_i2c_counters();

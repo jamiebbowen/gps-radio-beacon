@@ -24,6 +24,23 @@
 /* Private variables */
 I2C_HandleTypeDef hi2c_display; /* Global for sharing with compass module */
 static uint8_t display_buffer[SSD1309_BUFFER_SIZE];
+
+/* Orientation switch: 1 = 180° (legacy build), 0 = upright.
+ * Set to 0 for the redesigned RX case. */
+/* Orientation switch: 1 = 180° (old case), 0 = upright (redesigned case,
+ * 2026-09). Hardware reality driven by how the case mounts the SSD1309. */
+#ifndef DISPLAY_ROTATE_180
+#define DISPLAY_ROTATE_180  0
+#endif
+
+#if DISPLAY_ROTATE_180
+  #define SSD1309_SEGREMAP_VAL  (SSD1309_SEGREMAP | 0x01)  /* flip horizontal */
+  #define SSD1309_COMSCAN_VAL   SSD1309_COMSCANDEC         /* flip vertical   */
+#else
+  #define SSD1309_SEGREMAP_VAL  (SSD1309_SEGREMAP | 0x00)
+  #define SSD1309_COMSCAN_VAL   SSD1309_COMSCANINC
+#endif
+
 static const uint8_t ssd1309_init_sequence[] = {
   SSD1309_DISPLAYOFF,
   SSD1309_SETDISPLAYCLOCKDIV, 0x80,
@@ -32,8 +49,8 @@ static const uint8_t ssd1309_init_sequence[] = {
   SSD1309_SETSTARTLINE | 0x00,
   SSD1309_CHARGEPUMP, 0x14,
   SSD1309_MEMORYMODE, 0x00,
-  SSD1309_SEGREMAP | 0x01,
-  SSD1309_COMSCANDEC,
+  SSD1309_SEGREMAP_VAL,
+  SSD1309_COMSCAN_VAL,
   SSD1309_SETCOMPINS, 0x12,
   SSD1309_SETCONTRAST, 0xCF,
   SSD1309_SETPRECHARGE, 0xF1,
@@ -63,9 +80,7 @@ uint8_t Display_Init(void)
     Display_SendCommand(ssd1309_init_sequence[i]);
   }
   
-  /* Set 180° rotated orientation hardware configuration */
-  Display_SendCommand(SSD1309_SEGREMAP | 0x01);  /* Flip horizontal (segment remap) */
-  Display_SendCommand(SSD1309_COMSCANDEC);       /* Flip vertical (reverse COM scan) */
+  /* Orientation is set by ssd1309_init_sequence above. */
   
   /* Clear display buffer */
   Display_Clear();
