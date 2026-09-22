@@ -73,7 +73,7 @@ upload: compile
 # Alternative upload using custom script (works around snap library issues)
 upload-direct: compile
 	@echo "Using direct upload method..."
-	./upload.sh $(PORT)
+	BUILD_DIR=$(BUILD_DIR) ./upload.sh $(PORT)
 
 # Combined flash target (compile + upload)
 flash: upload

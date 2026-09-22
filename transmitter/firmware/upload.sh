@@ -1,9 +1,15 @@
 #!/bin/bash
 # Wrapper script to upload firmware with proper library path
 
-BOSSAC="/home/jbbowen/snap/arduino-cli/62/.arduino15/packages/adafruit/tools/bossac/1.8.0-48-gb176eee/bossac"
+BOSSAC="$(ls -d "$HOME"/.arduino15/packages/adafruit/tools/bossac/*/bossac 2>/dev/null | sort -V | tail -1)"
 PORT="${1:-/dev/ttyACM0}"
-FIRMWARE="build/firmware.ino.bin"
+FIRMWARE="${BUILD_DIR:-build}/firmware.ino.bin"
+
+if [ -z "$BOSSAC" ] || [ ! -x "$BOSSAC" ]; then
+    echo "Error: bossac not found under ~/.arduino15/packages/adafruit/tools/bossac/"
+    echo "Run 'make install-deps' first"
+    exit 1
+fi
 
 # Check if firmware exists
 if [ ! -f "$FIRMWARE" ]; then
@@ -17,6 +23,13 @@ if [ ! -e "$PORT" ]; then
     echo "Error: Port $PORT not found"
     echo "Available ports:"
     ls /dev/ttyACM* /dev/ttyUSB* 2>/dev/null || echo "  None found"
+    exit 1
+fi
+
+# Check for write permission (serial devices are root:dialout)
+if [ ! -w "$PORT" ]; then
+    echo "Error: $PORT is not writable by $USER"
+    echo "Fix: sudo usermod -aG dialout $USER   (then log out and back in)"
     exit 1
 fi
 
