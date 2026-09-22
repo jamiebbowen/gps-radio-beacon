@@ -528,13 +528,18 @@ int main(void)
    * mysteries. */
   if (sd_card_ok) {
     uint32_t csr = RCC->CSR;
+    /* Priority order matters: a cold power-on sets PORRSTF, BORRSTF and
+     * PINRSTF together on F4 (a POR passes through the brown-out region),
+     * so checking BOR first mislabels every normal power cycle as a
+     * brown-out and hides real ones.  POR first, then BOR (genuine
+     * mid-run supply dip: BOR without POR), then PIN. */
     const char *src =
       (csr & RCC_CSR_IWDGRSTF) ? "IWDG"  :
       (csr & RCC_CSR_WWDGRSTF) ? "WWDG"  :
       (csr & RCC_CSR_SFTRSTF)  ? "SOFT"  :
+      (csr & RCC_CSR_PORRSTF)  ? "POR"   :
       (csr & RCC_CSR_BORRSTF)  ? "BOR"   :
-      (csr & RCC_CSR_PINRSTF)  ? "PIN"   :
-      (csr & RCC_CSR_PORRSTF)  ? "POR"   : "UNK";
+      (csr & RCC_CSR_PINRSTF)  ? "PIN"   : "UNK";
     SD_Card_EnsureLogFile();
     char rst_msg[48];
     Sys_MeasureVdd();   /* boot rail check: pairs with src=BOR events */
@@ -1794,6 +1799,24 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* hspi)
   }
 }
 
+/* Crash-record storage (shared by HardFault_Handler and Error_Handler,
+ * both below). Pure static RAM in a NOLOAD section at the top of RAM,
+ * so these paths stay a few instructions and cannot themselves crash. */
+#define CRASH_MAGIC 0x43525348u   /* "CRSH" */
+#define CRASH_SRC_HARDFAULT     0u
+#define CRASH_SRC_ERROR_HANDLER 1u
+typedef struct {
+  uint32_t magic;
+  uint32_t seq;                     /* consecutive crash count          */
+  uint32_t r0, r1, r2, r3, r12, lr, pc, psr;  /* exception frame      */
+  uint32_t cfsr, hfsr, bfar;        /* fault status from the SCB        */
+  uint32_t msp, psp;                /* both stack pointers (overflow?)  */
+  uint32_t source;                  /* CRASH_SRC_*                      */
+} CrashRecord;                      /* 16 words = 64 B <= 64 B reserved */
+
+__attribute__((section(".crash_record")))
+static CrashRecord g_crash;
+
 /**
   * @brief  This function is executed in case of error occurrence.
   * @retval None
@@ -1804,7 +1827,22 @@ void Error_Handler(void)
   /* Reset immediately rather than spinning until the IWDG fires (~32 s):
    * HAL errors land here with the system in an unknown state, and every
    * second spent hung is a second of beacon packets missed. The IWDG
-   * remains the backstop if the reset itself fails. */
+   * remains the backstop if the reset itself fails.
+   *
+   * Leave a breadcrumb first: the 2026-09-22 backyard test lost three
+   * early-boot sessions to this path with only a bare "RESET src=SOFT"
+   * on the next boot and no FAULT record. Snapshot the call site into
+   * the crash block; the next boot logs it as "ERRH#n pc=<callsite>". */
+  if (g_crash.magic != CRASH_MAGIC) g_crash.seq = 0;
+  g_crash.seq++;
+  g_crash.pc = (uint32_t)__builtin_return_address(0);
+  g_crash.r0 = g_crash.r1 = g_crash.r2 = g_crash.r3 = g_crash.r12 = 0;
+  g_crash.lr = g_crash.psr = 0;
+  g_crash.cfsr = g_crash.hfsr = g_crash.bfar = 0;
+  g_crash.msp = __get_MSP(); g_crash.psp = __get_PSP();
+  g_crash.source = CRASH_SRC_ERROR_HANDLER;
+  g_crash.magic = CRASH_MAGIC;
+  __DSB();
   __disable_irq();
   NVIC_SystemReset();
   while (1)
@@ -1834,18 +1872,8 @@ void SysTick_Handler(void)
  *
  * Deliberately NO LittleFS write here: the SD subsystem knows nothing
  * about crash-context safety; the record is pure static RAM, so the
- * handler stays a few instructions and cannot itself crash. */
-#define CRASH_MAGIC 0x43525348u   /* "CRSH" */
-typedef struct {
-  uint32_t magic;
-  uint32_t seq;                     /* consecutive crash count          */
-  uint32_t r0, r1, r2, r3, r12, lr, pc, psr;  /* exception frame      */
-  uint32_t cfsr, hfsr, bfar;        /* fault status from the SCB        */
-  uint32_t msp, psp;                /* both stack pointers (overflow?)  */
-} CrashRecord;                      /* 15 words = 60 B <= 64 B reserved */
-
-__attribute__((section(".crash_record")))
-static CrashRecord g_crash;
+ * handler stays a few instructions and cannot itself crash.
+ * (CrashRecord/CRASH_MAGIC/g_crash live above Error_Handler.) */
 
 __attribute__((naked)) void HardFault_Handler(void)
 {
@@ -1869,6 +1897,7 @@ __attribute__((used)) static void HardFault_Capture(uint32_t *frame)
   g_crash.hfsr = SCB->HFSR;
   g_crash.bfar = SCB->BFAR;
   g_crash.msp = __get_MSP(); g_crash.psp = __get_PSP();
+  g_crash.source = CRASH_SRC_HARDFAULT;
   if (g_crash.magic != CRASH_MAGIC) g_crash.seq = 0;
   g_crash.seq++;
   g_crash.magic = CRASH_MAGIC;
@@ -1883,7 +1912,8 @@ static void LogPendingCrashRecord(void)
   if (g_crash.magic != CRASH_MAGIC) return;
   char msg[128];
   snprintf(msg, sizeof(msg),
-           "FAULT#%lu pc=%08lX lr=%08lX cfsr=%08lX bfar=%08lX",
+           "%s#%lu pc=%08lX lr=%08lX cfsr=%08lX bfar=%08lX",
+           g_crash.source == CRASH_SRC_ERROR_HANDLER ? "ERRH" : "FAULT",
            (unsigned long)g_crash.seq, (unsigned long)g_crash.pc,
            (unsigned long)g_crash.lr, (unsigned long)g_crash.cfsr,
            (unsigned long)g_crash.bfar);
