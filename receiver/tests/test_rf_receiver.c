@@ -235,8 +235,16 @@ static void put_i32_le(uint8_t *buf, int32_t v)
 #define FOREIGN_ROCKET_ID  7
 
 static void put_i16_le(uint8_t *buf, int16_t v);   /* defined with the tests */
+static void inject_gps_packet_flags(double lat_deg, double lon_deg,
+                                    uint8_t rocket_id, uint8_t flags);
 
 static void inject_gps_packet(double lat_deg, double lon_deg, uint8_t rocket_id)
+{
+    inject_gps_packet_flags(lat_deg, lon_deg, rocket_id, 0x03);
+}
+
+static void inject_gps_packet_flags(double lat_deg, double lon_deg,
+                                    uint8_t rocket_id, uint8_t flags)
 {
     memset(&fake_pkt, 0, sizeof(fake_pkt));
     fake_pkt.data[0] = PACKET_TYPE_GPS;
@@ -244,7 +252,7 @@ static void inject_gps_packet(double lat_deg, double lon_deg, uint8_t rocket_id)
     put_i32_le(&fake_pkt.data[5], (int32_t)(lon_deg * 10000000.0));
     fake_pkt.data[9] = 100; fake_pkt.data[10] = 0;  /* alt 100 m (0x0064) */
     fake_pkt.data[11] = 9;                           /* sats */
-    fake_pkt.data[12] = 0x03;                        /* fix flags */
+    fake_pkt.data[12] = flags;                       /* fix flags */
     fake_pkt.data[13] = rocket_id;                   /* V2 airframe ID */
     fake_pkt.length = GPS_PACKET_SIZE;
     fake_pkt.rssi = -95;
@@ -646,6 +654,68 @@ TEST(test_maxima_and_hello_dispatch)
     inject_hello(FOREIGN_ROCKET_ID, 0x0BAD0000UL);
     run_for(500, 250);
     CHECK(RF_Receiver_GetHello(&hl) == 0);
+}
+
+TEST(test_flight_contact_latch_blocks_auto_rescan)
+{
+    RF_Receiver_ClearFlightContactLatch();
+    CHECK(RF_Receiver_FlightContactLatched() == 0);
+
+    /* Our beacon launches in front of us: one launch-flagged GPS packet */
+    inject_gps_packet_flags(39.89, -105.11, OUR_ROCKET_ID,
+                            0x03 | FLAG_LAUNCH_DETECTED);
+    run_for(500, 250);
+    CHECK(RF_Receiver_FlightContactLatched() == 1);
+    GPS_Data gd;                          /* drain: a pending packet blocks */
+    (void)RF_Receiver_GetGPSData(&gd);    /* later injections otherwise     */
+
+    /* Far past the silence threshold: the re-acquire scan must NOT start -
+     * a launched rocket that goes quiet is on this channel until proven
+     * otherwise; hopping away only discards packets. */
+    run_for(RF_AUTO_RESCAN_SILENCE_MS + 60000, 5000);
+    (void)RF_Receiver_ScanUpdate();
+    CHECK(RF_Receiver_IsScanning() == 0);
+    CHECK(RF_Receiver_GetRescanSuppressions() == 1);
+    (void)RF_Receiver_ScanUpdate();
+    CHECK(RF_Receiver_GetRescanSuppressions() == 2);
+    CHECK(RF_Receiver_IsScanning() == 0);
+
+    /* The operator still owns the radio: manual scans work post-latch */
+    RF_Receiver_StartScan();
+    CHECK(RF_Receiver_IsScanning() == 1);
+    RF_Receiver_StopScan();
+
+    /* Power-cycle semantic: clearing restores pre-launch behavior */
+    RF_Receiver_ClearFlightContactLatch();
+    (void)RF_Receiver_ScanUpdate();
+    CHECK(RF_Receiver_IsScanning() == 1);
+    RF_Receiver_StopScan();
+}
+
+TEST(test_flight_contact_latch_sources)
+{
+    RF_Receiver_ClearFlightContactLatch();
+
+    /* A certified T0 from our beacon latches */
+    inject_launch_t0(OUR_ROCKET_ID, 8);
+    run_for(500, 250);
+    CHECK(RF_Receiver_FlightContactLatched() == 1);
+    RF_Receiver_ClearFlightContactLatch();
+
+    /* Any flight event from our beacon latches */
+    inject_flight_event(OUR_ROCKET_ID, FLIGHT_EVENT_APOGEE, 900);
+    run_for(500, 250);
+    CHECK(RF_Receiver_FlightContactLatched() == 1);
+    RF_Receiver_ClearFlightContactLatch();
+
+    /* Foreign flight traffic must NOT latch: it isn't our launch */
+    inject_flight_event(FOREIGN_ROCKET_ID, FLIGHT_EVENT_APOGEE, 900);
+    run_for(500, 250);
+    CHECK(RF_Receiver_FlightContactLatched() == 0);
+    inject_gps_packet_flags(36.2, -115.4, FOREIGN_ROCKET_ID,
+                            0x03 | FLAG_LAUNCH_DETECTED);
+    run_for(500, 250);
+    CHECK(RF_Receiver_FlightContactLatched() == 0);
 }
 
 TEST(test_imu_trace_and_launch_t0)
@@ -2132,6 +2202,8 @@ int main(void)
     run_test_launch_t0_one_shot();
     run_test_flight_event_one_shot_and_foreign_drop();
     run_test_maxima_and_hello_dispatch();
+    run_test_flight_contact_latch_blocks_auto_rescan();
+    run_test_flight_contact_latch_sources();
     run_test_imu_trace_foreign_id_dropped();
     run_test_two_way_ack_lifecycle();
     run_test_two_way_foreign_ack_dropped();

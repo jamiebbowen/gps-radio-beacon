@@ -153,6 +153,16 @@ static uint8_t maxima_pending = 0;
 static HelloPacket_t last_hello;
 static uint8_t hello_pending = 0;
 
+/* Flight-contact latch: once OUR bound beacon has proven it launched
+ * (launch flag on a GPS/fused packet, a T0, or any flight event), channel
+ * scanning after silence is the one move guaranteed to make things worse -
+ * the beacon may still be transmitting on THIS channel (landed in a null,
+ * marginal antenna), and hopping away throws those packets on the floor.
+ * Set for the rest of the power-on session; only an operator action or a
+ * reboot clears it. Counted suppressions keep the policy visible in logs. */
+static uint8_t  flight_contact_latch = 0;
+static uint32_t rescan_suppression_count = 0;
+
 /* Two-way answer channel (TX -> RX) */
 static AckPacket_t last_ack;
 static uint8_t ack_pending = 0;
@@ -491,6 +501,11 @@ uint8_t RF_Receiver_DataAvailable(void)
           rf_packet_ready = 1;
           rf_header_matches++;
           last_packet_time = HAL_GetTick();
+          /* Launch evidence from OUR bound beacon: latch against scanning */
+          if (last_packet.length == GPS_PACKET_SIZE &&
+              (last_packet.data[12] & FLAG_LAUNCH_DETECTED)) {
+            flight_contact_latch = 1;
+          }
         }
       } else if ((last_packet.length == FUSED_PACKET_SIZE
                || last_packet.length == FUSED_PACKET_SIZE_V1)
@@ -502,6 +517,10 @@ uint8_t RF_Receiver_DataAvailable(void)
           rf_packet_ready = 1;
           rf_header_matches++;
           last_packet_time = HAL_GetTick();
+          if (last_packet.length == FUSED_PACKET_SIZE &&
+              (last_packet.data[18] & FUSED_FLAG_LAUNCH_DETECTED)) {
+            flight_contact_latch = 1;
+          }
         }
       } else if (last_packet.length == IMU_TRACE_PACKET_SIZE
               && last_packet.data[0] == PACKET_TYPE_IMU) {
@@ -522,6 +541,7 @@ uint8_t RF_Receiver_DataAvailable(void)
         if (RF_RocketFilter(1, last_launch_t0.rocket_id)) {
           launch_t0_pending = 1;
           last_packet_time = HAL_GetTick();
+          flight_contact_latch = 1;   /* a certified T0 IS the launch */
         }
       } else if (last_packet.length == FLIGHT_EVENT_PACKET_SIZE
               && last_packet.data[0] == PACKET_TYPE_FLIGHT_EVENT) {
@@ -532,6 +552,7 @@ uint8_t RF_Receiver_DataAvailable(void)
         if (RF_RocketFilter(1, last_flight_event.rocket_id)) {
           flight_event_pending = 1;
           last_packet_time = HAL_GetTick();
+          flight_contact_latch = 1;   /* flight events only exist in flight */
         }
       } else if (last_packet.length == MAXIMA_PACKET_SIZE
               && last_packet.data[0] == PACKET_TYPE_MAXIMA) {
@@ -1205,6 +1226,30 @@ uint8_t RF_Receiver_TakeCrcDump(uint8_t *out, uint8_t max_len, uint8_t *total_le
 }
 
 /**
+ * @brief Flight-contact latch state: 1 once the bound beacon has proven it
+ *        launched (launch flag / T0 / flight event). While latched the
+ *        auto re-scan after silence is suppressed for the rest of the
+ *        power-on session.
+ */
+uint8_t RF_Receiver_FlightContactLatched(void)
+{
+  return flight_contact_latch;
+}
+
+/** How many auto re-scans the latch has suppressed so far this session. */
+uint32_t RF_Receiver_GetRescanSuppressions(void)
+{
+  return rescan_suppression_count;
+}
+
+/** Test/boot hook: clear the flight-contact latch (fresh session). */
+void RF_Receiver_ClearFlightContactLatch(void)
+{
+  flight_contact_latch = 0;
+  rescan_suppression_count = 0;
+}
+
+/**
  * @brief Airframe the receiver is bound to (first rocket_id heard on the
  *        tuned channel), or 0xFF while unbound
  */
@@ -1380,9 +1425,17 @@ uint8_t RF_Receiver_ScanUpdate(void)
    * beacon has actually been heard (a manual channel pick with nothing on
    * the air is a deliberate choice - don't override it). Keys off
    * last_identified_ms (own/bindable packets), NOT last_any_packet_ms:
-   * foreign chatter on the channel must not suppress the recovery. */
+   * foreign chatter on the channel must not suppress the recovery.
+   *
+   * Exception: after flight contact, NEVER re-scan. A launched beacon
+   * that went silent is far more likely marginal/on-this-channel than on
+   * another one, and every hop discards whatever it is still saying. */
   if (!scan_active && last_identified_ms != 0 &&
       (HAL_GetTick() - last_identified_ms) > RF_AUTO_RESCAN_SILENCE_MS) {
+    if (flight_contact_latch) {
+      rescan_suppression_count++;
+      return 0;
+    }
     RF_Scan_StartReacquire();
     return 0;
   }

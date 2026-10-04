@@ -823,13 +823,40 @@ int main(void)
         last_rf_reinit_ms = HAL_GetTick();
         if (RF_Receiver_Init() == RF_OK) {
           rf_initialized = 1;
-          RF_Receiver_StartScan();
+          /* With flight contact latched, stay parked on the rocket's
+           * channel after the re-init instead of sweeping for it. */
+          if (!RF_Receiver_FlightContactLatched()) {
+            RF_Receiver_StartScan();
+          }
           if (sd_card_ok) {
             SD_Card_EnsureLogFile();
             SD_Card_LogError("RF radio recovered by runtime re-init");
           }
           force_display_update = 1;
         }
+      }
+    }
+
+    /* Flight-contact latch transitions: the moment the bound beacon proves
+     * it launched, channel scanning after silence is off for the session.
+     * And the first time the auto re-scan WOULD have fired but didn't:
+     * proof the policy is working while the log still looks "silent". */
+    if (rf_initialized && sd_card_ok) {
+      static uint8_t latched_logged = 0;
+      static uint32_t suppressions_logged = 0;
+      if (!latched_logged && RF_Receiver_FlightContactLatched()) {
+        latched_logged = 1;
+        SD_Card_EnsureLogFile();
+        SD_Card_LogEvent("FLIGHT CONTACT launched - auto-rescan OFF");
+      }
+      uint32_t sup = RF_Receiver_GetRescanSuppressions();
+      if (sup != suppressions_logged) {
+        suppressions_logged = sup;
+        char s_msg[64];
+        snprintf(s_msg, sizeof(s_msg),
+                 "AUTO-RESCAN suppressed x%lu (flight contact)",
+                 (unsigned long)sup);
+        SD_Card_LogEvent(s_msg);
       }
     }
 

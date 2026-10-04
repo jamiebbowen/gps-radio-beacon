@@ -121,6 +121,14 @@ uint8_t RF_Receiver_TakeWedgeReport(uint32_t *count, uint32_t *last_deaf_ms,
  * foreign network. */
 uint8_t RF_Receiver_TakeCrcDump(uint8_t *out, uint8_t max_len, uint8_t *total_len);
 
+/* Flight-contact latch: once the bound beacon proves it launched, the
+ * auto re-scan after silence is suppressed for the rest of the session -
+ * a launched rocket that went quiet is on THIS channel until proven
+ * otherwise. Manual operator scans remain possible; reboot clears. */
+uint8_t  RF_Receiver_FlightContactLatched(void);
+uint32_t RF_Receiver_GetRescanSuppressions(void);
+void     RF_Receiver_ClearFlightContactLatch(void);
+
 /* Airframe binding / foreign-beacon filter. The receiver binds to the
  * first rocket_id heard on the tuned channel and drops V2 position packets
  * from any other airframe. The binding resets on a manual channel change;
