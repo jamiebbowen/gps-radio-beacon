@@ -913,13 +913,26 @@ int main(void)
         static uint16_t prev_hb_uptime = 0;
         static uint8_t  prev_hb_reset_info = 0;
         static uint8_t  prev_hb_init = 0;
-        if (hb.uptime_s < prev_hb_uptime
-            || (prev_hb_init && prev_hb_reset_info != hb.reset_info)) {
-          char r_msg[96];
+        if (hb.uptime_s < prev_hb_uptime) {
+          /* A watchdog/soft restart mid-flight: uptime regresses. */
+          char r_msg[64];
           snprintf(r_msg, sizeof(r_msg),
-                   "TX reset: uptime %us -> %us cause=%s(0x%02X)",
+                   "TX reset: uptime %us -> %us (unchanged cause=%s)",
                    (unsigned)prev_hb_uptime, (unsigned)hb.uptime_s,
-                   HB_RESET_NAME(hb.reset_info), (unsigned)hb.reset_info);
+                   HB_RESET_NAME(hb.reset_info));
+          SD_Card_EnsureLogFile();
+          SD_Card_LogError(r_msg);
+        } else if (prev_hb_init && prev_hb_reset_info != hb.reset_info) {
+          /* The cause register changed between heartbeats of a still-running
+           * TX: means a mid-flight physical reset, and this message should
+           * say that (the uptime didn't move, so calling it a 'reset' with
+           * equal values misled the field reading). */
+          char r_msg[80];
+          snprintf(r_msg, sizeof(r_msg),
+                   "TX boot cause changed: %s(0x%02X) -> %s(0x%02X) at up=%us",
+                   HB_RESET_NAME(prev_hb_reset_info), (unsigned)prev_hb_reset_info,
+                   HB_RESET_NAME(hb.reset_info), (unsigned)hb.reset_info,
+                   (unsigned)hb.uptime_s);
           SD_Card_EnsureLogFile();
           SD_Card_LogError(r_msg);
         }

@@ -120,8 +120,13 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
     Display_DrawTextRowCol(6, 0, tx_sensor_degraded ? "TX IMU   CHK dead!"
                                                     : "TX IMU   OK");
 
-    /* Verdict: battery rail is now a gate too */
-    if (rx_vdd_mv > 0 && rx_vdd_mv < 3200) {
+    /* Verdict order: hardware health is a gate; a TESTING-mode beacon flash
+     * blocks readiness with an unmissable verdict (a pad-passed-but-wrong-
+     * firmware launch should never look ready). Battery rail is a gate. */
+    uint8_t tst_build = link_ok && RF_Receiver_TestingBuildSuspect();
+    if (tst_build) {
+        Display_DrawTextRowCol(7, 3, "NOT READY - TST BUILD!");
+    } else if (rx_vdd_mv > 0 && rx_vdd_mv < 3200) {
         Display_DrawTextRowCol(7, 3, "PWR LOW - CHANGE PACK");
     } else if (link_ok && tx_gps_ok && rx_fix_ok && compass_ok) {
         Display_DrawTextRowCol(7, 2, "** READY TO FLY **");

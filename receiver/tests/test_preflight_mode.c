@@ -122,6 +122,10 @@ TEST(test_preflight_testing_build_flag)
     fake_callsign = "KE0MZS-3";
     render(1, 3, -55, 1, 9, HB_GPS_ACQUIRING, 0, 1, 8, 1, 1, 3304);
     CHECK(strstr(page_row(1), "*KE0MZS-3*") != NULL);
+    /* Testing-build detection is now a hard gate: even with everything
+     * else green the verdict row must block. */
+    CHECK(strstr(page_row(7), "NOT READY - TST BUILD!") != NULL);
+    CHECK(strstr(page_row(7), "READY TO FLY") == NULL);
     fake_testing_build = 0;
 }
 
