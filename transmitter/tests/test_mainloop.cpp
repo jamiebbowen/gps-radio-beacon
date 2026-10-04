@@ -148,6 +148,27 @@ uint8_t gps_poll_rx(void) { return 0; }
 const GPSCoordinates_t* gps_get_current_coordinates(void) { return &fake_coords; }
 uint8_t gps_get_health(void) { return HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0); }
 uint32_t gps_get_fix_age_ms(void) { return 250; }
+
+/* flight_log.cpp is target-only (raw NVMCTRL); stub its API here. The
+ * host test's concern is WHEN the recorder is armed/written, not the
+ * register pokes themselves (those get verified by bench smoke). */
+static uint8_t flog_armed_count = 0;
+static uint32_t flog_imu_calls = 0;
+static uint32_t flog_gps_calls = 0;
+static uint32_t flog_event_calls = 0;
+void     flight_log_init(void) {}
+void     flight_log_arm(void) { flog_armed_count++; }
+uint8_t  flight_log_armed(void) { return flog_armed_count > 0; }
+uint8_t  flight_log_busy(void) { return 0; }
+void     flight_log_imu(uint32_t ms, int16_t, int16_t, int16_t, int16_t, int16_t, int16_t, int16_t)
+         { (void)ms; flog_imu_calls++; }
+void     flight_log_gps(uint32_t ms, int32_t, int32_t, int16_t, uint8_t, uint8_t)
+         { (void)ms; flog_gps_calls++; }
+void     flight_log_event(uint32_t ms, uint8_t kind)
+         { (void)ms; (void)kind; flog_event_calls++; }
+void     flight_log_dump_serial(void) {}
+uint8_t  flog_armed_count_value(void) { return flog_armed_count; }
+uint32_t flog_gps_calls_value(void)   { return flog_gps_calls; }
 float   gps_nmea_to_decimal(const char *n, char d)
 {
     double v = atof(n);
@@ -282,6 +303,7 @@ int main(void)
     CHECK(transmit_fast_flag == 1);
     CHECK(radio_enables == enables_before + 1);   /* radio keyed once */
     CHECK(radio_enabled_flag == 1);
+    CHECK(flog_armed_count_value() >= 1);         /* on-chip recorder armed */
 
     /* LAUNCH exits to POST_LAUNCH after POST_LAUNCH_DURATION_SEC */
     sim_run(3000);
@@ -297,6 +319,7 @@ int main(void)
     uint32_t imu = type_count(PACKET_TYPE_IMU) - imu0;
     CHECK(fus == 20);                             /* 1500 ms cadence exactly */
     CHECK((imu == 15 || imu == 16));              /* 2 s paced inertial stream */
+    CHECK(flog_gps_calls_value() >= 14);          /* GPS rows landing in the flash log */
     /* Raw GPS position packets stop on air - fused+IMU carry the invade */
 
     /* ---------- Touchdown: quiet IMU + stable alt -> battery save ---- */

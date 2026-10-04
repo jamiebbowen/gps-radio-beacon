@@ -121,9 +121,20 @@ Before deploying, verify:
 
 ### Data Rate
 - SF10/CR4-8 @ 62.5kHz: ~0.49 kbps effective (20-byte fused packet ~1.0 s airtime)
-- Flight phase streams fused updates every 1.2 s (FUSED_TX_INTERVAL_MS);
-  the raw GPS backup stream interleaves continuously
+- Flight phase (LAUNCH/POST_LAUNCH) streams **fused position + inertial
+  trace** only: fused every 1.5 s, IMU-trace interleaves at 2 s. The raw
+  GPS stream is parked for those two states - during flight every byte that
+  isn't position owes a forensic answer.
+- A `LAUNCH T0` packet fires once at the instant of detection (uptime +
+  GPS fix age), stamped even if the link dies milliseconds later.
 - Much better edge-of-range behavior than previous 300 baud implementation
+
+### Beacon onboard flight log (post-shred forensics)
+- The beacon itself now records scoped IMU + GPS + event rows into the
+  SAMD51's unused internal flash pages (256 KB carved at 0x00040000).
+  Arm: any launch-detect confirmation (~250 ms erases, radio-quiet already).
+  Dump: plug USB with the beacon alive after recovery, the Serial monitor
+  prints CSV on the console when told 'DUMP' (see boot banner).
 
 ## Benefits of LoRa
 

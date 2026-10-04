@@ -9,6 +9,7 @@
 #include "include/beacon.h"
 #include "include/nav.h"
 #include "include/flight_cadence.h"
+#include "include/flight_log.h"
 
 /**
  * Beacon State Machine Documentation
@@ -186,6 +187,8 @@ void setup() {
     // switch only gates whether fused packets are transmitted.
     nav_init();
 
+    flight_log_init();
+
     delay(1000);  // Let everything stabilize
 
     /* transmit_fast_flag (not transmit_beacon_flag): the parameter means
@@ -272,8 +275,12 @@ void loop() {
 
         /* Certified T0 first, so even a shred-one-second-later records the
          * one timestamp that turns "silent after packet N" into "failed at
-         * T0+xx ms". */
+         * T0+xx ms". Also arm the on-chip flight recorder (~250 ms of
+         * row-erases; the radio is idle anyway this early) and mark the
+         * opening. */
         beacon_transmit_launch_t0(system_time_seconds, /*fast=*/1);
+        flight_log_arm();
+        flight_log_event(millis(), 3 /* launch */);
     }
     
     if (beacon_state == BEACON_STATE_LAUNCH) {
@@ -314,6 +321,35 @@ void loop() {
              * position-copies position-copies under a mechanical failure; a
              * lost-GPS fused stream degrades into the EKF's honest DR. */
             beacon_transmit_imu_trace(transmit_fast_flag);
+
+            /* And the same trace goes to the crash-survivable chip flash —
+             * even if nobody hears it over the air, a post-scavenger probe
+             * can read back WHAT the airframe was doing up to the cut. */
+            {
+                float ax, ay, az, gx, gy, gz;
+                launch_detect_get_accel_xyz(&ax, &ay, &az);
+                launch_detect_get_gyro_rads(&gx, &gy, &gz);
+                flight_log_imu(millis(),
+                               (int16_t)lroundf(ax * 100.0f),
+                               (int16_t)lroundf(ay * 100.0f),
+                               (int16_t)lroundf(az * 100.0f),
+                               (int16_t)lroundf(gx * 5729.58f),
+                               (int16_t)lroundf(gy * 5729.58f),
+                               (int16_t)lroundf(gz * 5729.58f),
+                               0);
+            }
+
+            const GPSCoordinates_t* c = gps_get_current_coordinates();
+            if (c->valid) {
+                float lat_d = gps_nmea_to_decimal(c->lat, c->lat_dir);
+                float lon_d = gps_nmea_to_decimal(c->lon, c->lon_dir);
+                int16_t alt_m = (int16_t)lroundf(atof(c->altitude));
+                flight_log_gps(millis(),
+                               (int32_t)lroundf(lat_d * 10000000.0f),
+                               (int32_t)lroundf(lon_d * 10000000.0f),
+                               alt_m,
+                               (uint8_t)atoi(c->satellites), c->fix_quality);
+            }
             last_transmission_time = system_time_seconds;
         } else {
             gps_poll_rx();
