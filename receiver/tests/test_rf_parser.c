@@ -385,6 +385,24 @@ TEST(test_fused_wire_format_constants_pin) {
     CHECK(FUSED_FLAG_RESERVED_MASK   == 0x01);
 
     CHECK(FLAG_LOW_SATS              == 0x20);
+
+    /* FLIGHT_EVENT (apogee/drogue/main/landed + anomaly codes): mirror of
+     * the block in transmitter/tests/test_beacon.cpp */
+    CHECK(sizeof(FlightEventPacket_t) == 8);
+    CHECK(FLIGHT_EVENT_PACKET_SIZE == 8);
+    CHECK(PACKET_TYPE_FLIGHT_EVENT == 0x0A);
+    CHECK(offsetof(FlightEventPacket_t, code)     == 2);
+    CHECK(offsetof(FlightEventPacket_t, uptime_s) == 4);
+    CHECK(offsetof(FlightEventPacket_t, value)    == 6);
+    CHECK(FLIGHT_EVENT_APOGEE           == 0x01);
+    CHECK(FLIGHT_EVENT_DROGUE           == 0x02);
+    CHECK(FLIGHT_EVENT_MAIN             == 0x03);
+    CHECK(FLIGHT_EVENT_LANDED           == 0x04);
+    CHECK(FLIGHT_EVENT_ANOM_BALLISTIC   == 0x10);
+    CHECK(FLIGHT_EVENT_ANOM_TUMBLE      == 0x11);
+    CHECK(FLIGHT_EVENT_ANOM_SENSOR_LOSS == 0x12);
+    CHECK(FLIGHT_EVENT_ANOM_GPS_OUTAGE  == 0x13);
+    CHECK(FLIGHT_EVENT_ANOM_REBOOT      == 0x14);
 }
 
 TEST(test_fused_dead_reckoning_flag) {

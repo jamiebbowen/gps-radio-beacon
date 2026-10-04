@@ -986,6 +986,18 @@ int main(void)
         SD_Card_EnsureLogFile();
         SD_Card_LogImuTrace(&imu, ir);
       }
+      /* Certified flight events (apogee / drogue / main / landed + anomaly
+       * codes). The beacon repeats one-shots by design; each copy is a
+       * separate row so the log shows exactly what the link delivered. */
+      FlightEventPacket_t evt;
+      while (RF_Receiver_GetFlightEvent(&evt)) {
+        char evt_msg[64];
+        snprintf(evt_msg, sizeof(evt_msg), "%s id=%u up=%us val=%d",
+                 FLIGHT_EVENT_NAME(evt.code), (unsigned)evt.rocket_id,
+                 (unsigned)evt.uptime_s, (int)evt.value);
+        SD_Card_EnsureLogFile();
+        SD_Card_LogEvent(evt_msg);
+      }
     }
 
     /* Two-way channel answers: an ACK land is one of the few beacon-still-

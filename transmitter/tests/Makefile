@@ -22,6 +22,7 @@ BINS     := $(BUILD)/test_ekf $(BUILD)/test_nmea_fields $(BUILD)/test_beacon \
             $(BUILD)/test_nav $(BUILD)/test_gps $(BUILD)/test_radio \
             $(BUILD)/test_launch_detect $(BUILD)/test_uart \
             $(BUILD)/test_flight_profile $(BUILD)/test_flight_cadence \
+            $(BUILD)/test_flight_events \
             $(BUILD)/test_airlink_roundtrip $(BUILD)/test_mainloop
 
 .PHONY: all test coverage clean
@@ -82,6 +83,11 @@ $(BUILD)/test_flight_cadence: test_flight_cadence.cpp ../firmware/flight_cadence
                               stubs/Arduino.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $^ $(LDFLAGS)
 
+# Airborne event + anomaly detector: pure logic module, no Arduino deps.
+$(BUILD)/test_flight_events: test_flight_events.cpp ../firmware/flight_events.cpp \
+                             stubs/Arduino.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $^ $(LDFLAGS)
+
 # Airlink round-trip: TX encoder (beacon.cpp, C++) + RX parser
 # (receiver's rf_parser.c, compiled as C) in one binary.
 $(BUILD)/rf_parser_rx.o: ../../receiver/firmware/src/rf_parser.c | $(BUILD)
@@ -100,8 +106,10 @@ $(BUILD)/test_airlink_roundtrip: test_airlink_roundtrip.cpp \
 $(BUILD)/test_mainloop: test_mainloop.cpp ../firmware/flight_cadence.cpp \
             ../firmware/firmware.ino ../firmware/launch_detect.cpp \
             ../firmware/nav.cpp ../firmware/ekf.cpp ../firmware/beacon.cpp \
+            ../firmware/flight_events.cpp \
             stubs/Arduino.h stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< ../firmware/flight_cadence.cpp $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< \
+	    ../firmware/flight_cadence.cpp ../firmware/flight_events.cpp $(LDFLAGS)
 
 test: $(BINS)
 	@rc=0; for b in $(BINS); do \

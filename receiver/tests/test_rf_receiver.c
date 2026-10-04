@@ -538,6 +538,52 @@ static void inject_launch_t0(uint8_t rocket_id, uint16_t uptime_s)
     fake_pkt_pending = 1;
 }
 
+static void inject_flight_event(uint8_t rocket_id, uint8_t code, int16_t value)
+{
+    FlightEventPacket_t ev = {
+        .packet_type = PACKET_TYPE_FLIGHT_EVENT,
+        .rocket_id   = rocket_id,
+        .code        = code,
+        .spare       = 0,
+        .uptime_s    = 61,
+        .value       = value,
+    };
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    memcpy(fake_pkt.data, &ev, sizeof(ev));
+    fake_pkt.length = FLIGHT_EVENT_PACKET_SIZE;
+    fake_pkt.rssi = -40;
+    fake_pkt.snr = 9;
+    fake_pkt_pending = 1;
+}
+
+TEST(test_flight_event_one_shot_and_foreign_drop)
+{
+    /* Our beacon's certified event lands once (TX repeats it by design;
+     * each copy reads out as a separate one-shot for the SD log) */
+    inject_flight_event(OUR_ROCKET_ID, FLIGHT_EVENT_APOGEE, 1234);
+    run_for(500, 250);
+
+    FlightEventPacket_t evt;
+    CHECK(RF_Receiver_GetFlightEvent(&evt) == 1);
+    CHECK(evt.rocket_id == OUR_ROCKET_ID);
+    CHECK(evt.code == FLIGHT_EVENT_APOGEE);
+    CHECK(evt.value == 1234);
+    CHECK(RF_Receiver_GetFlightEvent(&evt) == 0);    /* one-shot */
+    CHECK(RF_Receiver_GetLastPacketTime() != 0);
+
+    /* A foreign beacon's event must not enter our flight log */
+    inject_flight_event(FOREIGN_ROCKET_ID, FLIGHT_EVENT_ANOM_BALLISTIC, 8000);
+    run_for(500, 250);
+    CHECK(RF_Receiver_GetFlightEvent(&evt) == 0);
+
+    /* Anomaly codes round-trip like any other code */
+    inject_flight_event(OUR_ROCKET_ID, FLIGHT_EVENT_ANOM_BALLISTIC, 8000);
+    run_for(500, 250);
+    CHECK(RF_Receiver_GetFlightEvent(&evt) == 1);
+    CHECK(evt.code == FLIGHT_EVENT_ANOM_BALLISTIC);
+    CHECK(evt.value == 8000);
+}
+
 TEST(test_imu_trace_and_launch_t0)
 {
     /* Receives and returns one-shot an inertial-trace packet from OUR airframe */
@@ -2020,6 +2066,7 @@ int main(void)
     run_test_heartbeat_v3_reset_cause();
     run_test_imu_trace_and_launch_t0();
     run_test_launch_t0_one_shot();
+    run_test_flight_event_one_shot_and_foreign_drop();
     run_test_imu_trace_foreign_id_dropped();
     run_test_two_way_ack_lifecycle();
     run_test_two_way_foreign_ack_dropped();

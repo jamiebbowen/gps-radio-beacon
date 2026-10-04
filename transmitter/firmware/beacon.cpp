@@ -291,13 +291,16 @@ uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t
  * @param transmit_fast If true, radio is already enabled (LAUNCH phase)
  * @return 1 if a heartbeat was transmitted, 0 if rate-limited or TX failed
  */
-uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast) {
+uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t system_time_seconds,
+                                  uint32_t min_interval_s, uint8_t transmit_fast) {
     /* Rate limit: the GPS TX path retries every second when there is no fix;
-     * do not turn every retry into an RF transmission. */
+     * do not turn every retry into an RF transmission. On the pad states the
+     * caller passes the (slower) state cadence, which the 1 Hz tick already
+     * paces - this limiter is the floor, not the scheduler. */
     static uint32_t last_heartbeat_ms = 0;
     uint32_t now_ms = millis();
     if (last_heartbeat_ms != 0 &&
-        (now_ms - last_heartbeat_ms) < (uint32_t)HEARTBEAT_INTERVAL_SEC * 1000UL) {
+        (now_ms - last_heartbeat_ms) < min_interval_s * 1000UL) {
         return 0;
     }
     
@@ -449,6 +452,96 @@ uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast) {
         radio_disable();
     }
     return (result == 0) ? 1 : 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Certified flight events (APOGEE / DROGUE / MAIN / LANDED + anomaly   */
+/* codes): one-shot edges that must survive a single RF-null moment.    */
+/* ------------------------------------------------------------------ */
+
+#define FLIGHT_EVENT_Q_DEPTH 8
+static struct {
+    uint8_t  code;
+    int16_t  value;
+    uint8_t  left;          /* transmissions remaining (0 = free slot)  */
+    uint32_t due_ms;        /* next allowed TX time                     */
+} event_q[FLIGHT_EVENT_Q_DEPTH];
+static uint32_t event_q_dropped = 0;
+
+void beacon_queue_flight_event(uint8_t code, int16_t value, uint8_t repeats)
+{
+    for (uint8_t i = 0; i < FLIGHT_EVENT_Q_DEPTH; i++) {
+        if (event_q[i].left == 0) {
+            event_q[i].code   = code;
+            event_q[i].value  = value;
+            event_q[i].left   = (repeats == 0) ? 1 : repeats;
+            event_q[i].due_ms = millis();   /* first copy goes immediately */
+            return;
+        }
+    }
+    event_q_dropped++;
+}
+
+uint32_t beacon_flight_event_dropped(void)
+{
+    return event_q_dropped;
+}
+
+uint8_t beacon_transmit_flight_event(uint8_t code, int16_t value,
+                                     uint32_t system_time_seconds, uint8_t transmit_fast) {
+    FlightEventPacket_t p;
+    p.packet_type = PACKET_TYPE_FLIGHT_EVENT;
+    p.rocket_id   = (uint8_t)ROCKET_ID;
+    p.code        = code;
+    p.spare       = 0;
+    p.uptime_s    = (system_time_seconds > 65535UL) ? 65535U
+                                                    : (uint16_t)system_time_seconds;
+    p.value       = value;
+
+    if (!transmit_fast) {
+        radio_enable();
+        delay(10);
+    }
+
+    Serial.print(F("[Beacon] Flight event 0x"));
+    Serial.print(code, HEX);
+    Serial.print(F(" value="));
+    Serial.println(value);
+
+    int result = transmit_packet((uint8_t*)&p, sizeof(p));
+
+    if (result != 0) {
+        Serial.print(F("[Beacon] ✗ Event TX failed, code: "));
+        Serial.println(result);
+    }
+
+    if (!transmit_fast) {
+        delay(1);
+        radio_disable();
+    }
+    return (result == 0) ? 1 : 0;
+}
+
+uint8_t beacon_service_flight_events(uint32_t now_ms, uint32_t now_s, uint8_t transmit_fast)
+{
+    uint8_t sent = 0;
+    for (uint8_t i = 0; i < FLIGHT_EVENT_Q_DEPTH; i++) {
+        if (event_q[i].left != 0 &&
+            (int32_t)(now_ms - event_q[i].due_ms) >= 0) {
+            if (beacon_transmit_flight_event(event_q[i].code, event_q[i].value,
+                                             now_s, transmit_fast)) {
+                event_q[i].left--;
+                event_q[i].due_ms = now_ms + FLIGHT_EVENT_SPACING_MS;
+                sent = 1;
+            } else {
+                /* TX failed: back off one spacing and retry; the repeat
+                 * budget (successes only) is preserved. */
+                event_q[i].due_ms = now_ms + FLIGHT_EVENT_SPACING_MS;
+            }
+            break;  /* one packet per service call: radio is half-duplex */
+        }
+    }
+    return sent;
 }
 
 /**

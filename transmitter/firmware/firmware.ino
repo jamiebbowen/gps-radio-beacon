@@ -9,43 +9,63 @@
 #include "include/beacon.h"
 #include "include/nav.h"
 #include "include/flight_cadence.h"
+#include "include/flight_events.h"
 #include "include/flight_log.h"
 
 /**
  * Beacon State Machine Documentation
  * =================================
- * 
- * The beacon operates in four distinct states optimized for rocketry
- * applications. All durations/intervals below are set in include/config.h
- * (values differ between TESTING_MODE and production builds).
- * 
- * 1. PRE_LAUNCH (Initial State):
- *    - Purpose: Conserve power while on the launch pad
- *    - Behavior: Transmit GPS data every PRE_LAUNCH_INTERVAL_SEC seconds
- *    - Data Format: Full GPS packet (lat, lon, alt, satellites)
+ *
+ * The beacon operates in five states. All durations/intervals below are set
+ * in include/config.h (values differ between TESTING_MODE and production
+ * builds for the legacy constants; the turn-on/pad policy is mode-neutral).
+ *
+ * 1. TURN_ON (Boot grace, TURN_ON_DURATION_SEC):
+ *    - Purpose: immediate operator feedback at power-up ("did it come up?
+ *      is the GPS alive? which channel?")
+ *    - Behavior: heartbeat every TURN_ON_HEARTBEAT_INTERVAL_SEC; full GPS
+ *      packet when the first good fix lands; callsign at boot
+ *    - Transition: timer to PRE_LAUNCH (launch detect preempts, as always)
+ *
+ * 2. PRE_LAUNCH (Quiet pad):
+ *    - Purpose: stay provably alive with minimal PA noise near the GPS
+ *      front end
+ *    - Behavior: heartbeat every PRELAUNCH_HEARTBEAT_INTERVAL_SEC; GPS
+ *      audit copy every PRELAUNCH_GPS_AUDIT_INTERVAL_SEC; no fused stream
  *    - Transition: Moves to LAUNCH when IMU launch detection confirms launch
- * 
- * 2. LAUNCH (Critical Phase):
+ *
+ * 3. LAUNCH (Critical Phase):
  *    - Purpose: Maximum transmission rate during flight for recovery
  *    - Behavior: Continuous transmission (as fast as possible)
- *    - Data Format: Fast GPS packet (lat, lon, alt only) for speed
+ *    - Data Format: inertial trace + fused packets back to back
  *    - Duration: POST_LAUNCH_DURATION_SEC after launch detection
  *    - Transition: Moves to POST_LAUNCH afterwards
- * 
- * 3. POST_LAUNCH (Recovery Mode):
+ *
+ * 4. POST_LAUNCH (Recovery Mode):
  *    - Purpose: High-frequency recovery transmissions
- *    - Behavior: Full GPS packet every POST_LAUNCH_PACKET_INTERVAL_SEC +
+ *    - Behavior: Inertial trace every POST_LAUNCH_PACKET_INTERVAL_SEC +
  *      fused packets at FUSED_TX_INTERVAL_MS (the PA duty cycle at SF10
  *      doesn't tolerate free-running both streams for 10 minutes)
- *    - Data Format: Full GPS packet (lat, lon, alt, satellites)
  *    - Duration: POST_LAUNCH_RECOVERY_DURATION_SEC, then BATTERY_SAVE
- * 
- * 4. BATTERY_SAVE (Extended Recovery):
+ *    - Landing detect drops to BATTERY_SAVE early
+ *
+ * 5. BATTERY_SAVE (Extended Recovery):
  *    - Purpose: Conserve battery for extended recovery operations
  *    - Behavior: Transmit full GPS packet every BATTERY_SAVE_INTERVAL_SEC
  *    - Data Format: Full GPS packet (lat, lon, alt, satellites)
  *    - Duration: Indefinite (until power exhaustion)
- * 
+ *
+ * Certified flight events (flight_events.cpp): apogee, drogue deploy, main
+ * deploy and landing are detected from fused kinematics and announced as
+ * PACKET_TYPE_FLIGHT_EVENT one-shots, repeated FLIGHT_EVENT_REPEATS times
+ * so a single RF null can't erase them.
+ *
+ * Flight anomaly layer: ballistic descent / tumble / IMU loss / GPS outage
+ * latch an anomaly level while airborne. While active the inertial-trace
+ * cadence tightens to ANOM_BEACON_INTERVAL_S and the anomaly code
+ * re-announces every ANOM_EVENT_REPEAT_MS; all-clear for ANOM_CLEAR_MS
+ * returns cadence to normal.
+ *
  * Additional Features:
  * - Launch detection (one-shot edge from launch_detect_is_launched(), which
  *   this state machine exclusively owns) can trigger from ANY state
@@ -65,7 +85,7 @@ volatile uint8_t transmit_beacon_flag = 1;
 volatile uint8_t transmit_callsign_flag = 1;
 volatile uint8_t transmit_fast_flag = 1;
 #else
-volatile beacon_state_t beacon_state = BEACON_STATE_PRE_LAUNCH;
+volatile beacon_state_t beacon_state = BEACON_STATE_TURN_ON;
 volatile uint8_t transmit_beacon_flag = 1;
 volatile uint8_t transmit_callsign_flag = 1;
 volatile uint8_t transmit_fast_flag = 0;
@@ -99,9 +119,14 @@ void timer_isr_handler(void) {
         }
         
         // Beacon state machine timing logic - intervals owned by
-        // flight_cadence (0 = continuous, used by LAUNCH).
+        // flight_cadence (0 = continuous, used by LAUNCH). An active
+        // anomaly tightens the inertial-trace cadence to
+        // ANOM_BEACON_INTERVAL_S (never loosens it).
         uint32_t time_since_last_tx = system_time_seconds - last_transmission_time;
         uint32_t interval_s = flight_cadence_beacon_interval_s(beacon_state);
+        if (interval_s > ANOM_BEACON_INTERVAL_S && flight_events_anomaly_active()) {
+            interval_s = ANOM_BEACON_INTERVAL_S;
+        }
         if (interval_s == 0 || time_since_last_tx >= interval_s) {
             transmit_beacon_flag = 1;
         }
@@ -187,6 +212,8 @@ void setup() {
     // switch only gates whether fused packets are transmitted.
     nav_init();
 
+    flight_events_init();
+
     flight_log_init();
 
     delay(1000);  // Let everything stabilize
@@ -244,7 +271,8 @@ void loop() {
 
     /* Landing detection: once post-launch, quiet accel + stable altitude
      * drops the beacon to BATTERY_SAVE cadence early - more recovery time
-     * on the same battery. */
+     * on the same battery. The LANDED event is certified with redundancy:
+     * post-topple antenna geometry is random, so three spaced copies. */
     if (beacon_state == BEACON_STATE_LAUNCH || beacon_state == BEACON_STATE_POST_LAUNCH) {
         static uint32_t last_landing_feed_s = 0;
         if (system_time_seconds != last_landing_feed_s) {
@@ -256,7 +284,52 @@ void loop() {
                 beacon_state = BEACON_STATE_BATTERY_SAVE;
                 transmit_beacon_flag = 1;
                 transmit_fast_flag = 0;
+                radio_disable();
+                beacon_queue_flight_event(FLIGHT_EVENT_LANDED, 0, FLIGHT_EVENT_REPEATS);
+                flight_log_event(millis(), 4 /* landed */);
             }
+        }
+    }
+
+    /* Airborne life-cycle + anomaly detection (flight_events.cpp): fused
+     * kinematics + gyro + sensor health fed every loop pass. One-shot
+     * edges queue as redundant FLIGHT_EVENT packets; the anomaly LEVEL
+     * tightens the trace cadence via the 1 Hz tick and re-announces below. */
+    static uint32_t last_anom_announce_ms = 0;
+    if (launch_detect_get_state() == LAUNCH_STATE_CONFIRMED) {
+        NavFused_t f;
+        nav_get_fused(&f);
+        float gx, gy, gz;
+        launch_detect_get_gyro_rads(&gx, &gy, &gz);
+
+        flight_events_input_t ev_in;
+        ev_in.airborne         = !launch_detect_has_landed();
+        ev_in.v_d_ms           = f.valid ? f.v_d   : 0.0f;
+        ev_in.alt_m            = f.valid ? f.alt_m : 0.0f;
+        ev_in.nav_valid        = f.valid ? 1 : 0;
+        ev_in.gyro_mag_rads    = sqrtf(gx * gx + gy * gy + gz * gz);
+        ev_in.imu_degraded     = f.sensor_degraded ? 1 : 0;
+        ev_in.gps_fix_age_ms   = gps_get_fix_age_ms();
+        ev_in.t_since_launch_s = launch_detect_get_time_since_launch(system_time_seconds);
+
+        uint32_t now_evt_ms = millis();
+        int16_t ev_value = 0;
+        uint8_t ev = flight_events_feed(&ev_in, now_evt_ms, &ev_value);
+        if (ev != FLIGHT_EVENT_NONE) {
+            beacon_queue_flight_event(ev, ev_value, FLIGHT_EVENT_REPEATS);
+            flight_log_event(now_evt_ms, 5 /* flight event / anomaly */);
+            if (FLIGHT_EVENT_IS_ANOMALY(ev)) {
+                last_anom_announce_ms = now_evt_ms;
+            }
+        }
+
+        /* In-anomaly re-announce: the active code with live descent rate,
+         * until the all-clear hysteresis releases the level. */
+        if (flight_events_anomaly_active() &&
+            (now_evt_ms - last_anom_announce_ms) >= ANOM_EVENT_REPEAT_MS) {
+            last_anom_announce_ms = now_evt_ms;
+            beacon_queue_flight_event(flight_events_anomaly_code(),
+                                      (int16_t)lroundf(f.v_d * 100.0f), 1);
         }
     }
 
@@ -283,6 +356,14 @@ void loop() {
         flight_log_event(millis(), 3 /* launch */);
     }
     
+    // TURN_ON boot grace -> quiet pad once the operator-feedback minute ends.
+    // (Launch detect preempts from any state, including this one.)
+    if (beacon_state == BEACON_STATE_TURN_ON &&
+        flight_cadence_should_leave_turn_on(system_time_seconds)) {
+        beacon_state = BEACON_STATE_PRE_LAUNCH;
+        transmit_beacon_flag = 1;
+    }
+
     if (beacon_state == BEACON_STATE_LAUNCH) {
         // Check if we should transition to post-launch state
         uint32_t time_since_launch = launch_detect_get_time_since_launch(system_time_seconds);
@@ -351,6 +432,17 @@ void loop() {
                                (uint8_t)atoi(c->satellites), c->fix_quality);
             }
             last_transmission_time = system_time_seconds;
+        } else if (beacon_state == BEACON_STATE_TURN_ON ||
+                   beacon_state == BEACON_STATE_PRE_LAUNCH) {
+            /* Pad states: the beacon tick IS the heartbeat - liveness plus
+             * GPS health at the state cadence. Position rides the sparse
+             * audit path below instead; the fused stream stays off. */
+            gps_poll_rx();
+            beacon_transmit_heartbeat(gps_get_current_coordinates(),
+                                      system_time_seconds,
+                                      flight_cadence_heartbeat_interval_s(beacon_state),
+                                      transmit_fast_flag);
+            last_transmission_time = system_time_seconds;
         } else {
             gps_poll_rx();
 
@@ -370,12 +462,37 @@ void loop() {
             /* GPS data rejected (no fix / <4 sats) or TX failed: send a
              * rate-limited heartbeat so the receiver still hears us. */
             beacon_transmit_heartbeat(gps_get_current_coordinates(),
-                                      system_time_seconds, transmit_fast_flag);
+                                      system_time_seconds,
+                                      flight_cadence_heartbeat_interval_s(beacon_state),
+                                      transmit_fast_flag);
         }
         }
 
         if (!transmit_fast_flag) {
             transmit_beacon_flag = 0;
+        }
+    }
+
+    /* Pad GPS audit: one full position packet when the first good fix
+     * lands (the logged pad coordinate the drift baseline argues from),
+     * then a sparse periodic copy while on the pad. Fix quality is
+     * pre-checked here so a no-fix pad doesn't spam rejection logs. */
+    if (beacon_state == BEACON_STATE_TURN_ON ||
+        beacon_state == BEACON_STATE_PRE_LAUNCH) {
+        static uint8_t pad_fix_announced = 0;
+        static uint32_t last_pad_audit_s = 0;
+        const GPSCoordinates_t* c = gps_get_current_coordinates();
+        bool fix_ok = c->valid && c->fix_quality >= 1 && atoi(c->satellites) >= 4;
+        uint32_t audit_iv_s = flight_cadence_gps_audit_interval_s(beacon_state);
+        if (fix_ok && (!pad_fix_announced ||
+                       (audit_iv_s != 0 &&
+                        system_time_seconds - last_pad_audit_s >= audit_iv_s))) {
+            uint8_t r = beacon_transmit_gps_data_binary(c, system_time_seconds,
+                                                        transmit_fast_flag);
+            if (r) {
+                pad_fix_announced = 1;
+                last_pad_audit_s = system_time_seconds;
+            }
         }
     }
 
@@ -386,13 +503,15 @@ void loop() {
 
 #if IMU_FUSION_ENABLED
     /* Fused-packet cadence: FUSED_TX_INTERVAL_MS in LAUNCH/POST_LAUNCH for
-     * smooth interpolated telemetry, FUSED_TX_INTERVAL_IDLE_MS everywhere
-     * else (pad + battery-save) to keep the PA quiet between updates.
+     * smooth interpolated telemetry, FUSED_TX_INTERVAL_IDLE_MS in
+     * battery-save, 0 (stream off) in the pad states - a stationary beacon
+     * has nothing to fuse, and the PA quiet protects the GPS front end.
      * Kept separate from the GPS-packet TX path so both streams coexist. */
     static uint32_t last_fused_tx_ms = 0;
     uint32_t now_ms = millis();
     uint32_t fused_interval_ms = flight_cadence_fused_interval_ms(beacon_state);
-    if (nav_is_valid() && (now_ms - last_fused_tx_ms >= fused_interval_ms)) {
+    if (fused_interval_ms != 0 && nav_is_valid() &&
+        (now_ms - last_fused_tx_ms >= fused_interval_ms)) {
         beacon_transmit_fused_data(system_time_seconds, transmit_fast_flag);
         last_fused_tx_ms = now_ms;
     }
@@ -409,4 +528,8 @@ void loop() {
                                  beacon_state == BEACON_STATE_POST_LAUNCH);
         }
     }
+
+    /* Queued certified-event transmissions: one packet per loop pass max,
+     * FLIGHT_EVENT_SPACING_MS between copies of the same edge. */
+    beacon_service_flight_events(now_ms, system_time_seconds, transmit_fast_flag);
 }

@@ -32,6 +32,7 @@ typedef struct __attribute__((packed)) {
 #define PACKET_TYPE_LAUNCH_T0   0x07  // "T0 declared, uptime=N" - one-shot
 #define PACKET_TYPE_CMD         0x08  // RX -> TX command channel (v2 radio)
 #define PACKET_TYPE_ACK         0x09  // TX -> RX acknowledgement of command
+#define PACKET_TYPE_FLIGHT_EVENT 0x0A // Apogee/deploy/landing + flight anomaly
 
 /* Heartbeat: 8 bytes. Sent instead of a GPS packet when no transmittable fix
  * exists (no fix / <4 sats), so the receiver's channel scan can lock and the
@@ -159,6 +160,40 @@ typedef struct __attribute__((packed)) {
     int16_t  temp_c10;       // C * 10 from BNO085 (self-heating witness)
 } ImuTracePacket_t;
 #define IMU_TRACE_PACKET_SIZE   20
+
+/* FLIGHT_EVENT: 8 bytes. One packet type carries the certified one-shot
+ * life-cycle events (apogee, drogue, main, landed) AND the flight-anomaly
+ * sequencer's codes; the code byte says which. One-shots are repeated
+ * FLIGHT_EVENT_REPEATS times so a single RF-null moment can't erase the
+ * record; anomalies re-announce every ANOM_EVENT_REPEAT_MS while the
+ * condition holds. Detection lives in flight_events.cpp (thresholds in
+ * config.h). value semantics per code:
+ *   APOGEE:        fused altitude, whole meters (int16)
+ *   DROGUE / MAIN: descent rate, cm/s at declaration
+ *   LANDED:        0
+ *   anomalies:     descent rate cm/s at announcement (debris-track context) */
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;    // PACKET_TYPE_FLIGHT_EVENT
+    uint8_t  rocket_id;      // ROCKET_ID of this airframe
+    uint8_t  code;           // FLIGHT_EVENT_*
+    uint8_t  spare;          // zero-filled (wire alignment / future flags)
+    uint16_t uptime_s;       // TX uptime at TX time (saturates at 65535)
+    int16_t  value;          // per-code, see above
+} FlightEventPacket_t;
+#define FLIGHT_EVENT_PACKET_SIZE  8
+
+#define FLIGHT_EVENT_NONE             0x00
+#define FLIGHT_EVENT_APOGEE           0x01  /* v_d held downward post-launch   */
+#define FLIGHT_EVENT_DROGUE           0x02  /* descent rate entered drogue band */
+#define FLIGHT_EVENT_MAIN             0x03  /* descent rate stepped below band  */
+#define FLIGHT_EVENT_LANDED           0x04  /* landing latch tripped            */
+#define FLIGHT_EVENT_ANOM_BALLISTIC   0x10  /* no drogue: rate > ballistic band */
+#define FLIGHT_EVENT_ANOM_TUMBLE      0x11  /* gyro magnitude past 1000 dps     */
+#define FLIGHT_EVENT_ANOM_SENSOR_LOSS 0x12  /* BNO085 dead in flight            */
+#define FLIGHT_EVENT_ANOM_GPS_OUTAGE  0x13  /* no fix past rescue horizon, airborne */
+#define FLIGHT_EVENT_ANOM_REBOOT      0x14  /* reserved: reboot-while-airborne
+                                             * (needs flight_log phase resume) */
+#define FLIGHT_EVENT_IS_ANOMALY(c)    ((c) >= 0x10)
 
 /* ------------------------------------------------------------------
  * Two-way channel (post-landing / diagnostics). Both frames are 6 bytes:

@@ -137,6 +137,8 @@ static uint8_t imu_pending = 0;
 static uint32_t last_imu_time = 0;
 static LaunchT0Packet_t last_launch_t0;
 static uint8_t launch_t0_pending = 0;
+static FlightEventPacket_t last_flight_event;
+static uint8_t flight_event_pending = 0;
 
 /* Two-way answer channel (TX -> RX) */
 static AckPacket_t last_ack;
@@ -457,6 +459,16 @@ uint8_t RF_Receiver_DataAvailable(void)
         memcpy(&last_launch_t0, last_packet.data, sizeof(last_launch_t0));
         if (RF_RocketFilter(1, last_launch_t0.rocket_id)) {
           launch_t0_pending = 1;
+          last_packet_time = HAL_GetTick();
+        }
+      } else if (last_packet.length == FLIGHT_EVENT_PACKET_SIZE
+              && last_packet.data[0] == PACKET_TYPE_FLIGHT_EVENT) {
+        /* Certified life-cycle event / anomaly announcement. Foreign
+         * beacons' events must not pollute our flight log. */
+        memset(&last_flight_event, 0, sizeof(last_flight_event));
+        memcpy(&last_flight_event, last_packet.data, sizeof(last_flight_event));
+        if (RF_RocketFilter(1, last_flight_event.rocket_id)) {
+          flight_event_pending = 1;
           last_packet_time = HAL_GetTick();
         }
       } else if (last_packet.length == CMD_ACK_PACKET_SIZE
@@ -953,6 +965,14 @@ uint8_t RF_Receiver_GetLaunchT0(LaunchT0Packet_t *t0)
   if (!launch_t0_pending || t0 == NULL) return 0;
   memcpy(t0, &last_launch_t0, sizeof(*t0));
   launch_t0_pending = 0;
+  return 1;
+}
+
+uint8_t RF_Receiver_GetFlightEvent(FlightEventPacket_t *evt)
+{
+  if (!flight_event_pending || evt == NULL) return 0;
+  memcpy(evt, &last_flight_event, sizeof(*evt));
+  flight_event_pending = 0;
   return 1;
 }
 

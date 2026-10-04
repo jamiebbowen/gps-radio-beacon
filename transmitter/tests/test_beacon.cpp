@@ -10,6 +10,7 @@
  *   - Heartbeats              (rate limiting, uptime saturation)
  *   - Callsign strings        ("KE0MZS-<id> CH<n>")
  *   - Fused EKF packets       (19 bytes, velocity clamping, flag bits)
+ *   - Flight-event packets    (8 bytes: repeat queue, spacing, backoff)
  * plus every GPS-rejection path (no fix, <4 sats, bad altitude).
  *
  * Build & run:  make -C transmitter/tests
@@ -363,7 +364,7 @@ TEST(test_heartbeat_contents_and_rate_limit)
     c.fix_quality = 0;
     fake_gps_health = 0x21;                   /* health nibble + resets */
 
-    CHECK(beacon_transmit_heartbeat(&c, 42, 0) == 1);
+    CHECK(beacon_transmit_heartbeat(&c, 42, HEARTBEAT_INTERVAL_SEC, 0) == 1);
     CHECK(tx_len == sizeof(HeartbeatPacket_t));
     CHECK(sizeof(HeartbeatPacket_t) == HEARTBEAT_PACKET_SIZE);  /* =9 */
     const HeartbeatPacket_t *hb = (const HeartbeatPacket_t *)tx_buf;
@@ -377,21 +378,28 @@ TEST(test_heartbeat_contents_and_rate_limit)
     /* V3: reset cause travels with the heartbeat (WDT boot = 0x20) */
     g_boot_rcause = HB_RESET_WDT;
     now_ms += HEARTBEAT_INTERVAL_SEC * 1000UL + 1;
-    CHECK(beacon_transmit_heartbeat(&c, 50, 0) == 1);
+    CHECK(beacon_transmit_heartbeat(&c, 50, HEARTBEAT_INTERVAL_SEC, 0) == 1);
     hb = (const HeartbeatPacket_t *)tx_buf;
     CHECK(hb->reset_info  == HB_RESET_WDT);
     g_boot_rcause = 0;
 
-    /* Within HEARTBEAT_INTERVAL_SEC: rate limited, no TX */
+    /* Within the caller's interval: rate limited, no TX */
     uint32_t count_before = tx_count;
     now_ms += 1000;
-    CHECK(beacon_transmit_heartbeat(&c, 43, 0) == 0);
+    CHECK(beacon_transmit_heartbeat(&c, 43, HEARTBEAT_INTERVAL_SEC, 0) == 0);
     CHECK(tx_count == count_before);
 
     /* After the interval: transmits again */
     now_ms += HEARTBEAT_INTERVAL_SEC * 1000UL;
-    CHECK(beacon_transmit_heartbeat(&c, 48, 0) == 1);
+    CHECK(beacon_transmit_heartbeat(&c, 48, HEARTBEAT_INTERVAL_SEC, 0) == 1);
     CHECK(tx_count == count_before + 1);
+
+    /* The interval is the caller's, not the module's: a pad-cadence caller
+     * (60 s) is still rate-limited 30 s in, a tighter caller is not. */
+    count_before = tx_count;
+    now_ms += 30 * 1000UL;
+    CHECK(beacon_transmit_heartbeat(&c, 78, PRELAUNCH_HEARTBEAT_INTERVAL_SEC, 0) == 0);
+    CHECK(tx_count == count_before);
 }
 
 TEST(test_heartbeat_null_coords_and_saturation)
@@ -400,7 +408,7 @@ TEST(test_heartbeat_null_coords_and_saturation)
     now_ms += HEARTBEAT_INTERVAL_SEC * 1000UL + 1;
 
     /* NULL coords: sats/fix default to 0; uptime saturates at 65535 */
-    CHECK(beacon_transmit_heartbeat(NULL, 100000UL, 1) == 1);
+    CHECK(beacon_transmit_heartbeat(NULL, 100000UL, HEARTBEAT_INTERVAL_SEC, 1) == 1);
     const HeartbeatPacket_t *hb = (const HeartbeatPacket_t *)tx_buf;
     CHECK(hb->satellites == 0 && hb->fix_quality == 0);
     CHECK(hb->uptime_s == 65535);
@@ -413,12 +421,12 @@ TEST(test_heartbeat_tx_failure_does_not_consume_slot)
     now_ms += HEARTBEAT_INTERVAL_SEC * 1000UL + 1;
 
     tx_result = -1;
-    CHECK(beacon_transmit_heartbeat(NULL, 1, 0) == 0);
+    CHECK(beacon_transmit_heartbeat(NULL, 1, HEARTBEAT_INTERVAL_SEC, 0) == 0);
     tx_result = 0;
 
     /* Failed TX must not update the rate limiter: the next attempt goes
      * out immediately instead of waiting another full interval */
-    CHECK(beacon_transmit_heartbeat(NULL, 2, 0) == 1);
+    CHECK(beacon_transmit_heartbeat(NULL, 2, HEARTBEAT_INTERVAL_SEC, 0) == 1);
 }
 
 TEST(test_launch_t0_packet_contents)
@@ -433,6 +441,76 @@ TEST(test_launch_t0_packet_contents)
     CHECK(t0->rocket_id   == ROCKET_ID);
     CHECK(t0->uptime_s    == 123);
     CHECK(t0->age_ds      == 25);                     /* 2.5 s in deciseconds */
+}
+
+/* ------------------------------------------------------------------ */
+/* Certified flight-event packets + retransmit queue                   */
+/* ------------------------------------------------------------------ */
+
+TEST(test_flight_event_packet_and_repeats)
+{
+    reset_tx();
+    CHECK(sizeof(FlightEventPacket_t) == FLIGHT_EVENT_PACKET_SIZE);  /* =8 */
+    beacon_queue_flight_event(FLIGHT_EVENT_APOGEE, 2234, FLIGHT_EVENT_REPEATS);
+
+    /* First copy goes out immediately, on the first service pass */
+    CHECK(beacon_service_flight_events(now_ms, 42, 1) == 1);
+    CHECK(tx_count == 1);
+    const FlightEventPacket_t *ev = (const FlightEventPacket_t *)tx_buf;
+    CHECK(ev->packet_type == PACKET_TYPE_FLIGHT_EVENT);
+    CHECK(ev->rocket_id   == ROCKET_ID);
+    CHECK(ev->code        == FLIGHT_EVENT_APOGEE);
+    CHECK(ev->spare       == 0);
+    CHECK(ev->uptime_s    == 42);
+    CHECK(ev->value       == 2234);
+
+    /* Copies 2..N gated by FLIGHT_EVENT_SPACING_MS, then the slot drains */
+    CHECK(beacon_service_flight_events(now_ms + FLIGHT_EVENT_SPACING_MS - 1, 43, 1) == 0);
+    CHECK(tx_count == 1);
+    CHECK(beacon_service_flight_events(now_ms + FLIGHT_EVENT_SPACING_MS, 43, 1) == 1);
+    CHECK(beacon_service_flight_events(now_ms + 2 * FLIGHT_EVENT_SPACING_MS, 44, 1) == 1);
+    CHECK(beacon_service_flight_events(now_ms + 3 * FLIGHT_EVENT_SPACING_MS, 45, 1) == 0);
+    CHECK(tx_count == 3);                            /* exactly REPEATS copies */
+    CHECK(radio_enables == 0);                       /* fast mode: no power cycle */
+}
+
+TEST(test_flight_event_tx_failure_backs_off)
+{
+    reset_tx();
+    tx_result = -2;
+    beacon_queue_flight_event(FLIGHT_EVENT_ANOM_BALLISTIC, 4000, 2);
+    CHECK(beacon_service_flight_events(now_ms, 100, 1) == 0);
+    CHECK(tx_count == 1);                            /* the attempt happened */
+    tx_result = 0;
+
+    /* Retry postponed by one spacing, not a busy re-attempt */
+    CHECK(beacon_service_flight_events(now_ms + 1, 100, 1) == 0);
+    CHECK(tx_count == 1);
+    CHECK(beacon_service_flight_events(now_ms + FLIGHT_EVENT_SPACING_MS, 100, 1) == 1);
+    CHECK(tx_count == 2);
+
+    /* Drain the last repeat so the static queue enters the next test empty */
+    CHECK(beacon_service_flight_events(now_ms + 2 * FLIGHT_EVENT_SPACING_MS, 101, 1) == 1);
+    CHECK(tx_count == 3);
+}
+
+TEST(test_flight_event_queue_overflow_counted)
+{
+    reset_tx();
+    uint32_t drops0 = beacon_flight_event_dropped();
+    for (int i = 0; i < 8; i++) {
+        beacon_queue_flight_event(FLIGHT_EVENT_MAIN, (int16_t)i, 3);
+    }
+    beacon_queue_flight_event(FLIGHT_EVENT_MAIN, 99, 3);   /* 9th: full */
+    CHECK(beacon_flight_event_dropped() == drops0 + 1);
+
+    /* Everything queued still drains at the spacing cadence: 8 x 3 copies */
+    uint32_t sent = 0;
+    for (uint32_t t = 0; t < 40; t++) {
+        sent += beacon_service_flight_events(now_ms + t * FLIGHT_EVENT_SPACING_MS,
+                                             (uint32_t)t, 1);
+    }
+    CHECK(sent == 24);
 }
 
 TEST(test_imu_trace_packet_contents)
@@ -588,6 +666,23 @@ TEST(test_fused_wire_format_pin)
     CHECK(FUSED_FLAG_RESERVED_MASK   == 0x01);
 
     CHECK(FLAG_LOW_SATS              == 0x20);
+
+    /* FLIGHT_EVENT (apogee/drogue/main/landed + anomaly codes) */
+    CHECK(sizeof(FlightEventPacket_t) == 8);
+    CHECK(FLIGHT_EVENT_PACKET_SIZE == 8);
+    CHECK(PACKET_TYPE_FLIGHT_EVENT == 0x0A);
+    CHECK(offsetof(FlightEventPacket_t, code)     == 2);
+    CHECK(offsetof(FlightEventPacket_t, uptime_s) == 4);
+    CHECK(offsetof(FlightEventPacket_t, value)    == 6);
+    CHECK(FLIGHT_EVENT_APOGEE           == 0x01);
+    CHECK(FLIGHT_EVENT_DROGUE           == 0x02);
+    CHECK(FLIGHT_EVENT_MAIN             == 0x03);
+    CHECK(FLIGHT_EVENT_LANDED           == 0x04);
+    CHECK(FLIGHT_EVENT_ANOM_BALLISTIC   == 0x10);
+    CHECK(FLIGHT_EVENT_ANOM_TUMBLE      == 0x11);
+    CHECK(FLIGHT_EVENT_ANOM_SENSOR_LOSS == 0x12);
+    CHECK(FLIGHT_EVENT_ANOM_GPS_OUTAGE  == 0x13);
+    CHECK(FLIGHT_EVENT_ANOM_REBOOT      == 0x14);
 }
 
 TEST(test_fused_gate_reject_delta)
@@ -748,6 +843,9 @@ int main(void)
     run_test_callsign_format();
     run_test_heartbeat_tx_failure_does_not_consume_slot();
     run_test_launch_t0_packet_contents();
+    run_test_flight_event_packet_and_repeats();
+    run_test_flight_event_tx_failure_backs_off();
+    run_test_flight_event_queue_overflow_counted();
     run_test_imu_trace_packet_contents();
     run_test_fused_not_anchored_no_tx();
     run_test_fused_packet_fields();

@@ -69,7 +69,7 @@ static struct { struct { uint8_t reg; } RCAUSE; } fake_rstc;
 /* Radio fakes: count every packet by type                             */
 /* ------------------------------------------------------------------ */
 
-static uint32_t tx_by_type[8];    /* indexed by packet_type byte */
+static uint32_t tx_by_type[16];   /* indexed by packet_type byte */
 static uint32_t tx_callsigns = 0;
 static uint32_t tx_other = 0;
 static uint32_t radio_enables = 0, radio_disables = 0;
@@ -84,7 +84,7 @@ uint8_t radio_get_channel(void) { return 0; }
 int transmit_packet(const uint8_t *data, size_t length)
 {
     uint8_t t = data[0];
-    if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_LAUNCH_T0) {
+    if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_FLIGHT_EVENT) {
         tx_by_type[t]++;
     } else if (t >= 0x20 && t <= 0x7E) {
         tx_callsigns++;              /* printable = callsign text */
@@ -268,20 +268,22 @@ int main(void)
 {
     Test_SetTickAutoAdvance(0);
 
-    /* ---------- Boot: pad phase, fix healthy ---------- */
+    /* ---------- Boot: turn-on grace, fix healthy ---------- */
     fake_fix_ok = 1;
     script_fix(SIM_LAT, SIM_LON, SIM_ALT, 9, 1);
     setup();
     CHECK(tx_callsigns == 1);                     /* boot ID (FCC) */
-    CHECK(beacon_state == BEACON_STATE_PRE_LAUNCH);
+    CHECK(beacon_state == BEACON_STATE_TURN_ON);
 
-    sim_run(40000);                               /* 40 s on the pad */
-    /* Raw GPS every 5 s: about 8-9 (boot TX at 0 + each 5 s tick) */
-    CHECK(type_count(PACKET_TYPE_GPS) >= 7 && type_count(PACKET_TYPE_GPS) <= 10);
-    /* No fix problems -> zero heartbeats */
-    CHECK(type_count(PACKET_TYPE_HEARTBEAT) == 0);
-    /* Fused idle cadence 5 s once nav anchors */
-    CHECK(type_count(PACKET_TYPE_FUSED) >= 6);
+    sim_run(40000);                               /* 40 s of the grace minute */
+    /* Turn-on heartbeat every 5 s: boot TX + t=5..40 -> 8 or 9 */
+    CHECK(type_count(PACKET_TYPE_HEARTBEAT) >= 8 &&
+          type_count(PACKET_TYPE_HEARTBEAT) <= 10);
+    /* Exactly one full position: the first-good-fix pad audit copy */
+    CHECK(type_count(PACKET_TYPE_GPS) == 1);
+    /* No fused stream on the pad at all (PA stays out of the GPS front
+     * end's face; a stationary beacon has nothing to fuse) */
+    CHECK(type_count(PACKET_TYPE_FUSED) == 0);
     /* Pad TX uses radio enable/disable around each non-fast packet */
     CHECK(radio_enables > 0 && radio_disables == radio_enables);
     CHECK(radio_enabled_flag == 0);
@@ -290,12 +292,13 @@ int main(void)
     fake_fix_ok = 0;
     fake_coords.valid = 0;
     uint32_t hb0 = type_count(PACKET_TYPE_HEARTBEAT);
-    sim_run(40000);
-    /* Loop asks for a beacon every 5 s; with no fix that becomes
-     * heartbeats, rate-limited by HEARTBEAT_INTERVAL_SEC - never silence */
+    sim_run(40000);                               /* spans the turn-on exit
+                                                     * at t=60 -> PRE_LAUNCH  */
+    /* Heartbeats continue (they report the broken GPS health, that is the
+     * point): turn-on-tempo ticks through t=55 plus the PRE_LAUNCH entry */
     uint32_t hbs = type_count(PACKET_TYPE_HEARTBEAT) - hb0;
-    CHECK(hbs >= 6 && hbs <= 10);
-    CHECK(type_count(PACKET_TYPE_GPS) <= 10);     /* no new position TX */
+    CHECK(hbs >= 2 && hbs <= 6);
+    CHECK(type_count(PACKET_TYPE_GPS) == 1);      /* no new position TX */
 
     /* ---------- Fix returns, then LAUNCH (sustained accel burst) ----- */
     fake_fix_ok = 1;
@@ -334,6 +337,9 @@ int main(void)
     sim_run((LAND_QUIET_S + 20) * 1000UL);
     CHECK(launch_detect_has_landed() == true);
     CHECK(beacon_state == BEACON_STATE_BATTERY_SAVE);
+    /* Certified LANDED event: FLIGHT_EVENT_REPEATS copies went on the air
+     * (spacing ~1.2 s << the quiet window above) and nothing else fired */
+    CHECK(type_count(PACKET_TYPE_FLIGHT_EVENT) == FLIGHT_EVENT_REPEATS);
 
     uint32_t fus1 = type_count(PACKET_TYPE_FUSED);
     uint32_t gps1 = type_count(PACKET_TYPE_GPS);
@@ -352,11 +358,12 @@ int main(void)
      *  the point of the whole file) */
     CHECK(fake_wdt.CLEAR.reg == WDT_CLEAR_CLEAR_KEY_Val);
 
-    printf("mainloop sim: GPS=%lu FUS=%lu HB=%lu CALL=%lu\n",
+    printf("mainloop sim: GPS=%lu FUS=%lu HB=%lu CALL=%lu EVT=%lu\n",
            (unsigned long)type_count(PACKET_TYPE_GPS),
            (unsigned long)type_count(PACKET_TYPE_FUSED),
            (unsigned long)type_count(PACKET_TYPE_HEARTBEAT),
-           (unsigned long)tx_callsigns);
+           (unsigned long)tx_callsigns,
+           (unsigned long)type_count(PACKET_TYPE_FLIGHT_EVENT));
 
     return TEST_SUMMARY();
 }

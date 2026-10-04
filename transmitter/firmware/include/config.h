@@ -14,13 +14,87 @@
 // Set to 1 for testing mode, 0 for production mode
 #define TESTING_MODE 0
 
-/* Minimum seconds between no-fix heartbeat packets. A heartbeat is sent when
- * a beacon TX was requested but no transmittable GPS fix exists, keeping the
- * receiver's channel scan and operator informed that the beacon is alive.
- * 5 s while range-testing (dense = fast scan lock + marginal-link evidence).
- * For flight-prep benching, consider 30 s so pad bursts leave the GPS
- * front ends long clean windows (see git history / reliability.md). */
+/* Minimum seconds between heartbeat packets when a beacon TX was requested
+ * but no transmittable GPS fix exists (flight / battery-save states). On the
+ * pad the heartbeat IS the beacon interval instead - see the TURN_ON /
+ * PRELAUNCH cadence constants below. */
 #define HEARTBEAT_INTERVAL_SEC 5
+
+/* ---------------------------------------------------------------------------
+ * Beep-before-silence pad policy (turn-on grace + quiet pad)
+ * -------------------------------------------------------------------------*/
+
+/* Turn-on grace: the operator is standing at the rail asking "did it come
+ * up? did the GPS start? is it on the right channel?" Heartbeat every 5 s
+ * for the first minute answers all three while packets are still cheap;
+ * then the pad goes quiet. */
+#define TURN_ON_DURATION_SEC            60
+#define TURN_ON_HEARTBEAT_INTERVAL_SEC  5
+
+/* Quiet pad: one heartbeat a minute proves liveness without PA noise in the
+ * GPS front end's face (field logs: pad TX bursts cost the beacon GPS three
+ * watchdog rounds before first fix). On-demand freshness between heartbeats
+ * is the two-way channel's job (PING). */
+#define PRELAUNCH_HEARTBEAT_INTERVAL_SEC 60
+
+/* Full GPS position on the pad: once on the first good fix (the logged pad
+ * coordinate everyone argues from later), then a sparse audit copy. */
+#define PRELAUNCH_GPS_AUDIT_INTERVAL_SEC 600
+
+/* ---------------------------------------------------------------------------
+ * Flight-event + anomaly detection (flight_events.cpp). Pure kinematics:
+ * fused v_d / gyro magnitude / sensor health, fed per loop pass. Thresholds
+ * pinned by transmitter/tests/test_flight_events.cpp.
+ * -------------------------------------------------------------------------*/
+
+/* Apogee: sustained descent after the launch edge. The 2 s floor rejects
+ * detection glitches off the launch transient; 2 m/s for 0.5 s rejects the
+ * v_d noise band of a healthy anchor without delaying the real call. */
+#define APOGEE_MIN_T_SINCE_LAUNCH_S   2U
+#define APOGEE_VD_MIN_MS              2.0f
+#define APOGEE_HOLD_MS                500U
+
+/* Drogue: descent rate stabilizes inside the drogue band. Dead zone
+ * 8..10 m/s vs the main band below is deliberate - an ambiguous rate
+ * declares nothing until it resolves. */
+#define DROGUE_BAND_MIN_MS            10.0f
+#define DROGUE_BAND_MAX_MS            30.0f
+#define DROGUE_HOLD_MS                1000U
+
+/* Main: descent rate steps down to <= max(MAIN_BAND_MAX, 50% of the drogue
+ * baseline rate). MAIN_MIN_BASELINE keeps a lazy 9 m/s all-the-way-down hop
+ * from inventing a deployment. */
+#define MAIN_BAND_MAX_MS              8.0f
+#define MAIN_STEP_RATIO               0.5f
+#define MAIN_MIN_BASELINE_MS          10.0f
+#define MAIN_HOLD_MS                  1000U
+
+/* Anomalies (level conditions with holds; entered as FLIGHT_EVENT codes,
+ * re-announced while active, cleared after ANOM_CLEAR_MS of all-well). */
+#define ANOM_BALLISTIC_VD_MS          35.0f  /* past the drogue band, post-grace */
+#define ANOM_BALLISTIC_GRACE_S        5U     /* drogue may need seconds to open  */
+#define ANOM_BALLISTIC_HOLD_MS        1000U
+#define ANOM_TUMBLE_RADS              17.5f  /* ~1000 deg/s: not a flying rocket */
+#define ANOM_TUMBLE_HOLD_MS           300U
+#define ANOM_SENSOR_HOLD_MS           1000U  /* BNO085 degraded this long in air */
+#define ANOM_GPS_OUTAGE_MS            15000UL /* = NAV_RESCUE_NOFIX_MS horizon  */
+#define ANOM_CLEAR_MS                 5000U  /* all-clear hysteresis             */
+
+/* While an anomaly is active the beacon bleeds everything: the inertial
+ * trace tightens to ANOM_BEACON_INTERVAL_S (from the 2 s recovery pacing)
+ * and the anomaly event re-announces at ANOM_EVENT_REPEAT_MS. 1 s spacing
+ * with 1.12 s packet airtimes keys the PA near 100% until the anomaly
+ * clears - accepted deliberately: ballistic anomalies last seconds, and
+ * sensor-loss anomalies are exactly the flights where the trace is the
+ * only narrative. The POST_LAUNCH recovery window / landing latch bound
+ * the worst-case duration. */
+#define ANOM_BEACON_INTERVAL_S        1U
+#define ANOM_EVENT_REPEAT_MS          10000UL
+
+/* Certified events are one-shot edges - sent FLIGHT_EVENT_REPEATS times
+ * this far apart, so a single RF-null moment can't erase the record. */
+#define FLIGHT_EVENT_REPEATS          3U
+#define FLIGHT_EVENT_SPACING_MS       1200U
 
 /**
  * Bench-test switch: when 1, the beacon boots directly into BEACON_STATE_LAUNCH

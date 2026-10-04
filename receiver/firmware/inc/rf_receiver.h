@@ -78,6 +78,12 @@ uint8_t RF_Receiver_GetLastHeartbeat(HeartbeatPacket_t *hb, uint32_t *age_ms);
 uint8_t RF_Receiver_GetImuTrace(ImuTracePacket_t *imu);
 uint8_t RF_Receiver_GetLaunchT0(LaunchT0Packet_t *t0);
 
+/* Certified flight events: apogee / drogue / main / landed one-shots and
+ * anomaly (re-)announcements. One-shot read: 1 = a new event packet. main.c
+ * logs every one to the SD card (events repeat by design, so a log row per
+ * packet is correct). */
+uint8_t RF_Receiver_GetFlightEvent(FlightEventPacket_t *evt);
+
 /* Two-way scaffolding (v2 board radios; ignored on v1): operator triggers
  * a PING from a test-mode button press; the received one-shot ACK state is
  * readable to the caller and cleared with ConsumeAckFlag. Packets dropped
