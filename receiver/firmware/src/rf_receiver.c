@@ -138,6 +138,11 @@ static uint32_t last_imu_time = 0;
 static LaunchT0Packet_t last_launch_t0;
 static uint8_t launch_t0_pending = 0;
 
+/* Two-way answer channel (TX -> RX) */
+static AckPacket_t last_ack;
+static uint8_t ack_pending = 0;
+static uint32_t last_ack_time = 0;
+
 /* Bench-firmware detector. A beacon flashed with TESTING_MODE=1 sounds
  * identical to production BUT IDs every 30 s instead of every 5 min (and
  * has never-launched-friendly cadence tables nobody wants on a real
@@ -452,6 +457,18 @@ uint8_t RF_Receiver_DataAvailable(void)
         memcpy(&last_launch_t0, last_packet.data, sizeof(last_launch_t0));
         if (RF_RocketFilter(1, last_launch_t0.rocket_id)) {
           launch_t0_pending = 1;
+          last_packet_time = HAL_GetTick();
+        }
+      } else if (last_packet.length == CMD_ACK_PACKET_SIZE
+              && last_packet.data[0] == PACKET_TYPE_ACK) {
+        /* Inbound ACK: legal only after we sent something; unknown-timing
+         * ones (garbage LAN frames) are dropped by the ID filter too */
+        memset(&last_ack, 0, sizeof(last_ack));
+        memcpy(&last_ack, last_packet.data, sizeof(last_ack));
+        /* A TX ACK is only worth hearing if it's addressed to OUR beacon */
+        if (RF_RocketFilter(1, last_ack.rocket_id)) {
+          ack_pending = 1;
+          last_ack_time = HAL_GetTick();
           last_packet_time = HAL_GetTick();
         }
       } else if ((last_packet.length == HEARTBEAT_PACKET_SIZE
@@ -937,6 +954,38 @@ uint8_t RF_Receiver_GetLaunchT0(LaunchT0Packet_t *t0)
   memcpy(t0, &last_launch_t0, sizeof(*t0));
   launch_t0_pending = 0;
   return 1;
+}
+
+/* Two-way scaffolding (v2 radios, benign on v1): hand one command frame to
+ * the beacon on its next quiet window. PING is the probe; ACKs show up in
+ * RF_Receiver_GetLastAck. Called from main when the operator pokes it. */
+uint8_t RF_Receiver_GetLastAck(AckPacket_t *ack, uint32_t *age_ms)
+{
+  if (last_ack_time == 0) return 0;
+  if (ack) memcpy(ack, &last_ack, sizeof(*ack));
+  if (age_ms) *age_ms = HAL_GetTick() - last_ack_time;
+  return 1;
+}
+
+uint8_t RF_Receiver_ConsumeAckFlag(void)
+{
+  uint8_t v = ack_pending;
+  ack_pending = 0;
+  return v;
+}
+
+uint8_t RF_Receiver_SendCommand(uint8_t cmd_code, uint8_t param)
+{
+  uint8_t buf[CMD_ACK_PACKET_SIZE];
+  buf[0] = PACKET_TYPE_CMD;
+  buf[1] = (uint8_t)RF_Receiver_GetBoundRocketId();
+  buf[2] = cmd_code;
+  static uint16_t seq = 0;
+  seq++;
+  buf[3] = (uint8_t)(seq >> 8);
+  buf[4] = (uint8_t)(seq & 0xFF);
+  buf[5] = param;
+  return LoRa_Transmit(buf, sizeof(buf)) == LORA_OK;
 }
 
 /**

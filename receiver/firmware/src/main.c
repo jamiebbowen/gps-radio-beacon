@@ -866,6 +866,10 @@ int main(void)
         SD_Card_EnsureLogFile();
         SD_Card_LogEvent(b_msg);
         bound_logged = bnd;
+        /* Probe the brand-new bidirectional link at bond time: sends the
+         * beacon a one-shot PING; the beacon's ACK lands on-card within
+         * a second on v2 radios, gracefully silent on v1. */
+        RF_Receiver_SendCommand(CMD_PING, 0);
       }
       uint32_t foreign = RF_Receiver_GetForeignDrops();
       if (foreign != foreign_logged &&
@@ -981,6 +985,22 @@ int main(void)
         RF_Receiver_GetSignalQuality(&ir, &isn);
         SD_Card_EnsureLogFile();
         SD_Card_LogImuTrace(&imu, ir);
+      }
+    }
+
+    /* Two-way channel answers: an ACK land is one of the few beacon-still-
+     * alive signals we get in the flight window. */
+    if (rf_initialized && sd_card_ok && RF_Receiver_ConsumeAckFlag()) {
+      AckPacket_t ack; uint32_t age;
+      if (RF_Receiver_GetLastAck(&ack, &age)) {
+        char a_msg[64];
+        snprintf(a_msg, sizeof(a_msg),
+                 "CMD ACK cmd=0x%02X seq=%u echo=%u rssi=%d snr=%d",
+                 (unsigned)ack.cmd_code,
+                 (unsigned)((ack.seq_hi << 8) | ack.seq_lo),
+                 (unsigned)ack.echo, (int)0, (int)0);
+        SD_Card_EnsureLogFile();
+        SD_Card_LogEvent(a_msg);
       }
     }
 

@@ -114,6 +114,14 @@ void launch_detect_get_gyro_rads(float *x, float *y, float *z) { if (x) *x=0; if
 void launch_detect_get_accel_xyz(float *x, float *y, float *z) { if (x) *x=0; if (y) *y=0; if (z) *z=0; }
 float launch_detect_get_current_accel(void) { return 0.0f; }
 
+/* Two-way scaffolding stubs */
+bool radio_is_transmitting(void) { return false; }
+int  radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms)
+{ (void)out; (void)max_len; (void)timeout_ms; return 0; }
+int  radio_transmit_ack(uint8_t rocket_id, uint8_t cmd_code,
+                        uint8_t seq_hi, uint8_t seq_lo, uint8_t echo)
+{ (void)rocket_id; (void)cmd_code; (void)seq_hi; (void)seq_lo; (void)echo; return 0; }
+
 static bool fake_landed = false;
 bool launch_detect_has_landed(void) { return fake_landed; }
 

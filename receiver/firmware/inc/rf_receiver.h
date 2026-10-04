@@ -78,6 +78,14 @@ uint8_t RF_Receiver_GetLastHeartbeat(HeartbeatPacket_t *hb, uint32_t *age_ms);
 uint8_t RF_Receiver_GetImuTrace(ImuTracePacket_t *imu);
 uint8_t RF_Receiver_GetLaunchT0(LaunchT0Packet_t *t0);
 
+/* Two-way scaffolding (v2 board radios; ignored on v1): operator triggers
+ * a PING from a test-mode button press; the received one-shot ACK state is
+ * readable to the caller and cleared with ConsumeAckFlag. Packets dropped
+ * to foreign beacons never mark the latch. */
+uint8_t RF_Receiver_SendCommand(uint8_t cmd_code, uint8_t param);
+uint8_t RF_Receiver_GetLastAck(AckPacket_t *ack, uint32_t *age_ms);
+uint8_t RF_Receiver_ConsumeAckFlag(void);
+
 /* Ambient noise-floor monitor. The floor is the 25th percentile of ~1 Hz
  * GetRssiInst samples taken while the radio idles in continuous RX; the
  * alert engages at RF_NOISE_ALERT_DBM and clears at RF_NOISE_CLEAR_DBM.

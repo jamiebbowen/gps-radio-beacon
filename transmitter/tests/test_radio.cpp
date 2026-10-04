@@ -53,6 +53,10 @@ void digitalWrite(int pin, int value)
 
 /* RadioLib knobs */
 int     radiolib_begin_result = RADIOLIB_ERR_NONE;
+int     radiolib_start_receive_result = RADIOLIB_ERR_NONE;
+uint32_t radiolib_irq_flags = 0;
+uint8_t radiolib_rx_buf[256];
+size_t  radiolib_rx_len = 0;
 float   radiolib_begin_freq = 0;
 int     radiolib_begin_calls = 0;
 int     radiolib_standby_calls = 0;

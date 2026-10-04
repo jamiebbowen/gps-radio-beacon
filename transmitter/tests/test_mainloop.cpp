@@ -169,6 +169,14 @@ void     flight_log_event(uint32_t ms, uint8_t kind)
 void     flight_log_dump_serial(void) {}
 uint8_t  flog_armed_count_value(void) { return flog_armed_count; }
 uint32_t flog_gps_calls_value(void)   { return flog_gps_calls; }
+
+/* Two-way scaffolding stubs (beacon_poll_commands calls these) */
+bool radio_is_transmitting(void) { return false; }
+int  radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms)
+{ (void)out; (void)max_len; (void)timeout_ms; return 0; }
+int  radio_transmit_ack(uint8_t rocket_id, uint8_t cmd_code,
+                        uint8_t seq_hi, uint8_t seq_lo, uint8_t echo)
+{ (void)rocket_id; (void)cmd_code; (void)seq_hi; (void)seq_lo; (void)echo; return 0; }
 float   gps_nmea_to_decimal(const char *n, char d)
 {
     double v = atof(n);

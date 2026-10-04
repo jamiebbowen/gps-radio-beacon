@@ -57,6 +57,20 @@ uint8_t LoRa_GetDeviceStatus(uint8_t *status)
     return LORA_OK;
 }
 uint8_t LoRa_GetIRQStatus(uint16_t *irq) { *irq = fake_irq_value; return LORA_OK; }
+
+/* Two-way scaffolding: captures what RF_Receiver_SendCommand transmits */
+static uint32_t lora_tx_calls = 0;
+static uint8_t  lora_tx_buf[32];
+static size_t   lora_tx_len = 0;
+uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length)
+{
+    lora_tx_calls++;
+    if (length <= sizeof(lora_tx_buf)) {
+        memcpy(lora_tx_buf, data, length);
+        lora_tx_len = length;
+    }
+    return LORA_OK;
+}
 /* GetRssiInst scripting: scalar (default), per-channel table, or a global
  * sequence consumed one value per call (seq repeats its last value). */
 static uint8_t       fake_rssi_use_table = 0;
@@ -564,6 +578,65 @@ TEST(test_imu_trace_foreign_id_dropped)
     run_for(500, 250);
     ImuTracePacket_t out;
     CHECK(RF_Receiver_GetImuTrace(&out) == 0);
+}
+
+TEST(test_two_way_ack_lifecycle)
+{
+    /* Our own beacon ACKs our ping. Consume the inject GPS first - the
+     * main-loop read gate won't accept anything while rf_packet_ready is
+     * latched. */
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    run_for(250, 250);
+    GPS_Data _g;
+    (void)RF_Receiver_GetGPSData(&_g);
+
+    AckPacket_t ack_in = {
+        .packet_type = PACKET_TYPE_ACK,
+        .rocket_id   = OUR_ROCKET_ID,
+        .cmd_code    = CMD_PING,
+        .seq_hi      = 0, .seq_lo = 1, .echo = 0x77,
+    };
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    memcpy(fake_pkt.data, &ack_in, sizeof(ack_in));
+    fake_pkt.length = CMD_ACK_PACKET_SIZE; fake_pkt.rssi = -40;
+    fake_pkt.snr = 10; fake_pkt_pending = 1;
+    run_for(250, 250);
+
+    CHECK(RF_Receiver_ConsumeAckFlag() == 1);
+    AckPacket_t out; uint32_t age;
+    CHECK(RF_Receiver_GetLastAck(&out, &age) == 1);
+    CHECK(out.cmd_code == CMD_PING && out.echo == 0x77);
+    CHECK(RF_Receiver_ConsumeAckFlag() == 0);
+
+    /* SendCommand emits exactly one 6-byte wire frame */
+    lora_tx_calls = 0; lora_tx_len = 0;
+    CHECK(RF_Receiver_SendCommand(CMD_TUNE_NEXT_CH, 0) == 1);
+    CHECK(lora_tx_calls == 1);
+    CHECK(lora_tx_len == CMD_ACK_PACKET_SIZE);
+    CHECK(lora_tx_buf[0] == PACKET_TYPE_CMD);
+    CHECK(lora_tx_buf[2] == CMD_TUNE_NEXT_CH);
+}
+
+TEST(test_two_way_foreign_ack_dropped)
+{
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    run_for(250, 250);
+    GPS_Data _g;
+    (void)RF_Receiver_GetGPSData(&_g);
+
+    AckPacket_t ack_in = {
+        .packet_type = PACKET_TYPE_ACK,
+        .rocket_id   = FOREIGN_ROCKET_ID,
+        .cmd_code    = CMD_PING,
+        .seq_hi = 0, .seq_lo = 9, .echo = 0x11,
+    };
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    memcpy(fake_pkt.data, &ack_in, sizeof(ack_in));
+    fake_pkt.length = CMD_ACK_PACKET_SIZE;
+    fake_pkt_pending = 1;
+    run_for(250, 250);
+
+    CHECK(RF_Receiver_ConsumeAckFlag() == 0);   /* foreign ACK dropped */
 }
 
 TEST(test_position_packet_flow)
@@ -1948,6 +2021,8 @@ int main(void)
     run_test_imu_trace_and_launch_t0();
     run_test_launch_t0_one_shot();
     run_test_imu_trace_foreign_id_dropped();
+    run_test_two_way_ack_lifecycle();
+    run_test_two_way_foreign_ack_dropped();
     run_test_band_garbage_packets_are_ignored();
     run_test_final_packet_position_persists_through_blackout();
     run_test_position_packet_flow();

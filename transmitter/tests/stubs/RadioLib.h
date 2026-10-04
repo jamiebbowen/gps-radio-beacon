@@ -12,6 +12,9 @@
 #define RADIOLIB_ERR_NONE            0
 #define RADIOLIB_ERR_CHIP_NOT_FOUND  -2
 #define RADIOLIB_ERR_INVALID_ENCODING -11
+#define RADIOLIB_SX126X_IRQ_RX_DONE  0x0002u
+#define RADIOLIB_SX126X_IRQ_CRC_ERR  0x0040u
+#define RADIOLIB_SX126X_IRQ_TIMEOUT  0x0200u
 
 class Module {
 public:
@@ -33,6 +36,10 @@ extern int     radiolib_set_cl_calls;   /* setCurrentLimit() call count */
 extern float   radiolib_current_limit;  /* captured mA argument         */
 extern int     radiolib_set_cl_result;  /* scripted return value        */
 extern uint32_t radiolib_time_on_air_us; /* scripted getTimeOnAir() us  */
+extern int     radiolib_start_receive_result; /* startReceive() retval  */
+extern uint32_t radiolib_irq_flags;     /* getIrqFlags() scripted value */
+extern uint8_t radiolib_rx_buf[256];    /* scripted inbound packet      */
+extern size_t  radiolib_rx_len;         /* scripted packet length       */
 
 class SX1268 {
 public:
@@ -61,6 +68,30 @@ public:
     {
         (void)len;
         return radiolib_time_on_air_us;
+    }
+
+    /* Two-way-survey scaffolding: radio_poll_rx drives these knobs so the
+     * harness injects a scripted inbound frame (or none). */
+    int startReceive()
+    {
+        return radiolib_start_receive_result;
+    }
+
+    uint32_t getIrqFlags()
+    {
+        return radiolib_irq_flags;
+    }
+
+    size_t getPacketLength()
+    {
+        return radiolib_rx_len;
+    }
+
+    int readData(uint8_t *data, size_t len)
+    {
+        if (len > radiolib_rx_len) len = radiolib_rx_len;
+        memcpy(data, radiolib_rx_buf, len);
+        return RADIOLIB_ERR_NONE;
     }
 
     int transmit(uint8_t *data, size_t len)

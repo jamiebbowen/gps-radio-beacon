@@ -88,6 +88,14 @@ static GPSCoordinates_t fake_coords;
 const GPSCoordinates_t* gps_get_current_coordinates(void) { return &fake_coords; }
 uint8_t gps_get_health(void) { return HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0); }
 uint32_t gps_get_fix_age_ms(void) { return 250; }
+
+/* Two-way scaffolding stubs (beacon_poll_commands calls these) */
+bool radio_is_transmitting(void) { return false; }
+int  radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms)
+{ (void)out; (void)max_len; (void)timeout_ms; return 0; }
+int  radio_transmit_ack(uint8_t rocket_id, uint8_t cmd_code,
+                        uint8_t seq_hi, uint8_t seq_lo, uint8_t echo)
+{ (void)rocket_id; (void)cmd_code; (void)seq_hi; (void)seq_lo; (void)echo; return 0; }
 float gps_nmea_to_decimal(const char *n, char d)
 {
     double v = atof(n);
