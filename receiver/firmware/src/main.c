@@ -998,6 +998,66 @@ int main(void)
         SD_Card_EnsureLogFile();
         SD_Card_LogEvent(evt_msg);
       }
+      /* Running maxima recap: each row is the flight envelope up to that
+       * second - the answer still on the card if the beacon dies mid-air. */
+      MaximaPacket_t mx;
+      if (RF_Receiver_GetMaxima(&mx)) {
+        char mx_msg[80];
+        snprintf(mx_msg, sizeof(mx_msg),
+                 "MAXIMA id=%u alt=%dm@%lus v=%.1fm/s a=%.1fg r=%udps",
+                 (unsigned)mx.rocket_id, (int)mx.max_alt_m,
+                 (unsigned long)mx.t_maxalt_s, mx.max_speed_cms / 100.0,
+                 mx.max_accel_cg / 100.0, (unsigned)mx.max_gyro_dps);
+        SD_Card_EnsureLogFile();
+        SD_Card_LogEvent(mx_msg);
+      }
+      /* Beacon boot identity: which TX firmware flew (MSB = dirty tree). */
+      HelloPacket_t hello;
+      if (RF_Receiver_GetHello(&hello)) {
+        char hb_msg[64];
+        snprintf(hb_msg, sizeof(hb_msg), "TXBOOT id=%u fw=%07lx%s up=%us",
+                 (unsigned)hello.rocket_id,
+                 (unsigned long)(hello.fw_hash & 0x0FFFFFFFUL),
+                 (hello.fw_hash & 0x80000000UL) ? "-dirty" : "",
+                 (unsigned)hello.uptime_s);
+        SD_Card_EnsureLogFile();
+        SD_Card_LogEvent(hb_msg);
+      }
+
+      /* Radio-deaf windows after wedge streaks: lets a blackout read as
+       * "receiver deaf 3.2 s" vs "beacon silent". */
+      uint32_t wcount, wlast, wtotal;
+      if (RF_Receiver_TakeWedgeReport(&wcount, &wlast, &wtotal)) {
+        char w_msg[80];
+        snprintf(w_msg, sizeof(w_msg),
+                 "WEDGE #%lu recovered deaf=%lums total=%lums",
+                 (unsigned long)wcount, (unsigned long)wlast,
+                 (unsigned long)wtotal);
+        SD_Card_EnsureLogFile();
+        SD_Card_LogEvent(w_msg);
+      }
+
+      /* CRC-failed frames: heard-but-garbage. Log the head bytes so a
+       * final marginal-signal burst is identifiable as ours (our packet
+       * sizes/types) vs. foreign chatter. Rate-limited: a marginal link
+       * can produce dozens per minute. */
+      {
+        static uint32_t last_crc_log_ms = 0;
+        uint8_t dump[8]; uint8_t total_len = 0;
+        uint8_t n = RF_Receiver_TakeCrcDump(dump, sizeof(dump), &total_len);
+        if (n > 0 && HAL_GetTick() - last_crc_log_ms >= 10000u) {
+          last_crc_log_ms = HAL_GetTick();
+          char c_msg[72];
+          int pos = snprintf(c_msg, sizeof(c_msg), "CRC garbage len=%u head=",
+                             (unsigned)total_len);
+          for (uint8_t i = 0; i < n && pos < (int)sizeof(c_msg) - 3; i++) {
+            pos += snprintf(c_msg + pos, sizeof(c_msg) - (size_t)pos,
+                            "%02x", (unsigned)dump[i]);
+          }
+          SD_Card_EnsureLogFile();
+          SD_Card_LogEvent(c_msg);
+        }
+      }
     }
 
     /* Two-way channel answers: an ACK land is one of the few beacon-still-
@@ -1082,10 +1142,18 @@ int main(void)
         uint32_t sd_werr = (SD_Card_GetInfo(&sd_i) == SD_CARD_OK) ? sd_i.write_errors : 0;
         uint32_t sd_syncs = SD_Card_TakeSyncCount();   /* verify burst cadence dropped */
 
-        char st_msg[180];
+        /* Live-link floor: valid even mid-flight where the quiet-gated
+         * alert estimate parks (was nf=n/a for whole flights - L0016). */
+        char nfl_field[24] = "";
+        int16_t nfl = 0;
+        if (RF_Receiver_GetLiveNoiseFloor(&nfl)) {
+          snprintf(nfl_field, sizeof(nfl_field), " nfl=%ddBm", (int)nfl);
+        }
+
+        char st_msg[200];
         if (RF_Receiver_GetNoiseFloor(&nf)) {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums sd=%lums syncs=%lu spidiv=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums sd=%lums syncs=%lu spidiv=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu%s",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered(), (int)nf,
@@ -1093,10 +1161,10 @@ int main(void)
                    (unsigned long)sd_syncs, (unsigned)SD_FastSpeedEnabled(),
                    (unsigned long)m_rf, (unsigned long)m_gps,
                    (unsigned long)m_disp, (unsigned long)m_cmp,
-                   (unsigned long)loops_d, (unsigned long)sd_werr);
+                   (unsigned long)loops_d, (unsigned long)sd_werr, nfl_field);
         } else {
           snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums sd=%lums syncs=%lu spidiv=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu",
+                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums sd=%lums syncs=%lu spidiv=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu%s",
                    (unsigned long)pkts, (unsigned long)irqs,
                    (unsigned long)RF_Receiver_GetCrcErrors(),
                    (unsigned long)RF_Receiver_GetWedgesRecovered(),
@@ -1104,7 +1172,7 @@ int main(void)
                    (unsigned long)sd_syncs, (unsigned)SD_FastSpeedEnabled(),
                    (unsigned long)m_rf, (unsigned long)m_gps,
                    (unsigned long)m_disp, (unsigned long)m_cmp,
-                   (unsigned long)loops_d, (unsigned long)sd_werr);
+                   (unsigned long)loops_d, (unsigned long)sd_werr, nfl_field);
         }
         SD_Card_LogEvent(st_msg);
       }
@@ -1568,12 +1636,22 @@ int main(void)
    * stopped logging". Re-arms when contact resumes. 5 min matches the
    * auto re-scan threshold: far beyond the slowest beacon cadence (60 s). */
   static uint8_t lost_logged = 0;
+  static uint32_t lost_since_ms = 0;
   if (last_rf_packet_time > 0 && current_time - last_rf_packet_time > 300000) {
     if (!lost_logged) {
       lost_logged = 1;
+      lost_since_ms = current_time;
       SD_Card_LogEvent("RF LOST (>5min silence)");
     }
   } else if (last_rf_packet_time > 0) {
+    if (lost_logged) {
+      /* First packet after a logged blackout: the gap's true length is
+       * forensic data (beacon recovery vs receiver wedge vs geometry). */
+      char rg_msg[48];
+      snprintf(rg_msg, sizeof(rg_msg), "RF REGAINED after %lus",
+               (unsigned long)((current_time - lost_since_ms) / 1000u));
+      SD_Card_LogEvent(rg_msg);
+    }
     lost_logged = 0;
   }
 

@@ -33,6 +33,8 @@ typedef struct __attribute__((packed)) {
 #define PACKET_TYPE_CMD         0x08  // RX -> TX command channel (v2 radio)
 #define PACKET_TYPE_ACK         0x09  // TX -> RX acknowledgement of command
 #define PACKET_TYPE_FLIGHT_EVENT 0x0A // Apogee/deploy/landing + flight anomaly
+#define PACKET_TYPE_MAXIMA     0x0B // Running flight maxima recap (in flight)
+#define PACKET_TYPE_HELLO      0x0C // Boot identity: fw hash (one-shot)
 
 /* Two-way channel: 6-byte frames; see transmitter copy for field notes. */
 typedef struct __attribute__((packed)) {
@@ -214,6 +216,31 @@ typedef struct __attribute__((packed)) {
     ((c) == FLIGHT_EVENT_ANOM_SENSOR_LOSS) ? "ANOM-SENSOR"    : \
     ((c) == FLIGHT_EVENT_ANOM_GPS_OUTAGE)  ? "ANOM-GPS"       : \
     ((c) == FLIGHT_EVENT_ANOM_REBOOT)      ? "ANOM-REBOOT"    : "EVENT-?" )
+
+/* MAXIMA: 12 bytes; must match the transmitter copy. Re-announced every
+ * few seconds while airborne + one copy at the landing latch: the running
+ * flight maxima, so the last packet before a total loss still certifies
+ * how high/fast/hard the airframe had flown up to that second. */
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;     // PACKET_TYPE_MAXIMA
+    uint8_t  rocket_id;
+    int16_t  max_alt_m;       // highest fused altitude so far, m MSL
+    uint16_t t_maxalt_s;      // TX uptime at that altitude
+    uint16_t max_speed_cms;   // peak |v| cm/s
+    uint16_t max_accel_cg;    // peak |linear accel| centi-g
+    uint16_t max_gyro_dps;    // peak |gyro| deg/s
+} MaximaPacket_t;
+#define MAXIMA_PACKET_SIZE 12
+
+/* HELLO: 8 bytes; must match the transmitter copy. One-shot at boot: the
+ * beacon's firmware identity (git short hash, MSB = dirty tree). */
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;    // PACKET_TYPE_HELLO
+    uint8_t  rocket_id;
+    uint32_t fw_hash;
+    uint16_t uptime_s;
+} HelloPacket_t;
+#define HELLO_PACKET_SIZE   8
 
 // Helper macros for encoding/decoding
 #define GPS_COORD_SCALE         10000000.0  // Scale factor for lat/lon (10^7)

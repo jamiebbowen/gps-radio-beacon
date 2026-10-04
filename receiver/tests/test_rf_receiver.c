@@ -584,6 +584,70 @@ TEST(test_flight_event_one_shot_and_foreign_drop)
     CHECK(evt.value == 8000);
 }
 
+static void inject_maxima(uint8_t rocket_id, int16_t alt_m)
+{
+    MaximaPacket_t mx = {
+        .packet_type   = PACKET_TYPE_MAXIMA,
+        .rocket_id     = rocket_id,
+        .max_alt_m     = alt_m,
+        .t_maxalt_s    = 61,
+        .max_speed_cms = 4500,
+        .max_accel_cg  = 2500,
+        .max_gyro_dps  = 720,
+    };
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    memcpy(fake_pkt.data, &mx, sizeof(mx));
+    fake_pkt.length = MAXIMA_PACKET_SIZE;
+    fake_pkt_pending = 1;
+}
+
+static void inject_hello(uint8_t rocket_id, uint32_t fw_hash)
+{
+    HelloPacket_t h = {
+        .packet_type = PACKET_TYPE_HELLO,
+        .rocket_id   = rocket_id,
+        .fw_hash     = fw_hash,
+        .uptime_s    = 5,
+    };
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    memcpy(fake_pkt.data, &h, sizeof(h));
+    fake_pkt.length = HELLO_PACKET_SIZE;
+    fake_pkt_pending = 1;
+}
+
+TEST(test_maxima_and_hello_dispatch)
+{
+    /* Running maxima: fields land, one-shot consume, foreign dropped */
+    inject_maxima(OUR_ROCKET_ID, 1234);
+    run_for(500, 250);
+    MaximaPacket_t mx;
+    CHECK(RF_Receiver_GetMaxima(&mx) == 1);
+    CHECK(mx.rocket_id == OUR_ROCKET_ID);
+    CHECK(mx.max_alt_m == 1234);
+    CHECK(mx.t_maxalt_s == 61);
+    CHECK(mx.max_speed_cms == 4500);
+    CHECK(mx.max_accel_cg == 2500);
+    CHECK(mx.max_gyro_dps == 720);
+    CHECK(RF_Receiver_GetMaxima(&mx) == 0);
+
+    inject_maxima(FOREIGN_ROCKET_ID, 9999);
+    run_for(500, 250);
+    CHECK(RF_Receiver_GetMaxima(&mx) == 0);
+
+    /* Boot identity: fw hash + dirty bit and uptime land intact */
+    inject_hello(OUR_ROCKET_ID, 0x81234567UL);     /* hash + dirty MSB */
+    run_for(500, 250);
+    HelloPacket_t hl;
+    CHECK(RF_Receiver_GetHello(&hl) == 1);
+    CHECK(hl.fw_hash == 0x81234567UL);
+    CHECK(hl.uptime_s == 5);
+    CHECK(RF_Receiver_GetHello(&hl) == 0);
+
+    inject_hello(FOREIGN_ROCKET_ID, 0x0BAD0000UL);
+    run_for(500, 250);
+    CHECK(RF_Receiver_GetHello(&hl) == 0);
+}
+
 TEST(test_imu_trace_and_launch_t0)
 {
     /* Receives and returns one-shot an inertial-trace packet from OUR airframe */
@@ -2067,6 +2131,7 @@ int main(void)
     run_test_imu_trace_and_launch_t0();
     run_test_launch_t0_one_shot();
     run_test_flight_event_one_shot_and_foreign_drop();
+    run_test_maxima_and_hello_dispatch();
     run_test_imu_trace_foreign_id_dropped();
     run_test_two_way_ack_lifecycle();
     run_test_two_way_foreign_ack_dropped();

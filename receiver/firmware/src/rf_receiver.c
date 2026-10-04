@@ -71,6 +71,15 @@ static uint8_t rf_spi_test_result = 0xFF;  // SPI communication test (0=fail, 1=
 static uint8_t rf_last_busy_state = 0;  // Last BUSY pin state
 static uint8_t rf_header_matches = 0;
 static uint32_t rf_wedges_recovered = 0;  // mid-session RX-loss recoveries
+static uint32_t wedge_deaf_start_ms = 0;    /* not-RX window opened at     */
+static uint32_t wedge_last_deaf_ms = 0;     /* last completed deaf stretch */
+static uint32_t wedge_total_deaf_ms = 0;    /* cumulative deaf time        */
+static uint8_t  wedge_report_pending = 0;   /* a completed window awaits
+                                             * the main-loop log row       */
+static uint8_t  crc_dump[8];                /* head of last corrupt frame */
+static uint8_t  crc_dump_len = 0;           /* bytes captured (<= 8)       */
+static uint8_t  crc_dump_total_len = 0;     /* on-air length of that frame */
+static uint8_t  crc_dump_pending = 0;       /* awaits the main-loop row    */
 static volatile uint8_t rf_packet_ready = 0;
 static uint8_t rf_last_bytes[4] = {0};
 static char rf_ascii_buffer[RF_ASCII_BUFFER_SIZE];
@@ -139,6 +148,10 @@ static LaunchT0Packet_t last_launch_t0;
 static uint8_t launch_t0_pending = 0;
 static FlightEventPacket_t last_flight_event;
 static uint8_t flight_event_pending = 0;
+static MaximaPacket_t last_maxima;
+static uint8_t maxima_pending = 0;
+static HelloPacket_t last_hello;
+static uint8_t hello_pending = 0;
 
 /* Two-way answer channel (TX -> RX) */
 static AckPacket_t last_ack;
@@ -173,6 +186,18 @@ static int16_t  noise_samples[RF_NOISE_WINDOW];
 static uint8_t  noise_sample_idx = 0;
 static uint8_t  noise_sample_count = 0;
 static uint8_t  noise_alert_active = 0;
+
+/* In-flight floor: the quiet-window sampler above parks while packets flow
+ * (the beacon's own bursts poison the alert estimate), but forensics still
+ * wants the in-link floor - L0016's record couldn't separate "faded into
+ * noise" from "transmitter ceased". Sample inst-RSSI at 1 Hz while the
+ * chip is in RX regardless of link state; individual bursts read HIGH, so
+ * the minimum of the recent window tracks the ambient floor. */
+#define RF_LIVE_NF_WINDOW       30u   /* ~30 s of in-link samples   */
+#define RF_LIVE_NF_MIN_SAMPLES  5u    /* before the estimate counts */
+static int16_t  live_nf_samples[RF_LIVE_NF_WINDOW];
+static uint8_t  live_nf_idx = 0;
+static uint8_t  live_nf_count = 0;
 
 /* Per-channel measurement ticks from the last NF sweep (the sweep runs
  * standalone and then results get logged from main - logging each line
@@ -334,7 +359,19 @@ uint8_t RF_Receiver_DataAvailable(void)
     if (rf_last_device_mode == 5) {          /* RX mode confirmed */
       not_rx_since_ms = 0;
       wedge_rx_retries = 0;
+      /* Deaf window closed: report how long the radio was out of RX, so a
+       * log row can attribute "no packets here" to receiver deafness vs
+       * beacon silence. L0016: 21 wedges in the blackout, unquantified. */
+      if (wedge_deaf_start_ms != 0) {
+        wedge_last_deaf_ms = now_ms - wedge_deaf_start_ms;
+        wedge_total_deaf_ms += wedge_last_deaf_ms;
+        wedge_report_pending = 1;
+        wedge_deaf_start_ms = 0;
+      }
     } else {
+      if (wedge_deaf_start_ms == 0) {
+        wedge_deaf_start_ms = now_ms;        /* deaf window opens */
+      }
       if (not_rx_since_ms == 0) {
         not_rx_since_ms = now_ms;
       } else if (now_ms - not_rx_since_ms >= 3000) {
@@ -385,7 +422,23 @@ uint8_t RF_Receiver_DataAvailable(void)
       }
     }
   }
-  
+
+  /* In-link noise-floor sampling (see RF_LIVE_NF_WINDOW): independent of
+   * the quiet-gated alert window above, so a live link still accrues a
+   * forensic floor estimate. */
+  if (rf_last_device_mode == 5) {
+    static uint32_t last_live_nf_ms = 0;
+    if (now_ms - last_live_nf_ms >= 1000) {
+      last_live_nf_ms = now_ms;
+      int16_t inst;
+      if (LoRa_GetRssiInst(&inst) == LORA_OK) {
+        live_nf_samples[live_nf_idx] = inst;
+        live_nf_idx = (uint8_t)((live_nf_idx + 1) % RF_LIVE_NF_WINDOW);
+        if (live_nf_count < RF_LIVE_NF_WINDOW) live_nf_count++;
+      }
+    }
+  }
+
   /* Check for new LoRa packets */
   if (!rf_packet_ready && LoRa_PacketAvailable()) {
     /* Read the packet */
@@ -393,8 +446,17 @@ uint8_t RF_Receiver_DataAvailable(void)
     if (rd == LORA_CRC_ERROR) {
       /* Heard something, couldn't decode it: the missing-packet
        * forensics number - separates "radio heard garbage" from "radio
-       * heard nothing at all" when reconstructing a blackout. */
+       * heard nothing at all" when reconstructing a blackout. Keep the
+       * head bytes too: a garbage burst of OUR packet sizes vs random
+       * lengths distinguishes "our beacon, dying at the margin" from
+       * "someone else's network". */
       rf_crc_errors++;
+      if (!crc_dump_pending) {
+        crc_dump_len = (last_packet.length > 8) ? 8 : last_packet.length;
+        memcpy(crc_dump, last_packet.data, crc_dump_len);
+        crc_dump_total_len = last_packet.length;
+        crc_dump_pending = 1;
+      }
     } else if (rd == LORA_OK) {
       rf_lora_packets_received++;  // Count every LoRa packet received
       last_any_packet_ms = now_ms;
@@ -469,6 +531,25 @@ uint8_t RF_Receiver_DataAvailable(void)
         memcpy(&last_flight_event, last_packet.data, sizeof(last_flight_event));
         if (RF_RocketFilter(1, last_flight_event.rocket_id)) {
           flight_event_pending = 1;
+          last_packet_time = HAL_GetTick();
+        }
+      } else if (last_packet.length == MAXIMA_PACKET_SIZE
+              && last_packet.data[0] == PACKET_TYPE_MAXIMA) {
+        /* Running maxima recap - recurring rows; each copy is standalone. */
+        memset(&last_maxima, 0, sizeof(last_maxima));
+        memcpy(&last_maxima, last_packet.data, sizeof(last_maxima));
+        if (RF_RocketFilter(1, last_maxima.rocket_id)) {
+          maxima_pending = 1;
+          last_packet_time = HAL_GetTick();
+        }
+      } else if (last_packet.length == HELLO_PACKET_SIZE
+              && last_packet.data[0] == PACKET_TYPE_HELLO) {
+        /* Beacon boot identity (fw hash) - one-shot, usually right after
+         * the callsign; foreign boots aren't our flight's firmware. */
+        memset(&last_hello, 0, sizeof(last_hello));
+        memcpy(&last_hello, last_packet.data, sizeof(last_hello));
+        if (RF_RocketFilter(1, last_hello.rocket_id)) {
+          hello_pending = 1;
           last_packet_time = HAL_GetTick();
         }
       } else if (last_packet.length == CMD_ACK_PACKET_SIZE
@@ -976,6 +1057,22 @@ uint8_t RF_Receiver_GetFlightEvent(FlightEventPacket_t *evt)
   return 1;
 }
 
+uint8_t RF_Receiver_GetMaxima(MaximaPacket_t *mx)
+{
+  if (!maxima_pending || mx == NULL) return 0;
+  memcpy(mx, &last_maxima, sizeof(*mx));
+  maxima_pending = 0;
+  return 1;
+}
+
+uint8_t RF_Receiver_GetHello(HelloPacket_t *hello)
+{
+  if (!hello_pending || hello == NULL) return 0;
+  memcpy(hello, &last_hello, sizeof(*hello));
+  hello_pending = 0;
+  return 1;
+}
+
 /* Two-way scaffolding (v2 radios, benign on v1): hand one command frame to
  * the beacon on its next quiet window. PING is the probe; ACKs show up in
  * RF_Receiver_GetLastAck. Called from main when the operator pokes it. */
@@ -1048,12 +1145,63 @@ uint8_t RF_Receiver_NoiseAlert(void)
 }
 
 /**
+ * @brief In-link noise floor: minimum inst-RSSI over the recent ~30 s
+ *        window, valid on a live link where the alert estimate is parked.
+ *        The beacon's own bursts read high and fall out of the minimum.
+ * @param nf_dbm Output: floor estimate in dBm
+ * @retval 1 when enough samples exist, 0 otherwise
+ */
+uint8_t RF_Receiver_GetLiveNoiseFloor(int16_t *nf_dbm)
+{
+  if (live_nf_count < RF_LIVE_NF_MIN_SAMPLES || nf_dbm == NULL) {
+    return 0;
+  }
+  int16_t mn = live_nf_samples[0];
+  for (uint8_t i = 1; i < live_nf_count; i++) {
+    if (live_nf_samples[i] < mn) mn = live_nf_samples[i];
+  }
+  *nf_dbm = mn;
+  return 1;
+}
+
+/**
  * @brief Count of mid-session radio wedge recoveries (RX re-entry or
  *        full chip re-init after a sustained not-RX streak)
  */
 uint32_t RF_Receiver_GetWedgesRecovered(void)
 {
   return rf_wedges_recovered;
+}
+
+/**
+ * @brief Completed radio-deaf window report (one-shot; 0 = none pending).
+ * Filled when the chip returns to RX after a wedge streak, so the numbers
+ * describe a CLOSED window: how long the receiver was actually deaf.
+ */
+uint8_t RF_Receiver_TakeWedgeReport(uint32_t *count, uint32_t *last_deaf_ms,
+                                    uint32_t *total_deaf_ms)
+{
+  if (!wedge_report_pending) return 0;
+  if (count)         *count         = rf_wedges_recovered;
+  if (last_deaf_ms)  *last_deaf_ms  = wedge_last_deaf_ms;
+  if (total_deaf_ms) *total_deaf_ms = wedge_total_deaf_ms;
+  wedge_report_pending = 0;
+  return 1;
+}
+
+/**
+ * @brief Head bytes of the most recent CRC-failed frame (one-shot).
+ * @retval captured byte count (0 = no dump pending). *total_len gets the
+ *         frame's full on-air length.
+ */
+uint8_t RF_Receiver_TakeCrcDump(uint8_t *out, uint8_t max_len, uint8_t *total_len)
+{
+  if (!crc_dump_pending || out == NULL || max_len == 0) return 0;
+  uint8_t n = (crc_dump_len < max_len) ? crc_dump_len : max_len;
+  memcpy(out, crc_dump, n);
+  if (total_len) *total_len = crc_dump_total_len;
+  crc_dump_pending = 0;
+  return n;
 }
 
 /**

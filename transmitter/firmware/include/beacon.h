@@ -38,4 +38,12 @@ uint32_t beacon_flight_event_dropped(void);
 uint8_t beacon_transmit_flight_event(uint8_t code, int16_t value,
                                      uint32_t system_time_seconds, uint8_t transmit_fast_flag);
 
+/* Boot identity one-shot: firmware hash (+ dirty mark) so the ground log
+ * names exactly which beacon firmware flew. Call once from setup. */
+uint8_t beacon_transmit_hello(uint32_t system_time_seconds, uint8_t transmit_fast_flag);
+
+/* Running maxima recap: call at MAXIMA_TX_INTERVAL_MS while airborne and
+ * once at the landing latch. Values come from flight_maxima. */
+uint8_t beacon_transmit_maxima(uint32_t system_time_seconds, uint8_t transmit_fast_flag);
+
 #endif // BEACON_H

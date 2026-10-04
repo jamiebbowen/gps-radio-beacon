@@ -403,6 +403,22 @@ TEST(test_fused_wire_format_constants_pin) {
     CHECK(FLIGHT_EVENT_ANOM_SENSOR_LOSS == 0x12);
     CHECK(FLIGHT_EVENT_ANOM_GPS_OUTAGE  == 0x13);
     CHECK(FLIGHT_EVENT_ANOM_REBOOT      == 0x14);
+
+    /* MAXIMA / HELLO: mirror of the block in transmitter/tests/test_beacon.cpp */
+    CHECK(sizeof(MaximaPacket_t) == 12);
+    CHECK(MAXIMA_PACKET_SIZE == 12);
+    CHECK(PACKET_TYPE_MAXIMA == 0x0B);
+    CHECK(offsetof(MaximaPacket_t, max_alt_m)     == 2);
+    CHECK(offsetof(MaximaPacket_t, t_maxalt_s)    == 4);
+    CHECK(offsetof(MaximaPacket_t, max_speed_cms) == 6);
+    CHECK(offsetof(MaximaPacket_t, max_accel_cg)  == 8);
+    CHECK(offsetof(MaximaPacket_t, max_gyro_dps)  == 10);
+
+    CHECK(sizeof(HelloPacket_t) == 8);
+    CHECK(HELLO_PACKET_SIZE == 8);
+    CHECK(PACKET_TYPE_HELLO == 0x0C);
+    CHECK(offsetof(HelloPacket_t, fw_hash)  == 2);
+    CHECK(offsetof(HelloPacket_t, uptime_s) == 6);
 }
 
 TEST(test_fused_dead_reckoning_flag) {

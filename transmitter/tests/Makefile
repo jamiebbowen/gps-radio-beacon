@@ -22,7 +22,7 @@ BINS     := $(BUILD)/test_ekf $(BUILD)/test_nmea_fields $(BUILD)/test_beacon \
             $(BUILD)/test_nav $(BUILD)/test_gps $(BUILD)/test_radio \
             $(BUILD)/test_launch_detect $(BUILD)/test_uart \
             $(BUILD)/test_flight_profile $(BUILD)/test_flight_cadence \
-            $(BUILD)/test_flight_events \
+            $(BUILD)/test_flight_events $(BUILD)/test_flight_maxima \
             $(BUILD)/test_airlink_roundtrip $(BUILD)/test_mainloop
 
 .PHONY: all test coverage clean
@@ -39,9 +39,11 @@ $(BUILD)/test_nmea_fields: test_nmea_fields.c ../firmware/nmea_fields.c | $(BUIL
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $^ $(LDFLAGS)
 
 # beacon.cpp is #included by the test (static access + Arduino stub);
-# stubs/Arduino.h shadows the real core.
-$(BUILD)/test_beacon: test_beacon.cpp ../firmware/beacon.cpp stubs/Arduino.h | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
+# stubs/Arduino.h shadows the real core. flight_maxima.cpp is a real
+# dependency of beacon_transmit_maxima().
+$(BUILD)/test_beacon: test_beacon.cpp ../firmware/beacon.cpp \
+                      ../firmware/flight_maxima.cpp stubs/Arduino.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< ../firmware/flight_maxima.cpp $(LDFLAGS)
 
 # nav.cpp is #included by the test; the real EKF is linked in.
 $(BUILD)/test_nav: test_nav.cpp ../firmware/nav.cpp ../firmware/ekf.cpp \
@@ -74,8 +76,9 @@ $(BUILD)/test_uart: test_uart.cpp ../firmware/uart.cpp stubs/Arduino.h | $(BUILD
 $(BUILD)/test_flight_profile: test_flight_profile.cpp \
             ../firmware/launch_detect.cpp ../firmware/nav.cpp \
             ../firmware/ekf.cpp ../firmware/beacon.cpp \
+            ../firmware/flight_maxima.cpp \
             stubs/Arduino.h stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< ../firmware/flight_maxima.cpp $(LDFLAGS)
 
 # Pure state->timing policy; links the real module (Arduino stub headers
 # only satisfy mpu_config.h's include chain).
@@ -88,6 +91,11 @@ $(BUILD)/test_flight_events: test_flight_events.cpp ../firmware/flight_events.cp
                              stubs/Arduino.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $^ $(LDFLAGS)
 
+# Running maxima tracker: pure logic module, no Arduino deps.
+$(BUILD)/test_flight_maxima: test_flight_maxima.cpp ../firmware/flight_maxima.cpp \
+                             stubs/Arduino.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $^ $(LDFLAGS)
+
 # Airlink round-trip: TX encoder (beacon.cpp, C++) + RX parser
 # (receiver's rf_parser.c, compiled as C) in one binary.
 $(BUILD)/rf_parser_rx.o: ../../receiver/firmware/src/rf_parser.c | $(BUILD)
@@ -95,10 +103,10 @@ $(BUILD)/rf_parser_rx.o: ../../receiver/firmware/src/rf_parser.c | $(BUILD)
 	    -I../../receiver/firmware/inc -c -o $@ $<
 
 $(BUILD)/test_airlink_roundtrip: test_airlink_roundtrip.cpp \
-            ../firmware/beacon.cpp \
+            ../firmware/beacon.cpp ../firmware/flight_maxima.cpp \
             $(BUILD)/rf_parser_rx.o stubs/Arduino.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -I../../receiver/tests/stubs \
-	    -I../../receiver/firmware/inc -o $@ $< \
+	    -I../../receiver/firmware/inc -o $@ $< ../firmware/flight_maxima.cpp \
 	    $(BUILD)/rf_parser_rx.o $(LDFLAGS)
 
 # Host sim of firmware.ino itself: the sketch runs over stubbed HAL with a
@@ -106,10 +114,11 @@ $(BUILD)/test_airlink_roundtrip: test_airlink_roundtrip.cpp \
 $(BUILD)/test_mainloop: test_mainloop.cpp ../firmware/flight_cadence.cpp \
             ../firmware/firmware.ino ../firmware/launch_detect.cpp \
             ../firmware/nav.cpp ../firmware/ekf.cpp ../firmware/beacon.cpp \
-            ../firmware/flight_events.cpp \
+            ../firmware/flight_events.cpp ../firmware/flight_maxima.cpp \
             stubs/Arduino.h stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< \
-	    ../firmware/flight_cadence.cpp ../firmware/flight_events.cpp $(LDFLAGS)
+	    ../firmware/flight_cadence.cpp ../firmware/flight_events.cpp \
+	    ../firmware/flight_maxima.cpp $(LDFLAGS)
 
 test: $(BINS)
 	@rc=0; for b in $(BINS); do \

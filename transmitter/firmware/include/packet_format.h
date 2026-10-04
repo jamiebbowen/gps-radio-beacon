@@ -33,6 +33,8 @@ typedef struct __attribute__((packed)) {
 #define PACKET_TYPE_CMD         0x08  // RX -> TX command channel (v2 radio)
 #define PACKET_TYPE_ACK         0x09  // TX -> RX acknowledgement of command
 #define PACKET_TYPE_FLIGHT_EVENT 0x0A // Apogee/deploy/landing + flight anomaly
+#define PACKET_TYPE_MAXIMA     0x0B // Running flight maxima recap (in flight)
+#define PACKET_TYPE_HELLO      0x0C // Boot identity: fw hash (one-shot)
 
 /* Heartbeat: 8 bytes. Sent instead of a GPS packet when no transmittable fix
  * exists (no fix / <4 sats), so the receiver's channel scan can lock and the
@@ -194,6 +196,37 @@ typedef struct __attribute__((packed)) {
 #define FLIGHT_EVENT_ANOM_REBOOT      0x14  /* reserved: reboot-while-airborne
                                              * (needs flight_log phase resume) */
 #define FLIGHT_EVENT_IS_ANOMALY(c)    ((c) >= 0x10)
+
+/* MAXIMA: 12 bytes. The "black box on the air": while airborne, every
+ * MAXIMA_TX_INTERVAL_MS the beacon re-announces its running flight maxima,
+ * so the LAST packet heard before a total loss still certifies how
+ * high/fast/hard the airframe had flown up to that second (L0016 died
+ * ~2 s off the rail with nothing but pad data on the card). One final copy
+ * goes out at the landing latch. All fields are magnitudes. */
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;     // PACKET_TYPE_MAXIMA
+    uint8_t  rocket_id;
+    int16_t  max_alt_m;       // highest fused altitude so far, m MSL
+    uint16_t t_maxalt_s;      // TX uptime at that altitude (saturates)
+    uint16_t max_speed_cms;   // peak |v| cm/s (covers 655 m/s)
+    uint16_t max_accel_cg;    // peak |linear accel| centi-g (covers 655 g)
+    uint16_t max_gyro_dps;    // peak |gyro| deg/s
+} MaximaPacket_t;
+#define MAXIMA_PACKET_SIZE 12
+
+/* HELLO: 8 bytes. Sent once at boot, right after the callsign: the wire
+ * copy of the beacon's firmware identity (git short hash + dirty mark),
+ * so every receiver log names exactly which transmitter firmware flew.
+ * The receiver logs its own fw hash in its first row; L0016's forensic
+ * readout stalled partly on "which TX firmware was this, what could it
+ * even have sent?". 28 hash bits + MSB dirty flag. */
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;    // PACKET_TYPE_HELLO
+    uint8_t  rocket_id;
+    uint32_t fw_hash;        // GIT_HASH_HEX (MSB set when tree was dirty)
+    uint16_t uptime_s;
+} HelloPacket_t;
+#define HELLO_PACKET_SIZE   8
 
 /* ------------------------------------------------------------------
  * Two-way channel (post-landing / diagnostics). Both frames are 6 bytes:

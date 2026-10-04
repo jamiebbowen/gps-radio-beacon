@@ -89,6 +89,16 @@
 // heartbeats, so the receiver operator can confirm which airframe they are
 // tracking. Identifies the AIRFRAME and never changes with frequency: the
 // CH<n> suffix (and the heartbeat channel field) show the active channel.
+/* Firmware identity for the boot-time HELLO packet. The Makefile injects
+ * GIT_HASH_HEX (first 7 hex chars of HEAD as a C hex literal, 28 bits) and
+ * GIT_DIRTY_FLAG per build; host tests and ad-hoc builds fall back to 0. */
+#ifndef GIT_HASH_HEX
+#define GIT_HASH_HEX        0x00000000UL
+#endif
+#ifndef GIT_DIRTY_FLAG
+#define GIT_DIRTY_FLAG      0
+#endif
+
 #ifndef ROCKET_ID
 #define ROCKET_ID           0
 #endif

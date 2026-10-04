@@ -30,6 +30,14 @@ endif
 ifdef CHANNEL
 TX_DEFS += -DLORA_CHANNEL=$(CHANNEL)
 endif
+# Firmware identity on the air: every build stamps the HELLO boot packet
+# with the tree's git hash (7 hex chars = 28 bits; MSB of the wire field
+# marks a dirty tree) so the ground log names exactly which beacon
+# firmware flew. L0016's readout stalled partly on not knowing this.
+GIT_HASH  := $(shell git -C ../.. rev-parse --short=7 HEAD 2>/dev/null || echo 0000000)
+GIT_DIRTY := $(shell git -C ../.. diff --quiet 2>/dev/null && git -C ../.. diff --cached --quiet 2>/dev/null && echo 0 || echo 1)
+TX_DEFS += -DGIT_HASH_HEX=0x$(GIT_HASH) -DGIT_DIRTY_FLAG=$(GIT_DIRTY)
+
 ifneq ($(strip $(TX_DEFS)),)
 BUILD_DIR = build/id$(if $(ID),$(ID),d)-ch$(if $(CHANNEL),$(CHANNEL),d)
 BUILD_PROPS = --build-property "compiler.cpp.extra_flags=$(strip $(TX_DEFS))"

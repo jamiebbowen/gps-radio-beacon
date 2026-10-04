@@ -79,7 +79,15 @@ static void sd_note_big_sync(uint32_t dur_ms)
  * packets, no display frame and no I2C work care about it. Worst-case
  * unsynced tail is 400 ms of rows; field power-offs are never that tight. */
 #define SD_IDLE_SYNC_MS  400u
-#define SD_SYNC_ROW_CAP  8u     /* hard staleness bound, in rows */
+#define SD_SYNC_ROW_CAP  32u    /* hard staleness bound, in rows */
+/* Time-based staleness bound. Was 10 s: in flight-dense traffic (rows at
+ * ~1-3 Hz from fused + IMU streams) that forced a commit every ~7 s, and
+ * every LittleFS metadata compaction inside one of those commits is a
+ * 0.5-2 s main-loop stall in the middle of the packet flow (L0016 log:
+ * "SD sync burst 1734ms" rows). 30 s bounds the receiver-power-loss tail
+ * on the GROUND log (rows still in RAM), while cutting mid-flight commit
+ * stalls ~4x. The row cap alone covers write-rate spikes. */
+#define SD_SYNC_TIME_CAP_MS 30000u
 static uint8_t  sd_dirty      = 0;
 static uint8_t  sd_dirty_rows = 0;
 static uint32_t sd_last_write = 0;
@@ -591,9 +599,10 @@ SD_Card_Status SD_Card_LogError(const char *msg)
  * @brief Deferred-sync service - call every main-loop iteration.
  *
  * Batched commits: once the write path has been idle for SD_IDLE_SYNC_MS,
- * or when 8 rows are pending (staleness bound), or every 10 s under
- * sustained load. Each sync picks up a LittleFS commit (and periodically
- * a metadata compaction burst); fewer commits = fewer radio-deaf windows.
+ * or when SD_SYNC_ROW_CAP rows are pending (staleness bound), or every
+ * SD_SYNC_TIME_CAP_MS under sustained load. Each sync picks up a LittleFS
+ * commit (and periodically a metadata compaction burst); fewer commits =
+ * fewer radio-deaf windows.
  */
 static uint32_t sd_last_sync_ms = 0;
 static uint32_t sd_sync_count = 0;
@@ -611,7 +620,7 @@ void SD_Card_ServiceSync(uint8_t rf_idle)
     /* Hard bounds first - they exist so pending data never starves in
      * flight-dense traffic where no quiet RF moment arrives. */
     uint8_t force = (sd_dirty_rows >= SD_SYNC_ROW_CAP)
-                 || (now - sd_last_sync_ms >= 10000u);
+                 || (now - sd_last_sync_ms >= SD_SYNC_TIME_CAP_MS);
     uint8_t idle  = (now - sd_last_write >= SD_IDLE_SYNC_MS) && rf_idle;
     if (force || idle) {
         sd_last_sync_ms = now;

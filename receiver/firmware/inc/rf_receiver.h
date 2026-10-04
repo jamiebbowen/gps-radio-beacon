@@ -84,6 +84,12 @@ uint8_t RF_Receiver_GetLaunchT0(LaunchT0Packet_t *t0);
  * packet is correct). */
 uint8_t RF_Receiver_GetFlightEvent(FlightEventPacket_t *evt);
 
+/* Running flight maxima (recurring while airborne; each copy is a full
+ * snapshot so every row stands alone) and the beacon's boot-time firmware
+ * identity. One-shot reads; main.c logs both. */
+uint8_t RF_Receiver_GetMaxima(MaximaPacket_t *mx);
+uint8_t RF_Receiver_GetHello(HelloPacket_t *hello);
+
 /* Two-way scaffolding (v2 board radios; ignored on v1): operator triggers
  * a PING from a test-mode button press; the received one-shot ACK state is
  * readable to the caller and cleared with ConsumeAckFlag. Packets dropped
@@ -102,6 +108,18 @@ uint8_t RF_Receiver_ConsumeAckFlag(void);
 uint8_t RF_Receiver_GetNoiseFloor(int16_t *nf_dbm);
 uint8_t RF_Receiver_NoiseAlert(void);
 uint32_t RF_Receiver_GetWedgesRecovered(void);
+
+/* In-link floor estimate (min inst-RSSI over the recent ~30 s): valid on a
+ * live link where the alert estimate is parked quiet-gated. */
+uint8_t RF_Receiver_GetLiveNoiseFloor(int16_t *nf_dbm);
+/* Completed radio-deaf window after a wedge streak (one-shot; main.c logs
+ * it so blackout reads can attribute silence to receiver vs beacon). */
+uint8_t RF_Receiver_TakeWedgeReport(uint32_t *count, uint32_t *last_deaf_ms,
+                                    uint32_t *total_deaf_ms);
+/* Head bytes of the last CRC-failed frame (one-shot) so "garbage heard"
+ * rows show whether it looked like our beacon dying at the margin or a
+ * foreign network. */
+uint8_t RF_Receiver_TakeCrcDump(uint8_t *out, uint8_t max_len, uint8_t *total_len);
 
 /* Airframe binding / foreign-beacon filter. The receiver binds to the
  * first rocket_id heard on the tuned channel and drops V2 position packets

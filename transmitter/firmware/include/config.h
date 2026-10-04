@@ -96,6 +96,12 @@
 #define FLIGHT_EVENT_REPEATS          3U
 #define FLIGHT_EVENT_SPACING_MS       1200U
 
+/* Maxima recap cadence while airborne (plus one copy at landing). The
+ * recurring stream makes EVERY heard packet a cumulative flight record -
+ * the "how high did it go" answer survives a shred at apogee, when no
+ * APOGEE event would ever fire. */
+#define MAXIMA_TX_INTERVAL_MS         5000U
+
 /**
  * Bench-test switch: when 1, the beacon boots directly into BEACON_STATE_LAUNCH
  * so the TX continuously streams packets as if a launch had been detected.

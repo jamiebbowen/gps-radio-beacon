@@ -5,6 +5,7 @@
 #include "include/launch_detect.h"
 #include "include/packet_format.h"
 #include "include/nav.h"
+#include "include/flight_maxima.h"
 #include <Arduino.h>
 #include <string.h>
 #include <stdio.h>
@@ -542,6 +543,67 @@ uint8_t beacon_service_flight_events(uint32_t now_ms, uint32_t now_s, uint8_t tr
         }
     }
     return sent;
+}
+
+/**
+ * Boot identity packet: 28 bits of git hash + dirty-tree MSB. Goes out
+ * once, right after the boot callsign; the receiver logs it as TXBOOT.
+ */
+uint8_t beacon_transmit_hello(uint32_t system_time_seconds, uint8_t transmit_fast) {
+    HelloPacket_t p;
+    p.packet_type = PACKET_TYPE_HELLO;
+    p.rocket_id   = (uint8_t)ROCKET_ID;
+    p.fw_hash     = (uint32_t)GIT_HASH_HEX | ((uint32_t)GIT_DIRTY_FLAG << 31);
+    p.uptime_s    = (system_time_seconds > 65535UL) ? 65535U
+                                                    : (uint16_t)system_time_seconds;
+
+    if (!transmit_fast) {
+        radio_enable();
+        delay(10);
+    }
+    int result = transmit_packet((uint8_t*)&p, sizeof(p));
+    if (!transmit_fast) {
+        delay(1);
+        radio_disable();
+    }
+    if (result == 0) {
+        Serial.print(F("[Beacon] HELLO fw=0x"));
+        Serial.println(p.fw_hash, HEX);
+    }
+    return (result == 0) ? 1 : 0;
+}
+
+/**
+ * Running maxima recap. While airborne the loop calls this every
+ * MAXIMA_TX_INTERVAL_MS; one more copy goes out as the landing latch
+ * trips, so the ground's last-heard row is the flight's whole envelope.
+ */
+uint8_t beacon_transmit_maxima(uint32_t system_time_seconds, uint8_t transmit_fast) {
+    MaximaPacket_t p;
+    flight_maxima_get(&p);
+    p.packet_type = PACKET_TYPE_MAXIMA;
+    p.rocket_id   = (uint8_t)ROCKET_ID;
+
+    if (!transmit_fast) {
+        radio_enable();
+        delay(10);
+    }
+
+    Serial.print(F("[Beacon] Maxima alt="));
+    Serial.print(p.max_alt_m);
+    Serial.print(F("m@"));
+    Serial.print(p.t_maxalt_s);
+    Serial.print(F("s v="));
+    Serial.print(p.max_speed_cms / 100.0f, 1);
+    Serial.println(F("m/s"));
+
+    int result = transmit_packet((uint8_t*)&p, sizeof(p));
+    if (!transmit_fast) {
+        delay(1);
+        radio_disable();
+    }
+    (void)system_time_seconds;
+    return (result == 0) ? 1 : 0;
 }
 
 /**

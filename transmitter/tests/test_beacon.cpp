@@ -29,6 +29,7 @@
 #include "include/nav.h"
 #include "include/launch_detect.h"
 #include "include/packet_format.h"
+#include "include/flight_maxima.h"
 #include "test_harness.h"
 #include "airlink_golden.h"
 
@@ -513,6 +514,56 @@ TEST(test_flight_event_queue_overflow_counted)
     CHECK(sent == 24);
 }
 
+/* ------------------------------------------------------------------ */
+/* HELLO (boot fw identity) and MAXIMA (flight envelope) encoders      */
+/* ------------------------------------------------------------------ */
+
+TEST(test_hello_packet_contents)
+{
+    reset_tx();
+    CHECK(beacon_transmit_hello(42, 0) == 1);
+    CHECK(tx_len == sizeof(HelloPacket_t));
+    const HelloPacket_t *h = (const HelloPacket_t *)tx_buf;
+    CHECK(h->packet_type == PACKET_TYPE_HELLO);
+    CHECK(h->rocket_id   == ROCKET_ID);
+    CHECK(h->uptime_s    == 42);
+    /* Host build carries no git stamp: the Makefile's -DGIT_HASH_HEX is a
+     * firmware-build feature; on the host the field reduces to the
+     * documented 0x00000000 fallback (dirty bit clear). */
+    CHECK(h->fw_hash == 0);
+    CHECK(radio_enables == 1 && radio_disables == 1);   /* non-fast cycles */
+}
+
+TEST(test_maxima_packet_contents)
+{
+    reset_tx();
+    flight_maxima_init();
+    flight_maxima_input_t in;
+    memset(&in, 0, sizeof(in));
+    in.airborne = 1;
+    in.nav_valid = 1;
+    in.alt_m = 1234.5f;           /* -> 1234 or 1235 after lround */
+    in.v_n_ms = 30.0f; in.v_d_ms = -40.0f;   /* |v| = 50 m/s */
+    in.accel_ms2 = 2.0f * 9.80665f;
+    in.gyro_mag_rads = 1.0f;      /* 57.3 dps */
+    in.uptime_s = 17;
+    flight_maxima_feed(&in);
+
+    CHECK(beacon_transmit_maxima(100, 1) == 1);
+    CHECK(tx_len == sizeof(MaximaPacket_t));
+    const MaximaPacket_t *m = (const MaximaPacket_t *)tx_buf;
+    CHECK(m->packet_type == PACKET_TYPE_MAXIMA);
+    CHECK(m->rocket_id   == ROCKET_ID);
+    CHECK(m->max_alt_m >= 1234 && m->max_alt_m <= 1235);
+    CHECK(m->t_maxalt_s == 17);
+    CHECK(m->max_speed_cms == 5000);
+    CHECK(m->max_accel_cg == 200);
+    CHECK(m->max_gyro_dps >= 57 && m->max_gyro_dps <= 58);
+    CHECK(radio_enables == 0);    /* fast mode: radio left alone */
+
+    flight_maxima_init();         /* don't leak peaks into other tests */
+}
+
 TEST(test_imu_trace_packet_contents)
 {
     reset_tx();
@@ -683,6 +734,22 @@ TEST(test_fused_wire_format_pin)
     CHECK(FLIGHT_EVENT_ANOM_SENSOR_LOSS == 0x12);
     CHECK(FLIGHT_EVENT_ANOM_GPS_OUTAGE  == 0x13);
     CHECK(FLIGHT_EVENT_ANOM_REBOOT      == 0x14);
+
+    /* MAXIMA (running flight envelope) and HELLO (boot fw identity) */
+    CHECK(sizeof(MaximaPacket_t) == 12);
+    CHECK(MAXIMA_PACKET_SIZE == 12);
+    CHECK(PACKET_TYPE_MAXIMA == 0x0B);
+    CHECK(offsetof(MaximaPacket_t, max_alt_m)     == 2);
+    CHECK(offsetof(MaximaPacket_t, t_maxalt_s)    == 4);
+    CHECK(offsetof(MaximaPacket_t, max_speed_cms) == 6);
+    CHECK(offsetof(MaximaPacket_t, max_accel_cg)  == 8);
+    CHECK(offsetof(MaximaPacket_t, max_gyro_dps)  == 10);
+
+    CHECK(sizeof(HelloPacket_t) == 8);
+    CHECK(HELLO_PACKET_SIZE == 8);
+    CHECK(PACKET_TYPE_HELLO == 0x0C);
+    CHECK(offsetof(HelloPacket_t, fw_hash)  == 2);
+    CHECK(offsetof(HelloPacket_t, uptime_s) == 6);
 }
 
 TEST(test_fused_gate_reject_delta)
@@ -846,6 +913,8 @@ int main(void)
     run_test_flight_event_packet_and_repeats();
     run_test_flight_event_tx_failure_backs_off();
     run_test_flight_event_queue_overflow_counted();
+    run_test_hello_packet_contents();
+    run_test_maxima_packet_contents();
     run_test_imu_trace_packet_contents();
     run_test_fused_not_anchored_no_tx();
     run_test_fused_packet_fields();

@@ -10,6 +10,7 @@
 #include "include/nav.h"
 #include "include/flight_cadence.h"
 #include "include/flight_events.h"
+#include "include/flight_maxima.h"
 #include "include/flight_log.h"
 
 /**
@@ -214,6 +215,8 @@ void setup() {
 
     flight_events_init();
 
+    flight_maxima_init();
+
     flight_log_init();
 
     delay(1000);  // Let everything stabilize
@@ -224,6 +227,10 @@ void setup() {
      * radio_enable() whenever a beacon TX happened to be queued. */
     beacon_transmit_callsign(transmit_fast_flag);
     time_since_last_callsign_tx = system_time_seconds;
+
+    /* Firmware identity on the air right behind the callsign: the ground
+     * log's TXBOOT row names the exact build that flew (hash + dirty bit). */
+    beacon_transmit_hello(system_time_seconds, transmit_fast_flag);
 
     // Poll GPS for data
     gps_poll_rx();
@@ -287,6 +294,9 @@ void loop() {
                 radio_disable();
                 beacon_queue_flight_event(FLIGHT_EVENT_LANDED, 0, FLIGHT_EVENT_REPEATS);
                 flight_log_event(millis(), 4 /* landed */);
+                /* Final maxima copy: the flight's whole envelope rides the
+                 * first post-touchdown airtime. */
+                beacon_transmit_maxima(system_time_seconds, 0);
             }
         }
     }
@@ -311,6 +321,20 @@ void loop() {
         ev_in.imu_degraded     = f.sensor_degraded ? 1 : 0;
         ev_in.gps_fix_age_ms   = gps_get_fix_age_ms();
         ev_in.t_since_launch_s = launch_detect_get_time_since_launch(system_time_seconds);
+
+        /* Running flight maxima: cheap feed, same sources - this is what
+         * the periodic MAXIMA packets re-announce. */
+        flight_maxima_input_t mx;
+        mx.airborne      = ev_in.airborne;
+        mx.nav_valid     = ev_in.nav_valid;
+        mx.alt_m         = ev_in.alt_m;
+        mx.v_n_ms        = f.valid ? f.v_n : 0.0f;
+        mx.v_e_ms        = f.valid ? f.v_e : 0.0f;
+        mx.v_d_ms        = ev_in.v_d_ms;
+        mx.accel_ms2     = launch_detect_get_current_accel();
+        mx.gyro_mag_rads = ev_in.gyro_mag_rads;
+        mx.uptime_s      = system_time_seconds;
+        flight_maxima_feed(&mx);
 
         uint32_t now_evt_ms = millis();
         int16_t ev_value = 0;
@@ -516,6 +540,15 @@ void loop() {
         last_fused_tx_ms = now_ms;
     }
 #endif
+
+    /* Maxima recap: every MAXIMA_TX_INTERVAL_MS while airborne. The
+     * landing-latch copy is sent by the landing transition itself. */
+    static uint32_t last_maxima_tx_ms = 0;
+    if ((beacon_state == BEACON_STATE_LAUNCH || beacon_state == BEACON_STATE_POST_LAUNCH) &&
+        (now_ms - last_maxima_tx_ms >= MAXIMA_TX_INTERVAL_MS)) {
+        last_maxima_tx_ms = now_ms;
+        beacon_transmit_maxima(system_time_seconds, transmit_fast_flag);
+    }
 
     /* Two-way channel (v2 radios): only in pad/recovery phases the beacon
      * has a real radio-quiet gap. Tune: ~1 Hz worth of short listens, so a

@@ -84,7 +84,7 @@ uint8_t radio_get_channel(void) { return 0; }
 int transmit_packet(const uint8_t *data, size_t length)
 {
     uint8_t t = data[0];
-    if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_FLIGHT_EVENT) {
+    if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_HELLO) {
         tx_by_type[t]++;
     } else if (t >= 0x20 && t <= 0x7E) {
         tx_callsigns++;              /* printable = callsign text */
@@ -273,6 +273,8 @@ int main(void)
     script_fix(SIM_LAT, SIM_LON, SIM_ALT, 9, 1);
     setup();
     CHECK(tx_callsigns == 1);                     /* boot ID (FCC) */
+    /* Boot identity packet right behind it (fw hash on the air) */
+    CHECK(type_count(PACKET_TYPE_HELLO) == 1);
     CHECK(beacon_state == BEACON_STATE_TURN_ON);
 
     sim_run(40000);                               /* 40 s of the grace minute */
@@ -325,11 +327,14 @@ int main(void)
     /* ---------- Descent under chute: fused + paced inertial stream ----- */
     uint32_t fus0 = type_count(PACKET_TYPE_FUSED);
     uint32_t imu0 = type_count(PACKET_TYPE_IMU);
+    uint32_t mx0  = type_count(PACKET_TYPE_MAXIMA);
     sim_run(30000);                               /* 30 s of recovery window */
     uint32_t fus = type_count(PACKET_TYPE_FUSED) - fus0;
     uint32_t imu = type_count(PACKET_TYPE_IMU) - imu0;
+    uint32_t mxs = type_count(PACKET_TYPE_MAXIMA) - mx0;
     CHECK(fus == 20);                             /* 1500 ms cadence exactly */
     CHECK((imu == 15 || imu == 16));              /* 2 s paced inertial stream */
+    CHECK(mxs >= 5 && mxs <= 7);                  /* 5 s maxima recap cadence */
     CHECK(flog_gps_calls_value() >= 14);          /* GPS rows landing in the flash log */
     /* Raw GPS position packets stop on air - fused+IMU carry the invade */
 
@@ -338,8 +343,10 @@ int main(void)
     CHECK(launch_detect_has_landed() == true);
     CHECK(beacon_state == BEACON_STATE_BATTERY_SAVE);
     /* Certified LANDED event: FLIGHT_EVENT_REPEATS copies went on the air
-     * (spacing ~1.2 s << the quiet window above) and nothing else fired */
+     * (spacing ~1.2 s << the quiet window above) and nothing else fired.
+     * The landing transition also fires one final maxima copy. */
     CHECK(type_count(PACKET_TYPE_FLIGHT_EVENT) == FLIGHT_EVENT_REPEATS);
+    CHECK(type_count(PACKET_TYPE_MAXIMA) >= mxs + 1);
 
     uint32_t fus1 = type_count(PACKET_TYPE_FUSED);
     uint32_t gps1 = type_count(PACKET_TYPE_GPS);
