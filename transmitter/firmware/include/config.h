@@ -190,13 +190,12 @@
 #define POST_LAUNCH_PACKET_INTERVAL_SEC 2
 
 /* Fused-packet transmit cadence in LAUNCH state. Must exceed the fused
- * packet's air time. SF10/BW62.5k/CR4-8/8-sym-preamble with LDRO: the V2
- * 20-byte packet is 68.25 symbols = ~1.12 s on-air (the rocket_id byte
- * pushed it across a payload-symbol step from the 19B/0.99 s era). At
- * 1200 ms the PA would be keyed ~93% of the recovery window, so the
- * interval is 1500 ms: ~75% duty with ~380 ms of radio-quiet gap per
- * cycle, still ~0.7 fused updates/s. test_flight_cadence pins this
- * against the computed airtime; drift is a red test. */
+ * packet's air time. SF10/BW62.5k/CR4-8/8-sym-preamble with LDRO: the V3
+ * 19-byte packet is 60.25 symbols = ~0.99 s on-air (V3 dropped age_ds to
+ * get back under the step the V2 rocket_id byte had crossed: 20 B cost
+ * 1.12 s). The 1500 ms interval keeps the PA at ~66% duty with a ~510 ms
+ * radio-quiet gap per cycle. test_flight_cadence pins this against the
+ * computed airtime; drift is a red test. */
 #define FUSED_TX_INTERVAL_MS            1500
 
 /* Fused-packet cadence in every non-flight state (pad idle, post-landing

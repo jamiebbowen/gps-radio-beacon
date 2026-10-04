@@ -104,10 +104,11 @@ TEST(test_cadence_pa_airtime_margin)
      * guardrail against every future format/config drift: packet-size
      * growth, CR/BW/SF changes, preamble changes. */
     double fused_toa = lora_airtime_ms(FUSED_PACKET_SIZE);
-    /* Formula sanity: V2 20B at SF10/62.5k/CR4-8/8pre = 68.25 sym * 16.384 ms */
-    CHECK_NEAR(fused_toa, 1118.2, 2.0);
-    /* Legacy 19B packet = 987 ms - the step the rocket_id byte crossed */
-    CHECK_NEAR(lora_airtime_ms(19), 987.1, 2.0);
+    /* Formula sanity: V3 19B at SF10/62.5k/CR4-8/8pre = 60.25 sym *
+     * 16.384 ms = 987 ms: the step the V2 20-byte layout had crossed
+     * (1118 ms) before age_ds was cut. */
+    CHECK_NEAR(fused_toa, 987.1, 2.0);
+    CHECK_NEAR(lora_airtime_ms(20), 1118.2, 2.0);
     /* The 14-byte V2 GPS packet did NOT cross a step (same as legacy 13B) */
     CHECK_NEAR(lora_airtime_ms(GPS_PACKET_SIZE), lora_airtime_ms(13), 1.0);
 

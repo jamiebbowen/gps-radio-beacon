@@ -61,6 +61,8 @@ void flight_maxima_get(MaximaPacket_t *out)
     float accel_cg = s_max_accel_g * 100.0f;
     out->max_accel_cg = (accel_cg > 65535.0f) ? 65535U : (uint16_t)lroundf(accel_cg);
 
-    out->max_gyro_dps = (s_max_gyro_dps > 65535.0f) ? 65535U
-                                                    : (uint16_t)lroundf(s_max_gyro_dps);
+    /* 16-dps units: 0..4080 dps wraps the BNO085's own +-2000 dps range;
+     * a single byte keeps the packet under its airtime step. */
+    float gyro16 = s_max_gyro_dps / (float)MAXIMA_GYRO_DPS_SCALE;
+    out->max_gyro_dps16 = (gyro16 > 255.0f) ? 255U : (uint8_t)lroundf(gyro16);
 }

@@ -205,7 +205,11 @@ static void check_fused_row(double lat, double lon, float alt, float vn,
         CHECK_NEAR(gv[i], e, 0.02);
     }
 
-    CHECK(g.fused_age_ds == age_ds);
+    /* V3 carries no age byte on the wire: the parser synthesizes it from
+     * GPS_FRESH (0 fresh / 255 stale), so the sweep checks the synthesis
+     * rule, not round-trip equality. */
+    CHECK(g.fused_age_ds == (fresh ? 0 : 255));
+    (void)age_ds;
     CHECK(g.fused_dr == dr);
     CHECK(g.fused_gps_fresh == fresh);
     CHECK(g.fused_imu_healthy == healthy);

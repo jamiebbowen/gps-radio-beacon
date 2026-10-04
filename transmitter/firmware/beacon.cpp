@@ -438,11 +438,6 @@ uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast) {
     p.peak_accel_mg = (int16_t)lroundf(peak_g * 1000.0f);
     peak_g = 0.0f;
 
-    /* BNO085 reports temperature fused internally; not exposed on this
-     * firmware path. Send -273.1°C-ish sentinel (int16 min + 273.1) so the
-     * receiver knows "sensor-not-wired" rather than 0°C. */
-    p.temp_c10 = (int16_t)-3276;
-
     if (!transmit_fast) {
         radio_enable();
         delay(10);
@@ -494,7 +489,6 @@ uint8_t beacon_transmit_flight_event(uint8_t code, int16_t value,
     p.packet_type = PACKET_TYPE_FLIGHT_EVENT;
     p.rocket_id   = (uint8_t)ROCKET_ID;
     p.code        = code;
-    p.spare       = 0;
     p.uptime_s    = (system_time_seconds > 65535UL) ? 65535U
                                                     : (uint16_t)system_time_seconds;
     p.value       = value;
@@ -550,12 +544,11 @@ uint8_t beacon_service_flight_events(uint32_t now_ms, uint32_t now_s, uint8_t tr
  * once, right after the boot callsign; the receiver logs it as TXBOOT.
  */
 uint8_t beacon_transmit_hello(uint32_t system_time_seconds, uint8_t transmit_fast) {
+    (void)system_time_seconds;   /* uptime at boot is ~0 - cut from V2 wire */
     HelloPacket_t p;
     p.packet_type = PACKET_TYPE_HELLO;
     p.rocket_id   = (uint8_t)ROCKET_ID;
     p.fw_hash     = (uint32_t)GIT_HASH_HEX | ((uint32_t)GIT_DIRTY_FLAG << 31);
-    p.uptime_s    = (system_time_seconds > 65535UL) ? 65535U
-                                                    : (uint16_t)system_time_seconds;
 
     if (!transmit_fast) {
         radio_enable();
@@ -677,9 +670,10 @@ uint8_t beacon_transmit_fused_data(uint32_t system_time_seconds, uint8_t transmi
     p.v_n_cms     = clamp_i16(f.v_n);
     p.v_e_cms     = clamp_i16(f.v_e);
     p.v_d_cms     = clamp_i16(f.v_d);
-    p.age_ds      = f.age_ds;
 
-    uint8_t flags = 0;
+    /* Bit 0 marks the V3 wire layout (distinguishes 19-byte V3 from the
+     * legacy 19-byte V1, which has age_ds where V3 keeps flags). */
+    uint8_t flags = FUSED_FLAG_V3;
     if (f.gps_fresh)       flags |= FUSED_FLAG_GPS_FRESH;
     if (f.imu_healthy)     flags |= FUSED_FLAG_IMU_HEALTHY;
     if (f.dead_reckoning)  flags |= FUSED_FLAG_DEAD_RECKONING;

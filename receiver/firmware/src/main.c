@@ -1034,7 +1034,8 @@ int main(void)
                  "MAXIMA id=%u alt=%dm@%lus v=%.1fm/s a=%.1fg r=%udps",
                  (unsigned)mx.rocket_id, (int)mx.max_alt_m,
                  (unsigned long)mx.t_maxalt_s, mx.max_speed_cms / 100.0,
-                 mx.max_accel_cg / 100.0, (unsigned)mx.max_gyro_dps);
+                 mx.max_accel_cg / 100.0,
+                 (unsigned)mx.max_gyro_dps16 * MAXIMA_GYRO_DPS_SCALE);
         SD_Card_EnsureLogFile();
         SD_Card_LogEvent(mx_msg);
       }
@@ -1042,11 +1043,10 @@ int main(void)
       HelloPacket_t hello;
       if (RF_Receiver_GetHello(&hello)) {
         char hb_msg[64];
-        snprintf(hb_msg, sizeof(hb_msg), "TXBOOT id=%u fw=%07lx%s up=%us",
+        snprintf(hb_msg, sizeof(hb_msg), "TXBOOT id=%u fw=%07lx%s",
                  (unsigned)hello.rocket_id,
                  (unsigned long)(hello.fw_hash & 0x0FFFFFFFUL),
-                 (hello.fw_hash & 0x80000000UL) ? "-dirty" : "",
-                 (unsigned)hello.uptime_s);
+                 (hello.fw_hash & 0x80000000UL) ? "-dirty" : "");
         SD_Card_EnsureLogFile();
         SD_Card_LogEvent(hb_msg);
       }

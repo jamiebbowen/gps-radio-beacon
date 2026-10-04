@@ -57,13 +57,14 @@ static void build_gps_packet(uint8_t *buf, double lat_deg, double lon_deg,
                     * lives upstream in rf_receiver.c) */
 }
 
-/** Build a 20-byte V2 fused EKF packet as the transmitter would (buf must
- *  have FUSED_PACKET_SIZE bytes; pass FUSED_PACKET_SIZE_V1 to parse it as
- *  a legacy packet).
- *  alt_qm is the raw encoded altitude: (alt_m + 500) * 4 quarter-meters. */
+/** Build a 19-byte V3 fused EKF packet as the transmitter would (buf must
+ *  have FUSED_PACKET_SIZE bytes). The age_ds parameter is retained for
+ *  call-site continuity: V3 carries no age byte on the wire (the parser
+ *  synthesizes staleness from GPS_FRESH). */
 static void build_fused_packet(uint8_t *buf, double lat_deg, double lon_deg,
                                uint16_t alt_qm, int16_t vn_cms, int16_t ve_cms,
                                int16_t vd_cms, uint8_t age_ds, uint8_t flags) {
+    (void)age_ds;
     buf[0] = PACKET_TYPE_FUSED;
     put_i32_le(&buf[1], (int32_t)(lat_deg * 10000000.0));
     put_i32_le(&buf[5], (int32_t)(lon_deg * 10000000.0));
@@ -71,9 +72,8 @@ static void build_fused_packet(uint8_t *buf, double lat_deg, double lon_deg,
     put_i16_le(&buf[11], vn_cms);
     put_i16_le(&buf[13], ve_cms);
     put_i16_le(&buf[15], vd_cms);
-    buf[17] = age_ds;
-    buf[18] = flags;
-    buf[19] = 0;   /* rocket_id */
+    buf[17] = flags | FUSED_FLAG_V3;
+    buf[18] = 0;   /* rocket_id */
 }
 
 /* ------------------------------------------------------------------ */
@@ -283,8 +283,48 @@ TEST(test_fused_valid_packet) {
     CHECK(gps.fused_dr == 0);
     CHECK(gps.fused_landed == 0);
     CHECK(gps.fused_sensor_degraded == 0);
-    CHECK(gps.fused_age_ds == 7);
+    /* V3 carries no age byte: synthesized from GPS_FRESH */
+    CHECK(gps.fused_age_ds == 0);
     CHECK(gps.launch_detected == 1);
+}
+
+TEST(test_fused_legacy_layouts_still_decode) {
+    /* V2 (20 B: age at 17, flags at 18, id at 19) from beacons on the
+     * previous firmware must keep decoding while the fleet transitions. */
+    RF_Parser_Reset();
+    uint8_t v2[FUSED_PACKET_SIZE_V2];
+    memset(v2, 0, sizeof(v2));
+    v2[0] = PACKET_TYPE_FUSED;
+    put_i32_le(&v2[1], 398900750);
+    put_i32_le(&v2[5], -1051155100);
+    put_i16_le(&v2[9], 6000);
+    v2[17] = 7;                                     /* age_ds */
+    v2[18] = FUSED_FLAG_GPS_FRESH | FUSED_FLAG_DEAD_RECKONING;
+    v2[19] = 0;
+
+    CHECK(RF_Parser_ParseFusedPacket(v2, sizeof(v2)) == RF_PARSER_OK);
+    GPS_Data gps;
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.fused_age_ds == 7);
+    CHECK(gps.fused_gps_fresh == 1);
+    CHECK(gps.fused_dr == 1);
+
+    /* V1 (19 B WITHOUT the V3 marker: age at 17, flags at 18, no id).
+     * Even age keeps bit0 clear so the version discriminator reads V1. */
+    RF_Parser_Reset();
+    uint8_t v1[FUSED_PACKET_SIZE_V1];
+    memset(v1, 0, sizeof(v1));
+    v1[0] = PACKET_TYPE_FUSED;
+    put_i32_le(&v1[1], 398900750);
+    put_i32_le(&v1[5], -1051155100);
+    put_i16_le(&v1[9], 6000);
+    v1[17] = 6;                                     /* age_ds (even) */
+    v1[18] = FUSED_FLAG_GPS_FRESH;
+
+    CHECK(RF_Parser_ParseFusedPacket(v1, sizeof(v1)) == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.fused_age_ds == 6);
+    CHECK(gps.fused_gps_fresh == 1);
 }
 
 TEST(test_fused_sensor_degraded_flag) {
@@ -366,9 +406,12 @@ TEST(test_fused_wire_format_constants_pin) {
      * this repo's two copies of packet_format.h must never drift. Keep the
      * literal expectations in sync on both sides. */
     CHECK(sizeof(FusedPosPacket_t) == FUSED_PACKET_SIZE);
-    CHECK(FUSED_PACKET_SIZE == 20);
-    CHECK(FUSED_PACKET_SIZE_V1 == 19);
-    CHECK(offsetof(FusedPosPacket_t, rocket_id) == 19);
+    CHECK(FUSED_PACKET_SIZE == 19);
+    CHECK(FUSED_PACKET_SIZE_V2 == 20);
+    CHECK(FUSED_PACKET_SIZE_V1 == 19);   /* legacy len shares V3's; bit0 tells them apart */
+    CHECK(offsetof(FusedPosPacket_t, flags) == 17);
+    CHECK(offsetof(FusedPosPacket_t, rocket_id) == 18);
+    CHECK(FUSED_FLAG_V3 == 0x01);
 
     CHECK(sizeof(BinaryGPSPacket_t) == GPS_PACKET_SIZE);
     CHECK(GPS_PACKET_SIZE == 14);
@@ -388,12 +431,12 @@ TEST(test_fused_wire_format_constants_pin) {
 
     /* FLIGHT_EVENT (apogee/drogue/main/landed + anomaly codes): mirror of
      * the block in transmitter/tests/test_beacon.cpp */
-    CHECK(sizeof(FlightEventPacket_t) == 8);
-    CHECK(FLIGHT_EVENT_PACKET_SIZE == 8);
+    CHECK(sizeof(FlightEventPacket_t) == 7);
+    CHECK(FLIGHT_EVENT_PACKET_SIZE == 7 && FLIGHT_EVENT_PACKET_SIZE_V1 == 8);
     CHECK(PACKET_TYPE_FLIGHT_EVENT == 0x0A);
     CHECK(offsetof(FlightEventPacket_t, code)     == 2);
-    CHECK(offsetof(FlightEventPacket_t, uptime_s) == 4);
-    CHECK(offsetof(FlightEventPacket_t, value)    == 6);
+    CHECK(offsetof(FlightEventPacket_t, uptime_s) == 3);
+    CHECK(offsetof(FlightEventPacket_t, value)    == 5);
     CHECK(FLIGHT_EVENT_APOGEE           == 0x01);
     CHECK(FLIGHT_EVENT_DROGUE           == 0x02);
     CHECK(FLIGHT_EVENT_MAIN             == 0x03);
@@ -405,20 +448,25 @@ TEST(test_fused_wire_format_constants_pin) {
     CHECK(FLIGHT_EVENT_ANOM_REBOOT      == 0x14);
 
     /* MAXIMA / HELLO: mirror of the block in transmitter/tests/test_beacon.cpp */
-    CHECK(sizeof(MaximaPacket_t) == 12);
-    CHECK(MAXIMA_PACKET_SIZE == 12);
+    CHECK(sizeof(MaximaPacket_t) == 11);
+    CHECK(MAXIMA_PACKET_SIZE == 11);
+    CHECK(MAXIMA_PACKET_SIZE_V1 == 12);
     CHECK(PACKET_TYPE_MAXIMA == 0x0B);
-    CHECK(offsetof(MaximaPacket_t, max_alt_m)     == 2);
-    CHECK(offsetof(MaximaPacket_t, t_maxalt_s)    == 4);
-    CHECK(offsetof(MaximaPacket_t, max_speed_cms) == 6);
-    CHECK(offsetof(MaximaPacket_t, max_accel_cg)  == 8);
-    CHECK(offsetof(MaximaPacket_t, max_gyro_dps)  == 10);
+    CHECK(MAXIMA_GYRO_DPS_SCALE == 16);
+    CHECK(offsetof(MaximaPacket_t, max_alt_m)      == 2);
+    CHECK(offsetof(MaximaPacket_t, t_maxalt_s)     == 4);
+    CHECK(offsetof(MaximaPacket_t, max_speed_cms)  == 6);
+    CHECK(offsetof(MaximaPacket_t, max_accel_cg)   == 8);
+    CHECK(offsetof(MaximaPacket_t, max_gyro_dps16) == 10);
 
-    CHECK(sizeof(HelloPacket_t) == 8);
-    CHECK(HELLO_PACKET_SIZE == 8);
+    CHECK(sizeof(HelloPacket_t) == 8);   /* RX struct keeps the legacy tail */
+    CHECK(HELLO_PACKET_SIZE == 6);
+    CHECK(HELLO_PACKET_SIZE_V1 == 8);
     CHECK(PACKET_TYPE_HELLO == 0x0C);
     CHECK(offsetof(HelloPacket_t, fw_hash)  == 2);
-    CHECK(offsetof(HelloPacket_t, uptime_s) == 6);
+
+    /* IMU trace V2 dropped the never-wired temperature sentinel */
+    CHECK(IMU_TRACE_PACKET_SIZE == 18 && IMU_TRACE_PACKET_SIZE_V1 == 20);
 }
 
 TEST(test_fused_dead_reckoning_flag) {
@@ -480,7 +528,7 @@ TEST(test_airlink_golden_fused_decode) {
     CHECK_NEAR(gps.v_north, 12.34, 1e-3);
     CHECK_NEAR(gps.v_east,  -3.21, 1e-3);
     CHECK_NEAR(gps.v_down,  -55.0,  1e-3);
-    CHECK(gps.fused_age_ds == 7);
+    CHECK(gps.fused_age_ds == 0);   /* V3: synthesized from GPS_FRESH */
     CHECK(gps.fused_gps_fresh == 1 && gps.fused_imu_healthy == 1);
     CHECK(gps.fused_dr == 0 && gps.fused_landed == 0);
     CHECK(gps.fused_sensor_degraded == 0);
@@ -560,13 +608,22 @@ TEST(test_fused_layouts_and_malformed) {
     uint8_t pkt[FUSED_PACKET_SIZE];
     build_fused_packet(pkt, 39.89, -105.11, 0, 0, 0, 0, 0, 0);
 
-    /* Both layouts accepted: current V2 (20B) and legacy V1 (19B) */
+    /* All three wire layouts accepted: V3 (19B, V3 marker), V2 (20B),
+     * and legacy V1 (19B, marker clear) */
     CHECK(RF_Parser_ParseFusedPacket(pkt, FUSED_PACKET_SIZE) == RF_PARSER_OK);
-    CHECK(RF_Parser_ParseFusedPacket(pkt, FUSED_PACKET_SIZE_V1) == RF_PARSER_OK);
+    uint8_t pkt_v2[FUSED_PACKET_SIZE_V2];
+    memset(pkt_v2, 0, sizeof(pkt_v2));
+    pkt_v2[0] = PACKET_TYPE_FUSED;
+    put_i32_le(&pkt_v2[1], 398900750);
+    put_i32_le(&pkt_v2[5], -1051155100);
+    pkt_v2[17] = 7;                          /* V2: age at 17  */
+    pkt_v2[18] = FUSED_FLAG_GPS_FRESH;       /* V2: flags at 18 */
+    pkt_v2[19] = 0;
+    CHECK(RF_Parser_ParseFusedPacket(pkt_v2, FUSED_PACKET_SIZE_V2) == RF_PARSER_OK);
 
     CHECK(RF_Parser_ParseFusedPacket(NULL, FUSED_PACKET_SIZE) == RF_PARSER_ERROR);
     CHECK(RF_Parser_ParseFusedPacket(pkt, FUSED_PACKET_SIZE_V1 - 1) == RF_PARSER_ERROR);
-    CHECK(RF_Parser_ParseFusedPacket(pkt, FUSED_PACKET_SIZE + 1) == RF_PARSER_ERROR);
+    CHECK(RF_Parser_ParseFusedPacket(pkt_v2, FUSED_PACKET_SIZE_V2 + 1) == RF_PARSER_ERROR);
 
     pkt[0] = PACKET_TYPE_GPS;
     CHECK(RF_Parser_ParseFusedPacket(pkt, FUSED_PACKET_SIZE) == RF_PARSER_ERROR);
@@ -735,6 +792,7 @@ int main(void) {
     run_test_fused_valid_packet();
     run_test_fused_dead_reckoning_flag();
     run_test_fused_sensor_degraded_flag();
+    run_test_fused_legacy_layouts_still_decode();
     run_test_fused_gate_reject_flag();
     run_test_sensor_degraded_cleared_by_raw_gps();
     run_test_fused_reserved_bits_ignored();

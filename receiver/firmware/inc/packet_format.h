@@ -124,12 +124,18 @@ typedef struct __attribute__((packed)) {
 #define FUSED_FLAG_SENSOR_DEGRADED   0x04  /* Bit 2: 1 = BNO085 dead or in retry          */
 #define FUSED_FLAG_GATE_REJECT       0x02  /* Bit 1: EKF gate rejected a fix since last
                                                 * fused packet (delta, not latched)      */
-#define FUSED_FLAG_RESERVED_MASK     0x01  /* Bit 0: reserved                            */
+#define FUSED_FLAG_V3                0x01  /* Bit 0: V3 wire marker (always set
+                                              * on the air; distinguishes V3
+                                              * from legacy 19-byte V1)      */
+#define FUSED_FLAG_RESERVED_MASK     FUSED_FLAG_V3  /* old name for bit 0    */
 
-/* Fused packet: V2 = 20 bytes, V1 (legacy, no rocket_id) = 19 bytes. See
- * transmitter include for full field semantics (this file intentionally
- * carries the same defines - the two copies must never drift; the host
- * tests pin the literals on both sides). */
+/* Fused packet: V3 = 19 bytes (no age_ds: the receiver derives staleness
+ * from GPS_FRESH + inter-arrival time; the V2 rocket_id byte had pushed
+ * the packet across the 987->1118 ms airtime step). See the transmitter
+ * include for field semantics; the two copies must never drift (host
+ * tests pin the literals on both sides).
+ * Versions: len 20 = V2, len 19 with flags bit0 set = V3, len 19
+ * without = V1 (pre-rocket_id legacy). */
 #define FUSED_ALT_FLOOR_M   500.0f   /* subtracted from alt_m when encoding */
 #define FUSED_ALT_SCALE     4.0f     /* quarter-meters per count            */
 
@@ -141,13 +147,14 @@ typedef struct __attribute__((packed)) {
     int16_t  v_n_cms;        // cm/s
     int16_t  v_e_cms;        // cm/s
     int16_t  v_d_cms;        // cm/s
-    uint8_t  age_ds;         // deciseconds since TX-side last GPS fix
-    uint8_t  flags;          // FUSED_FLAG_*
-    uint8_t  rocket_id;      // ROCKET_ID of the airframe (V2)
+    uint8_t  flags;          // FUSED_FLAG_* (bit0 = FUSED_FLAG_V3 marker)
+    uint8_t  rocket_id;      // ROCKET_ID of the airframe
 } FusedPosPacket_t;
 
-#define FUSED_PACKET_SIZE       20
-#define FUSED_PACKET_SIZE_V1    19   /* legacy layout without rocket_id   */
+#define FUSED_PACKET_SIZE       19   /* V3 */
+#define FUSED_PACKET_SIZE_V2    20   /* age_ds + rocket_id                */
+#define FUSED_PACKET_SIZE_V1    19   /* legacy: age_ds, no rocket_id; told
+                                        apart from V3 by flags bit0      */
 
 /* LAUNCH_T0: 6 bytes - one-shot on the air at the instant detection trips,
  * so any crash record (beacon silent) still carries a certified T0. */
@@ -173,9 +180,11 @@ typedef struct __attribute__((packed)) {
     int16_t  gyro_y_cds;
     int16_t  gyro_z_cds;
     int16_t  peak_accel_mg;  // milli-g peak |a| since previous IMU packet
-    int16_t  temp_c10;       // BNO085 temperature * 10
+    int16_t  temp_c10;       // V1 only: BNO085 temperature * 10 (never
+                             // wired; zero-filled on V2-length packets)
 } ImuTracePacket_t;
-#define IMU_TRACE_PACKET_SIZE   20
+#define IMU_TRACE_PACKET_SIZE    18   /* V2: temp dropped (never wired) */
+#define IMU_TRACE_PACKET_SIZE_V1 20   /* legacy layout with temp_c10    */
 
 /* FLIGHT_EVENT: 8 bytes; must match the transmitter copy (host tests pin
  * the literals on both sides). One packet type carries the certified
@@ -189,11 +198,11 @@ typedef struct __attribute__((packed)) {
     uint8_t  packet_type;    // PACKET_TYPE_FLIGHT_EVENT
     uint8_t  rocket_id;      // ROCKET_ID of the airframe
     uint8_t  code;           // FLIGHT_EVENT_*
-    uint8_t  spare;          // zero-filled
     uint16_t uptime_s;       // TX uptime at TX time
     int16_t  value;          // per-code, see above
 } FlightEventPacket_t;
-#define FLIGHT_EVENT_PACKET_SIZE  8
+#define FLIGHT_EVENT_PACKET_SIZE    7
+#define FLIGHT_EVENT_PACKET_SIZE_V1 8   /* legacy layout with spare byte  */
 
 #define FLIGHT_EVENT_NONE             0x00
 #define FLIGHT_EVENT_APOGEE           0x01
@@ -228,9 +237,11 @@ typedef struct __attribute__((packed)) {
     uint16_t t_maxalt_s;      // TX uptime at that altitude
     uint16_t max_speed_cms;   // peak |v| cm/s
     uint16_t max_accel_cg;    // peak |linear accel| centi-g
-    uint16_t max_gyro_dps;    // peak |gyro| deg/s
+    uint8_t  max_gyro_dps16;  // peak |gyro| in units of 16 dps
 } MaximaPacket_t;
-#define MAXIMA_PACKET_SIZE 12
+#define MAXIMA_GYRO_DPS_SCALE  16u
+#define MAXIMA_PACKET_SIZE     11
+#define MAXIMA_PACKET_SIZE_V1  12   /* legacy: u16 max_gyro_dps          */
 
 /* HELLO: 8 bytes; must match the transmitter copy. One-shot at boot: the
  * beacon's firmware identity (git short hash, MSB = dirty tree). */
@@ -238,9 +249,10 @@ typedef struct __attribute__((packed)) {
     uint8_t  packet_type;    // PACKET_TYPE_HELLO
     uint8_t  rocket_id;
     uint32_t fw_hash;
-    uint16_t uptime_s;
+    uint16_t uptime_s;       /* V1 only; absent on the wire in V2        */
 } HelloPacket_t;
-#define HELLO_PACKET_SIZE   8
+#define HELLO_PACKET_SIZE    6   /* V2: uptime dropped (always ~2 s)     */
+#define HELLO_PACKET_SIZE_V1 8   /* legacy layout with uptime_s          */
 
 // Helper macros for encoding/decoding
 #define GPS_COORD_SCALE         10000000.0  // Scale factor for lat/lon (10^7)

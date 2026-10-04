@@ -99,25 +99,31 @@ typedef struct __attribute__((packed)) {
 #define FUSED_FLAG_GATE_REJECT       0x02  // Bit 1: the EKF innovation gate rejected >=1 GPS fix since
                                              // the previous fused packet (per-packet delta - transient,
                                              // not latched; a cluster of these precedes nav rescue)
-#define FUSED_FLAG_RESERVED_MASK     0x01  // Bit 0: reserved
+#define FUSED_FLAG_V3                0x01  // Bit 0: V3 wire marker (always set on the air;
+                                             // lets the RX tell V3 from legacy 19-byte V1)
+#define FUSED_FLAG_RESERVED_MASK     FUSED_FLAG_V3  /* old name for bit 0 */
 
-/* Fused packet: V2 = 20 bytes, V1 (legacy, no rocket_id) = 19 bytes.
- * Transmitted with PACKET_TYPE_FUSED.
+/* Fused packet: V3 = 19 bytes. V3 dropped age_ds to get back under the
+ * SF10/BW62.5k airtime step the V2 rocket_id byte had crossed: 19 B costs
+ * 987 ms where 20 B costs 1118 ms - a ~9% duty rebate on the densest
+ * stream on the link. The receiver derives staleness itself (GPS_FRESH
+ * flag + inter-arrival time), so the age field only ever fed a display
+ * chip. Receiver versions: len 20 = V2 (age_ds + rocket_id), len 19 with
+ * flags bit0 set = V3, len 19 without = V1 (pre-rocket_id legacy).
  *
  *   lat/lon       : same scaling as BinaryGPSPacket_t (deg * 10^7)
  *   alt_qm        : altitude in 0.25 m units with a 500 m MSL floor offset,
- *                   uint16: covers -500.0 m to +15883.75 m - centimeter
- *                   precision was 4 bytes for a sensor that lies ~10x worse.
+ *                   uint16: covers -500.0 m to +15883.75 m.
  *   v_n/v_e/v_d   : NED velocity in cm/s (int16 gives ±327 m/s per axis)
- *   age_ds        : deciseconds since last GPS update (0..255 -> 0..25.5 s,
- *                   saturates at 255 meaning "GPS lost long ago")
- *   flags         : FUSED_FLAG_* bits above
- *   rocket_id     : ROCKET_ID of this airframe (V2; 0..254, 255 reserved)
+ *   flags         : FUSED_FLAG_* bits above (FUSED_FLAG_V3 always set)
+ *   rocket_id     : ROCKET_ID of this airframe (0..254, 255 reserved)
  */
 #define FUSED_ALT_FLOOR_M   500.0f   /* subtracted from alt_m when encoding */
 #define FUSED_ALT_SCALE     4.0f     /* quarter-meters per count            */
-#define FUSED_PACKET_SIZE     20
-#define FUSED_PACKET_SIZE_V1  19   /* legacy layout without rocket_id     */
+#define FUSED_PACKET_SIZE     19   /* V3: 987 ms on air                    */
+#define FUSED_PACKET_SIZE_V2  20   /* age_ds + rocket_id                   */
+#define FUSED_PACKET_SIZE_V1  19   /* legacy: age_ds, no rocket_id; told   */
+                                   /* apart from V3 by flags bit0          */
 
 typedef struct __attribute__((packed)) {
     uint8_t  packet_type;    // PACKET_TYPE_FUSED
@@ -127,9 +133,8 @@ typedef struct __attribute__((packed)) {
     int16_t  v_n_cms;        // North velocity, cm/s
     int16_t  v_e_cms;        // East  velocity, cm/s
     int16_t  v_d_cms;        // Down  velocity, cm/s
-    uint8_t  age_ds;         // Deciseconds since last GPS update (saturating)
-    uint8_t  flags;          // FUSED_FLAG_*
-    uint8_t  rocket_id;      // ROCKET_ID of this airframe (V2)
+    uint8_t  flags;          // FUSED_FLAG_* (bit0 = FUSED_FLAG_V3 marker)
+    uint8_t  rocket_id;      // ROCKET_ID of this airframe (0..254)
 } FusedPosPacket_t;
 
 /* LAUNCH_T0: 6 bytes. Sent once, the instant launch detection trips, so a
@@ -143,11 +148,13 @@ typedef struct __attribute__((packed)) {
 } LaunchT0Packet_t;
 #define LAUNCH_T0_PACKET_SIZE   6
 
-/* IMU inertial trace: 16 bytes, interleaved with fused packets during
+/* IMU inertial trace: 18 bytes (V2), interleaved with fused packets during
  * LAUNCH/POST_LAUNCH at ~1 Hz. Thought experiment that motivated it: a
  * shredded-at-burnout flight like L0016 gives two position packets and
  * nothing else; peak accel + rotation rates are the only measurable
- * evidence of what came apart. */
+ * evidence of what came apart. V2 dropped temp_c10 (the BNO085 temp path
+ * was never wired - a hardwired sentinel): 18 B crosses back under the
+ * 987 ms airtime step vs. 1118 ms at 20 B. */
 typedef struct __attribute__((packed)) {
     uint8_t  packet_type;    // PACKET_TYPE_IMU
     uint8_t  rocket_id;
@@ -159,9 +166,9 @@ typedef struct __attribute__((packed)) {
     int16_t  gyro_y_cds;
     int16_t  gyro_z_cds;
     int16_t  peak_accel_mg;  // milli-g: highest |a| since previous IMU packet
-    int16_t  temp_c10;       // C * 10 from BNO085 (self-heating witness)
 } ImuTracePacket_t;
-#define IMU_TRACE_PACKET_SIZE   20
+#define IMU_TRACE_PACKET_SIZE    18   /* V2                            */
+#define IMU_TRACE_PACKET_SIZE_V1 20   /* legacy layout with temp_c10   */
 
 /* FLIGHT_EVENT: 8 bytes. One packet type carries the certified one-shot
  * life-cycle events (apogee, drogue, main, landed) AND the flight-anomaly
@@ -178,11 +185,11 @@ typedef struct __attribute__((packed)) {
     uint8_t  packet_type;    // PACKET_TYPE_FLIGHT_EVENT
     uint8_t  rocket_id;      // ROCKET_ID of this airframe
     uint8_t  code;           // FLIGHT_EVENT_*
-    uint8_t  spare;          // zero-filled (wire alignment / future flags)
     uint16_t uptime_s;       // TX uptime at TX time (saturates at 65535)
     int16_t  value;          // per-code, see above
 } FlightEventPacket_t;
-#define FLIGHT_EVENT_PACKET_SIZE  8
+#define FLIGHT_EVENT_PACKET_SIZE    7   /* 594 ms vs 725 with the spare  */
+#define FLIGHT_EVENT_PACKET_SIZE_V1 8   /* legacy layout with spare byte */
 
 #define FLIGHT_EVENT_NONE             0x00
 #define FLIGHT_EVENT_APOGEE           0x01  /* v_d held downward post-launch   */
@@ -210,9 +217,12 @@ typedef struct __attribute__((packed)) {
     uint16_t t_maxalt_s;      // TX uptime at that altitude (saturates)
     uint16_t max_speed_cms;   // peak |v| cm/s (covers 655 m/s)
     uint16_t max_accel_cg;    // peak |linear accel| centi-g (covers 655 g)
-    uint16_t max_gyro_dps;    // peak |gyro| deg/s
+    uint8_t  max_gyro_dps16;  // peak |gyro| in units of 16 dps (0..4080 dps,
+                              // past the BNO085's own +-2000 dps range)
 } MaximaPacket_t;
-#define MAXIMA_PACKET_SIZE 12
+#define MAXIMA_GYRO_DPS_SCALE  16u
+#define MAXIMA_PACKET_SIZE     11   /* V2: 725 ms vs 856 at 12 B */
+#define MAXIMA_PACKET_SIZE_V1  12   /* legacy: u16 max_gyro_dps  */
 
 /* HELLO: 8 bytes. Sent once at boot, right after the callsign: the wire
  * copy of the beacon's firmware identity (git short hash + dirty mark),
@@ -224,9 +234,9 @@ typedef struct __attribute__((packed)) {
     uint8_t  packet_type;    // PACKET_TYPE_HELLO
     uint8_t  rocket_id;
     uint32_t fw_hash;        // GIT_HASH_HEX (MSB set when tree was dirty)
-    uint16_t uptime_s;
 } HelloPacket_t;
-#define HELLO_PACKET_SIZE   8
+#define HELLO_PACKET_SIZE    6   /* uptime at boot is always ~2 s - cut */
+#define HELLO_PACKET_SIZE_V1 8   /* legacy layout with uptime_s         */
 
 /* ------------------------------------------------------------------
  * Two-way channel (post-landing / diagnostics). Both frames are 6 bytes:

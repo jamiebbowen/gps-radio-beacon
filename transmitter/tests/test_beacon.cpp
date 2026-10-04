@@ -461,7 +461,6 @@ TEST(test_flight_event_packet_and_repeats)
     CHECK(ev->packet_type == PACKET_TYPE_FLIGHT_EVENT);
     CHECK(ev->rocket_id   == ROCKET_ID);
     CHECK(ev->code        == FLIGHT_EVENT_APOGEE);
-    CHECK(ev->spare       == 0);
     CHECK(ev->uptime_s    == 42);
     CHECK(ev->value       == 2234);
 
@@ -526,7 +525,6 @@ TEST(test_hello_packet_contents)
     const HelloPacket_t *h = (const HelloPacket_t *)tx_buf;
     CHECK(h->packet_type == PACKET_TYPE_HELLO);
     CHECK(h->rocket_id   == ROCKET_ID);
-    CHECK(h->uptime_s    == 42);
     /* Host build carries no git stamp: the Makefile's -DGIT_HASH_HEX is a
      * firmware-build feature; on the host the field reduces to the
      * documented 0x00000000 fallback (dirty bit clear). */
@@ -558,7 +556,7 @@ TEST(test_maxima_packet_contents)
     CHECK(m->t_maxalt_s == 17);
     CHECK(m->max_speed_cms == 5000);
     CHECK(m->max_accel_cg == 200);
-    CHECK(m->max_gyro_dps >= 57 && m->max_gyro_dps <= 58);
+    CHECK(m->max_gyro_dps16 == 4);     /* 57.3 dps / 16 = 3.6 -> 4 */
     CHECK(radio_enables == 0);    /* fast mode: radio left alone */
 
     flight_maxima_init();         /* don't leak peaks into other tests */
@@ -573,7 +571,7 @@ TEST(test_imu_trace_packet_contents)
 
     CHECK(beacon_transmit_imu_trace(0) == 1);
     CHECK(tx_len == sizeof(ImuTracePacket_t));
-    CHECK(sizeof(ImuTracePacket_t) == IMU_TRACE_PACKET_SIZE);  /* =16 */
+    CHECK(sizeof(ImuTracePacket_t) == IMU_TRACE_PACKET_SIZE);  /* =18 */
     const ImuTracePacket_t *im = (const ImuTracePacket_t *)tx_buf;
     CHECK(im->packet_type == PACKET_TYPE_IMU);
     CHECK(im->rocket_id   == ROCKET_ID);
@@ -641,7 +639,7 @@ TEST(test_fused_packet_fields)
 
     CHECK(beacon_transmit_fused_data(100, 0) == 1);
     CHECK(tx_len == FUSED_PACKET_SIZE);
-    CHECK(tx_len == 20);
+    CHECK(tx_len == 19);                           /* V3: 987 ms airtime */
     CHECK(tx_buf[0] == PACKET_TYPE_FUSED);
     CHECK(get_i32_le(&tx_buf[1]) > 398900000);
     CHECK(get_i32_le(&tx_buf[5]) < -1048851000);
@@ -650,9 +648,9 @@ TEST(test_fused_packet_fields)
     CHECK(get_i16_le(&tx_buf[11]) == 1234);        /* vN cm/s */
     CHECK(get_i16_le(&tx_buf[13]) == -321);        /* vE cm/s */
     CHECK(get_i16_le(&tx_buf[15]) == -5500);       /* vD cm/s */
-    CHECK(tx_buf[17] == 7);                        /* age ds */
-    CHECK(tx_buf[18] == (FUSED_FLAG_GPS_FRESH | FUSED_FLAG_IMU_HEALTHY));
-    CHECK(tx_buf[19] == (uint8_t)ROCKET_ID);       /* V2 airframe ID */
+    CHECK(tx_buf[17] == (FUSED_FLAG_GPS_FRESH | FUSED_FLAG_IMU_HEALTHY |
+                        FUSED_FLAG_V3));           /* V3 marker always on */
+    CHECK(tx_buf[18] == (uint8_t)ROCKET_ID);       /* airframe ID */
 }
 
 TEST(test_fused_velocity_clamps_and_flags)
@@ -684,10 +682,12 @@ TEST(test_fused_sensor_degraded_flag)
     fake_fused.sensor_degraded = true;
 
     CHECK(beacon_transmit_fused_data(100, 1) == 1);
-    /* Exact byte: ONLY bit 2 may be set. SENSOR_DEGRADED is the wire-format
-     * pin for the IMU-dead signal - the receiver decodes it at the same
-     * offset (see its mirror test in receiver/tests/test_rf_parser.c). */
-    CHECK(tx_buf[offsetof(FusedPosPacket_t, flags)] == FUSED_FLAG_SENSOR_DEGRADED);
+    /* Exact byte: ONLY bit 2 plus the V3 wire marker may be set.
+     * SENSOR_DEGRADED is the wire-format pin for the IMU-dead signal - the
+     * receiver decodes it at the same offset (see its mirror test in
+     * receiver/tests/test_rf_parser.c). */
+    CHECK(tx_buf[offsetof(FusedPosPacket_t, flags)] ==
+          (FUSED_FLAG_SENSOR_DEGRADED | FUSED_FLAG_V3));
 }
 
 TEST(test_fused_wire_format_pin)
@@ -696,11 +696,11 @@ TEST(test_fused_wire_format_pin)
      * the two files breaks the link silently. These literal CHECKs (and the
      * identical block in receiver/tests/test_rf_parser.c) make a drift a
      * red test on whichever side changed without updating the other. */
-    CHECK(sizeof(FusedPosPacket_t) == 20);
-    CHECK(FUSED_PACKET_SIZE == 20 && FUSED_PACKET_SIZE_V1 == 19);
-    CHECK(offsetof(FusedPosPacket_t, age_ds)    == 17);
-    CHECK(offsetof(FusedPosPacket_t, flags)     == 18);
-    CHECK(offsetof(FusedPosPacket_t, rocket_id) == 19);
+    CHECK(sizeof(FusedPosPacket_t) == 19);
+    CHECK(FUSED_PACKET_SIZE == 19 && FUSED_PACKET_SIZE_V2 == 20 &&
+          FUSED_PACKET_SIZE_V1 == 19);
+    CHECK(offsetof(FusedPosPacket_t, flags)     == 17);
+    CHECK(offsetof(FusedPosPacket_t, rocket_id) == 18);
 
     CHECK(sizeof(BinaryGPSPacket_t) == 14);
     CHECK(GPS_PACKET_SIZE == 14 && GPS_PACKET_SIZE_V1 == 13);
@@ -714,17 +714,18 @@ TEST(test_fused_wire_format_pin)
     CHECK(FUSED_FLAG_LANDED          == 0x08);
     CHECK(FUSED_FLAG_SENSOR_DEGRADED == 0x04);
     CHECK(FUSED_FLAG_GATE_REJECT     == 0x02);
+    CHECK(FUSED_FLAG_V3              == 0x01);
     CHECK(FUSED_FLAG_RESERVED_MASK   == 0x01);
 
     CHECK(FLAG_LOW_SATS              == 0x20);
 
     /* FLIGHT_EVENT (apogee/drogue/main/landed + anomaly codes) */
-    CHECK(sizeof(FlightEventPacket_t) == 8);
-    CHECK(FLIGHT_EVENT_PACKET_SIZE == 8);
+    CHECK(sizeof(FlightEventPacket_t) == 7);
+    CHECK(FLIGHT_EVENT_PACKET_SIZE == 7 && FLIGHT_EVENT_PACKET_SIZE_V1 == 8);
     CHECK(PACKET_TYPE_FLIGHT_EVENT == 0x0A);
     CHECK(offsetof(FlightEventPacket_t, code)     == 2);
-    CHECK(offsetof(FlightEventPacket_t, uptime_s) == 4);
-    CHECK(offsetof(FlightEventPacket_t, value)    == 6);
+    CHECK(offsetof(FlightEventPacket_t, uptime_s) == 3);
+    CHECK(offsetof(FlightEventPacket_t, value)    == 5);
     CHECK(FLIGHT_EVENT_APOGEE           == 0x01);
     CHECK(FLIGHT_EVENT_DROGUE           == 0x02);
     CHECK(FLIGHT_EVENT_MAIN             == 0x03);
@@ -736,20 +737,24 @@ TEST(test_fused_wire_format_pin)
     CHECK(FLIGHT_EVENT_ANOM_REBOOT      == 0x14);
 
     /* MAXIMA (running flight envelope) and HELLO (boot fw identity) */
-    CHECK(sizeof(MaximaPacket_t) == 12);
-    CHECK(MAXIMA_PACKET_SIZE == 12);
+    CHECK(sizeof(MaximaPacket_t) == 11);
+    CHECK(MAXIMA_PACKET_SIZE == 11 && MAXIMA_PACKET_SIZE_V1 == 12);
     CHECK(PACKET_TYPE_MAXIMA == 0x0B);
-    CHECK(offsetof(MaximaPacket_t, max_alt_m)     == 2);
-    CHECK(offsetof(MaximaPacket_t, t_maxalt_s)    == 4);
-    CHECK(offsetof(MaximaPacket_t, max_speed_cms) == 6);
-    CHECK(offsetof(MaximaPacket_t, max_accel_cg)  == 8);
-    CHECK(offsetof(MaximaPacket_t, max_gyro_dps)  == 10);
+    CHECK(MAXIMA_GYRO_DPS_SCALE == 16);
+    CHECK(offsetof(MaximaPacket_t, max_alt_m)      == 2);
+    CHECK(offsetof(MaximaPacket_t, t_maxalt_s)     == 4);
+    CHECK(offsetof(MaximaPacket_t, max_speed_cms)  == 6);
+    CHECK(offsetof(MaximaPacket_t, max_accel_cg)   == 8);
+    CHECK(offsetof(MaximaPacket_t, max_gyro_dps16) == 10);
 
-    CHECK(sizeof(HelloPacket_t) == 8);
-    CHECK(HELLO_PACKET_SIZE == 8);
+    CHECK(sizeof(HelloPacket_t) == 6);
+    CHECK(HELLO_PACKET_SIZE == 6 && HELLO_PACKET_SIZE_V1 == 8);
     CHECK(PACKET_TYPE_HELLO == 0x0C);
-    CHECK(offsetof(HelloPacket_t, fw_hash)  == 2);
-    CHECK(offsetof(HelloPacket_t, uptime_s) == 6);
+    CHECK(offsetof(HelloPacket_t, fw_hash) == 2);
+
+    /* IMU trace V2 dropped the never-wired temperature sentinel */
+    CHECK(sizeof(ImuTracePacket_t) == 18);
+    CHECK(IMU_TRACE_PACKET_SIZE == 18 && IMU_TRACE_PACKET_SIZE_V1 == 20);
 }
 
 TEST(test_fused_gate_reject_delta)
@@ -868,7 +873,6 @@ TEST(test_airlink_golden_fused_encode)
     fake_fused.v_n         = AIRLINK_FUSED_VN_CMS / 100.0f;
     fake_fused.v_e         = AIRLINK_FUSED_VE_CMS / 100.0f;
     fake_fused.v_d         = AIRLINK_FUSED_VD_CMS / 100.0f;
-    fake_fused.age_ds      = AIRLINK_FUSED_AGE_DS;
     fake_fused.gps_fresh   = true;
     fake_fused.imu_healthy = true;
 

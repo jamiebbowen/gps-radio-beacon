@@ -510,9 +510,9 @@ uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
 }
 
 /**
- * @brief Parse a PACKET_TYPE_FUSED payload (V2: 20 bytes, legacy V1: 19)
+ * @brief Parse a PACKET_TYPE_FUSED payload (V3: 19 bytes, V2: 20, V1: 19 legacy)
  *
- * Layout (little-endian, 20 bytes):
+ * Common layout (little-endian):
  *   [0]      packet_type (0x04)
  *   [1..4]   latitude  (int32, deg*1e7)
  *   [5..8]   longitude (int32, deg*1e7)
@@ -520,10 +520,14 @@ uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
  *   [11..12] v_n       (int16, cm/s)
  *   [13..14] v_e       (int16, cm/s)
  *   [15..16] v_d       (int16, cm/s)
- *   [17]     age_ds    (uint8, deciseconds since TX-side last GPS fix)
- *   [18]     flags     (FUSED_FLAG_*)
- *   [19]     rocket_id (uint8, V2 only - checked by the airframe binding
- *                      in rf_receiver.c before this parser runs)
+ * Then by version:
+ *   V2 (20 B): [17] age_ds   [18] flags      [19] rocket_id
+ *   V3 (19 B): [17] flags (bit0 = FUSED_FLAG_V3, always set)  [18] rocket_id
+ *   V1 (19 B): [17] age_ds   [18] flags      (no rocket_id)
+ *
+ * V3 has no age byte - it carried only a display chip, and the V2 rocket_id
+ * byte had pushed the packet across the 987->1118 ms airtime step. For V3
+ * the parser synthesizes fused_age_ds: 0 while GPS_FRESH, 255 otherwise.
  *
  * Populates parsed_gps_data with decoded values, including the v_north /
  * v_east / v_down m/s fields and the is_fused / fused_* metadata so the UI
@@ -533,7 +537,7 @@ uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length)
 {
   parse_attempts++;
 
-  if (data == NULL || (length != FUSED_PACKET_SIZE && length != FUSED_PACKET_SIZE_V1)) {
+  if (data == NULL || (length != FUSED_PACKET_SIZE && length != FUSED_PACKET_SIZE_V2)) {
     parse_failures++;
     return RF_PARSER_ERROR;
   }
@@ -552,8 +556,14 @@ uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length)
   int16_t v_n_cms  = (int16_t)((uint16_t)data[11] | ((uint16_t)data[12] << 8));
   int16_t v_e_cms  = (int16_t)((uint16_t)data[13] | ((uint16_t)data[14] << 8));
   int16_t v_d_cms  = (int16_t)((uint16_t)data[15] | ((uint16_t)data[16] << 8));
-  uint8_t age_ds   = data[17];
-  uint8_t flags    = data[18];
+
+  /* Version discrimination: 20 B = V2; 19 B with flags bit0 set = V3;
+   * 19 B without = legacy V1 (age at [17], flags at [18], no id). */
+  uint8_t is_v3     = (length == FUSED_PACKET_SIZE) && (data[17] & FUSED_FLAG_V3);
+  uint8_t flags_idx = is_v3 ? 17 : 18;
+  uint8_t age_ds    = is_v3 ? ((data[17] & FUSED_FLAG_GPS_FRESH) ? 0 : 255)
+                            : data[17];
+  uint8_t flags     = data[flags_idx] & (uint8_t)~FUSED_FLAG_RESERVED_MASK;
 
   double lat = (double)lat_enc / 10000000.0;
   double lon = (double)lon_enc / 10000000.0;

@@ -260,7 +260,8 @@ static void inject_gps_packet_flags(double lat_deg, double lon_deg,
     fake_pkt_pending = 1;
 }
 
-/* V2 fused packet, zero velocity, fresh-GPS flag, alt 1650 m */
+/* V3 fused packet (production wire: 19 B, flags+V3 marker at [17], id at
+ * [18]), zero velocity, fresh-GPS flag, alt 1650 m */
 static void inject_fused_packet(double lat_deg, double lon_deg, uint8_t rocket_id)
 {
     memset(&fake_pkt, 0, sizeof(fake_pkt));
@@ -268,9 +269,9 @@ static void inject_fused_packet(double lat_deg, double lon_deg, uint8_t rocket_i
     put_i32_le(&fake_pkt.data[1], (int32_t)(lat_deg * 10000000.0));
     put_i32_le(&fake_pkt.data[5], (int32_t)(lon_deg * 10000000.0));
     put_i16_le(&fake_pkt.data[9], (int16_t)((1650.0f + FUSED_ALT_FLOOR_M) * FUSED_ALT_SCALE));
-    fake_pkt.data[17] = 0;                        /* age ds */
-    fake_pkt.data[18] = FUSED_FLAG_GPS_FRESH | FUSED_FLAG_IMU_HEALTHY;
-    fake_pkt.data[19] = rocket_id;
+    fake_pkt.data[17] = FUSED_FLAG_GPS_FRESH | FUSED_FLAG_IMU_HEALTHY |
+                        FUSED_FLAG_V3;
+    fake_pkt.data[18] = rocket_id;
     fake_pkt.length = FUSED_PACKET_SIZE;
     fake_pkt.rssi = -90;
     fake_pkt.snr = 5;
@@ -524,7 +525,7 @@ static void inject_imu_trace(uint8_t rocket_id, uint16_t ts_ms,
     };
     memset(&fake_pkt, 0, sizeof(fake_pkt));
     memcpy(fake_pkt.data, &im, sizeof(im));
-    fake_pkt.length = IMU_TRACE_PACKET_SIZE;
+    fake_pkt.length = IMU_TRACE_PACKET_SIZE;   /* V2: temp stays off the wire */
     fake_pkt.rssi = -40;
     fake_pkt.snr = 9;
     fake_pkt_pending = 1;
@@ -552,7 +553,6 @@ static void inject_flight_event(uint8_t rocket_id, uint8_t code, int16_t value)
         .packet_type = PACKET_TYPE_FLIGHT_EVENT,
         .rocket_id   = rocket_id,
         .code        = code,
-        .spare       = 0,
         .uptime_s    = 61,
         .value       = value,
     };
@@ -601,7 +601,7 @@ static void inject_maxima(uint8_t rocket_id, int16_t alt_m)
         .t_maxalt_s    = 61,
         .max_speed_cms = 4500,
         .max_accel_cg  = 2500,
-        .max_gyro_dps  = 720,
+        .max_gyro_dps16 = 45,       /* 45 x 16 dps = 720 dps */
     };
     memset(&fake_pkt, 0, sizeof(fake_pkt));
     memcpy(fake_pkt.data, &mx, sizeof(mx));
@@ -635,19 +635,26 @@ TEST(test_maxima_and_hello_dispatch)
     CHECK(mx.t_maxalt_s == 61);
     CHECK(mx.max_speed_cms == 4500);
     CHECK(mx.max_accel_cg == 2500);
-    CHECK(mx.max_gyro_dps == 720);
+    CHECK(mx.max_gyro_dps16 == 45);
     CHECK(RF_Receiver_GetMaxima(&mx) == 0);
 
     inject_maxima(FOREIGN_ROCKET_ID, 9999);
     run_for(500, 250);
     CHECK(RF_Receiver_GetMaxima(&mx) == 0);
 
-    /* Boot identity: fw hash + dirty bit and uptime land intact */
+    /* Boot identity: fw hash + dirty bit land; V2 wire has no uptime */
     inject_hello(OUR_ROCKET_ID, 0x81234567UL);     /* hash + dirty MSB */
     run_for(500, 250);
     HelloPacket_t hl;
     CHECK(RF_Receiver_GetHello(&hl) == 1);
     CHECK(hl.fw_hash == 0x81234567UL);
+    CHECK(hl.uptime_s == 0);                       /* zero-filled (V2 wire) */
+
+    /* Legacy V1 wire (8 B, with uptime) still decodes in transition */
+    inject_hello(OUR_ROCKET_ID, 0x01234567UL);
+    fake_pkt.length = HELLO_PACKET_SIZE_V1;
+    run_for(500, 250);
+    CHECK(RF_Receiver_GetHello(&hl) == 1);
     CHECK(hl.uptime_s == 5);
     CHECK(RF_Receiver_GetHello(&hl) == 0);
 
@@ -731,8 +738,15 @@ TEST(test_imu_trace_and_launch_t0)
     CHECK(out.accel_x_cg == 6234 && out.accel_z_cg == -9800);
     CHECK(out.gyro_y_cds == 34);
     CHECK(out.peak_accel_mg == 31000);
-    CHECK(out.temp_c10 == 250);
+    CHECK(out.temp_c10 == 0);    /* V2 wire has no temp field (zero-filled) */
     CHECK(RF_Receiver_GetImuTrace(&out) == 0);    /* one-shot */
+
+    /* Legacy V1 (20 B, with temp_c10) still decodes while the fleet rolls */
+    inject_imu_trace(OUR_ROCKET_ID, 500, 6234, -9800);
+    fake_pkt.length = IMU_TRACE_PACKET_SIZE_V1;
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetImuTrace(&out) == 1);
+    CHECK(out.temp_c10 == 250);
 
     /* Packet-liveliness latch updated even though nav state was untouched */
     CHECK(RF_Receiver_GetLastPacketTime() != 0);
@@ -1938,7 +1952,7 @@ static void inject_fused_ex(double lat_deg, double lon_deg, uint8_t rocket_id,
                             uint8_t flags, int16_t vn_cms, int16_t ve_cms)
 {
     inject_fused_packet(lat_deg, lon_deg, rocket_id);
-    fake_pkt.data[18] = flags;
+    fake_pkt.data[17] = flags | FUSED_FLAG_V3;
     put_i16_le(&fake_pkt.data[11], vn_cms);
     put_i16_le(&fake_pkt.data[13], ve_cms);
     fake_pkt_pending = 1;

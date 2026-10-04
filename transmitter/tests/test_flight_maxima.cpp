@@ -47,7 +47,7 @@ TEST(test_pad_handling_never_counts)
     CHECK(out.max_alt_m == 0);           /* nothing recorded              */
     CHECK(out.max_speed_cms == 0);
     CHECK(out.max_accel_cg == 0);
-    CHECK(out.max_gyro_dps == 0);
+    CHECK(out.max_gyro_dps16 == 0);
 }
 
 TEST(test_maxima_track_peaks_and_time_of_alt)
@@ -75,7 +75,7 @@ TEST(test_maxima_track_peaks_and_time_of_alt)
     /* |v| peak = sqrt(10^2 + 100^2) cm/s = 10049.9 */
     CHECK(out.max_speed_cms == 10050);
     CHECK(out.max_accel_cg == 400);         /* 4 g */
-    CHECK(out.max_gyro_dps == 201);         /* ~200.5 dps */
+    CHECK(out.max_gyro_dps16 == 13);        /* 200.5 dps / 16 = 12.5 -> 13 */
 }
 
 TEST(test_unanchored_nav_contributes_no_kinematics)
@@ -117,6 +117,7 @@ TEST(test_wire_range_clamps)
     in.alt_m = 40000.0f;               /* beyond int16 m */
     in.v_d_ms = 700.0f;                /* beyond uint16 cm/s */
     in.accel_ms2 = 700.0f * 9.80665f;  /* beyond uint16 cg */
+    in.gyro_mag_rads = 100.0f;         /* 5730 dps: beyond u8 x16 */
     in.uptime_s = 70000;               /* beyond uint16 s */
     flight_maxima_feed(&in);
 
@@ -124,6 +125,7 @@ TEST(test_wire_range_clamps)
     CHECK(out.max_alt_m == 32767);
     CHECK(out.max_speed_cms == 65535);
     CHECK(out.max_accel_cg == 65535);
+    CHECK(out.max_gyro_dps16 == 255);       /* saturated, not wrapped */
     CHECK(out.t_maxalt_s == 65535);
 }
 

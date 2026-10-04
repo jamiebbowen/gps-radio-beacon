@@ -508,11 +508,18 @@ uint8_t RF_Receiver_DataAvailable(void)
           }
         }
       } else if ((last_packet.length == FUSED_PACKET_SIZE
-               || last_packet.length == FUSED_PACKET_SIZE_V1)
+               || last_packet.length == FUSED_PACKET_SIZE_V2)
               && last_packet.data[0] == PACKET_TYPE_FUSED) {
-        /* EKF-fused position + velocity from TX nav layer */
-        if (RF_RocketFilter(last_packet.length == FUSED_PACKET_SIZE,
-                            last_packet.data[FUSED_PACKET_SIZE - 1]) &&
+        /* EKF-fused position + velocity from TX nav layer. Wire versions:
+         * 20 B = V2 (rocket_id at [19]); 19 B = V3 (flags bit0 set at [17],
+         * id at [18]) or legacy V1 (no id). Same discriminator as the
+         * parser - an odd age_ds in a legacy V1 packet masquerades as V3
+         * and is dropped by the filter (fail-closed, not fail-silent). */
+        uint8_t v_has_id = (last_packet.length == FUSED_PACKET_SIZE_V2) ||
+                           (last_packet.length == FUSED_PACKET_SIZE &&
+                            (last_packet.data[17] & FUSED_FLAG_V3));
+        uint8_t v_id = last_packet.data[last_packet.length - 1];
+        if (RF_RocketFilter(v_has_id, v_id) &&
             RF_Parser_ParseFusedPacket(last_packet.data, last_packet.length) == RF_PARSER_OK) {
           rf_packet_ready = 1;
           rf_header_matches++;
@@ -522,13 +529,15 @@ uint8_t RF_Receiver_DataAvailable(void)
             flight_contact_latch = 1;
           }
         }
-      } else if (last_packet.length == IMU_TRACE_PACKET_SIZE
+      } else if ((last_packet.length == IMU_TRACE_PACKET_SIZE
+               || last_packet.length == IMU_TRACE_PACKET_SIZE_V1)
               && last_packet.data[0] == PACKET_TYPE_IMU) {
         /* Inertial trace packet - fire-cycle forensics. Bound only via the
          * airframe filter; goes straight to the SD log path via
-         * last_imu_trace (main.c flushes it as an IMU row). */
+         * last_imu_trace (main.c flushes it as an IMU row). V1 (20 B)
+         * carries a trailing temp_c10; V2 (18 B) leaves it zero-filled. */
         memset(&last_imu_trace, 0, sizeof(last_imu_trace));
-        memcpy(&last_imu_trace, last_packet.data, sizeof(last_imu_trace));
+        memcpy(&last_imu_trace, last_packet.data, last_packet.length);
         if (RF_RocketFilter(1, last_imu_trace.rocket_id)) {
           imu_pending = 1;
           last_imu_time = HAL_GetTick();
@@ -543,10 +552,12 @@ uint8_t RF_Receiver_DataAvailable(void)
           last_packet_time = HAL_GetTick();
           flight_contact_latch = 1;   /* a certified T0 IS the launch */
         }
-      } else if (last_packet.length == FLIGHT_EVENT_PACKET_SIZE
+      } else if ((last_packet.length == FLIGHT_EVENT_PACKET_SIZE
+               || last_packet.length == FLIGHT_EVENT_PACKET_SIZE_V1)
               && last_packet.data[0] == PACKET_TYPE_FLIGHT_EVENT) {
         /* Certified life-cycle event / anomaly announcement. Foreign
-         * beacons' events must not pollute our flight log. */
+         * beacons' events must not pollute our flight log. V1 (8 B) had a
+         * spare pad byte; copy only the current-layout prefix. */
         memset(&last_flight_event, 0, sizeof(last_flight_event));
         memcpy(&last_flight_event, last_packet.data, sizeof(last_flight_event));
         if (RF_RocketFilter(1, last_flight_event.rocket_id)) {
@@ -554,6 +565,8 @@ uint8_t RF_Receiver_DataAvailable(void)
           last_packet_time = HAL_GetTick();
           flight_contact_latch = 1;   /* flight events only exist in flight */
         }
+        /* V2 only: the 12-byte V1 layout (u16 gyro) never flew, and its
+         * low gyro byte would decode nonsense under the u8 x16 scheme. */
       } else if (last_packet.length == MAXIMA_PACKET_SIZE
               && last_packet.data[0] == PACKET_TYPE_MAXIMA) {
         /* Running maxima recap - recurring rows; each copy is standalone. */
@@ -563,12 +576,13 @@ uint8_t RF_Receiver_DataAvailable(void)
           maxima_pending = 1;
           last_packet_time = HAL_GetTick();
         }
-      } else if (last_packet.length == HELLO_PACKET_SIZE
+      } else if ((last_packet.length == HELLO_PACKET_SIZE
+               || last_packet.length == HELLO_PACKET_SIZE_V1)
               && last_packet.data[0] == PACKET_TYPE_HELLO) {
         /* Beacon boot identity (fw hash) - one-shot, usually right after
          * the callsign; foreign boots aren't our flight's firmware. */
         memset(&last_hello, 0, sizeof(last_hello));
-        memcpy(&last_hello, last_packet.data, sizeof(last_hello));
+        memcpy(&last_hello, last_packet.data, last_packet.length);
         if (RF_RocketFilter(1, last_hello.rocket_id)) {
           hello_pending = 1;
           last_packet_time = HAL_GetTick();
