@@ -87,6 +87,7 @@ int transmit_string(const char *str)
 static GPSCoordinates_t fake_coords;
 const GPSCoordinates_t* gps_get_current_coordinates(void) { return &fake_coords; }
 uint8_t gps_get_health(void) { return HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0); }
+uint32_t gps_get_fix_age_ms(void) { return 250; }
 float gps_nmea_to_decimal(const char *n, char d)
 {
     double v = atof(n);

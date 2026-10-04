@@ -961,6 +961,29 @@ int main(void)
       }
     }
 
+    /* Flight forensics: certified T0 and the inertial trace. Both need a
+     * guaranteed file - a packet that proves the beacon is flying should
+     * never fall off the lazy-create edge, so EnsureLogFile runs first. */
+    if (rf_initialized && sd_card_ok) {
+      LaunchT0Packet_t t0;
+      if (RF_Receiver_GetLaunchT0(&t0)) {
+        char t0_msg[64];
+        snprintf(t0_msg, sizeof(t0_msg),
+                 "LAUNCH T0 id=%u up=%us gps_fix_age=%.1fs",
+                 (unsigned)t0.rocket_id, (unsigned)t0.uptime_s,
+                 t0.age_ds / 10.0);
+        SD_Card_EnsureLogFile();
+        SD_Card_LogEvent(t0_msg);
+      }
+      ImuTracePacket_t imu;
+      if (RF_Receiver_GetImuTrace(&imu)) {
+        int16_t ir; int8_t isn;
+        RF_Receiver_GetSignalQuality(&ir, &isn);
+        SD_Card_EnsureLogFile();
+        SD_Card_LogImuTrace(&imu, ir);
+      }
+    }
+
     /* Log noise-alert transitions (edge-triggered; the alert itself has
      * hysteresis in rf_receiver). Deliberately no EnsureLogFile: noise can
      * occur with no beacon on the air, and a no-RF boot must not leave

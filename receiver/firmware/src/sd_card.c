@@ -654,6 +654,33 @@ SD_Card_Status SD_Card_LogBase(const GPS_Data *base_gps)
     return SD_Card_WriteLogEntry(log_buffer);
 }
 
+/**
+ * @brief Log one inertial-trace packet (IMU row).
+ *
+ * Schema (self-described in row; no shared NAV columns):
+ *   Timestamp,IMU,ts_ms,AccelX_cg,AccelY_cg,AccelZ_cg,GyroX_cds,GyroY_cds,
+ *   GyroZ_cds,PeakAccel_mg,Temp_c10,RSSI_dBm
+ *
+ * The follow-the-shredder story this exists for needs inertial values at
+ * flight cadence, so this hits the SD log unconditionally once we've heard
+ * the beacon (same lazy-file via the ensure hook around IMU packets).
+ */
+SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, int16_t rssi)
+{
+    if (!sd_initialized || imu == NULL) return SD_CARD_ERROR;
+    if (!log_file_open) return SD_CARD_ERROR;
+
+    char ts[32];
+    SD_Card_GetTimestamp(ts, sizeof(ts));
+    snprintf(log_buffer, sizeof(log_buffer),
+             "%s,IMU,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+             ts, (unsigned)imu->ts_ms,
+             (int)imu->accel_x_cg, (int)imu->accel_y_cg, (int)imu->accel_z_cg,
+             (int)imu->gyro_x_cds, (int)imu->gyro_y_cds, (int)imu->gyro_z_cds,
+             (int)imu->peak_accel_mg, (int)imu->temp_c10, (int)rssi);
+    return SD_Card_WriteLogEntry(log_buffer);
+}
+
 SD_Card_Status SD_Card_Flush(void)
 {
     if (!sd_initialized) return SD_CARD_ERROR;

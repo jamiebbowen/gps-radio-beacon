@@ -31,6 +31,7 @@ static GPSCoordinates_t current_coords = {
  * GPS that was dead from power-on is reported without any special casing.
  * gps_recovery_attempts is shared with the watchdog in gps_poll_rx(). */
 static uint32_t gps_last_byte_ms = 0;      // last UART byte received
+static uint32_t gps_last_fix_ms  = 0;      // last accepted lat/lon commit
 static uint32_t gps_last_sentence_ms = 0;  // last recognizable GGA/RMC
 static uint8_t  gps_recovery_attempts = 0; // watchdog resets issued
 
@@ -186,6 +187,13 @@ uint8_t gps_get_health(void) {
     }
     uint8_t resets = (gps_recovery_attempts > 15) ? 15 : gps_recovery_attempts;
     return HB_GPS_HEALTH(state, resets);
+}
+
+/** Milliseconds since the last accepted lat/lon commit; UINT32_MAX if
+ *  never valid this boot. Used by the launch T0 packet's age_ds field. */
+uint32_t gps_get_fix_age_ms(void) {
+    if (!gps_last_fix_ms) return UINT32_MAX;
+    return millis() - gps_last_fix_ms;
 }
 
 // Poll for GPS data and extract lat/lon using buffer-based approach
@@ -506,6 +514,7 @@ next_sentence:
                     current_coords.lat_dir = lat_dir;
                     current_coords.lon_dir = lon_dir;
                     current_coords.valid = 1;
+                    gps_last_fix_ms = millis();
 
                     // Coordinate update (log less frequently)
                     static uint32_t last_coord_log = 0;

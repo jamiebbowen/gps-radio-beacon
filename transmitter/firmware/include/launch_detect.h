@@ -47,6 +47,11 @@ uint32_t launch_detect_get_time_since_launch(uint32_t system_time_seconds);
 float launch_detect_get_current_accel(void);      // Get current total acceleration (m/s²)
 bool launch_detect_get_imu_status(void);          // Check if IMU is working
 void launch_detect_get_accel_xyz(float* x, float* y, float* z);  // Get 3-axis acceleration
+void launch_detect_get_gyro_rads(float* x, float* y, float* z);  // Get 3-axis gyro (rad/s, calibrated)
+
+/* Where launch detection publishes body-frame IMU samples (handy for the
+ * inertial trace packet / flight recorder) */
+uint32_t launch_detect_imu_staleness_ms(void);   // ms since the newest linear-accl sample
 
 /* ---------- IMU accessors (populated by launch_detect_update) ------------ */
 /* Body-frame linear acceleration (gravity removed by BNO085 fusion), m/s^2 */

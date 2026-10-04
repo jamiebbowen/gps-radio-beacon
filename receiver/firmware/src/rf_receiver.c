@@ -131,6 +131,13 @@ static HeartbeatPacket_t last_heartbeat;
 static uint8_t heartbeat_pending = 0;
 static uint32_t last_heartbeat_time = 0;   /* 0 = never heard one */
 
+/* Flight-window forensics: inertial trace + certified launch T0 */
+static ImuTracePacket_t last_imu_trace;
+static uint8_t imu_pending = 0;
+static uint32_t last_imu_time = 0;
+static LaunchT0Packet_t last_launch_t0;
+static uint8_t launch_t0_pending = 0;
+
 /* Bench-firmware detector. A beacon flashed with TESTING_MODE=1 sounds
  * identical to production BUT IDs every 30 s instead of every 5 min (and
  * has never-launched-friendly cadence tables nobody wants on a real
@@ -425,6 +432,26 @@ uint8_t RF_Receiver_DataAvailable(void)
             RF_Parser_ParseFusedPacket(last_packet.data, last_packet.length) == RF_PARSER_OK) {
           rf_packet_ready = 1;
           rf_header_matches++;
+          last_packet_time = HAL_GetTick();
+        }
+      } else if (last_packet.length == IMU_TRACE_PACKET_SIZE
+              && last_packet.data[0] == PACKET_TYPE_IMU) {
+        /* Inertial trace packet - fire-cycle forensics. Bound only via the
+         * airframe filter; goes straight to the SD log path via
+         * last_imu_trace (main.c flushes it as an IMU row). */
+        memset(&last_imu_trace, 0, sizeof(last_imu_trace));
+        memcpy(&last_imu_trace, last_packet.data, sizeof(last_imu_trace));
+        if (RF_RocketFilter(1, last_imu_trace.rocket_id)) {
+          imu_pending = 1;
+          last_imu_time = HAL_GetTick();
+          last_packet_time = HAL_GetTick();   /* a real packet arrived */
+        }
+      } else if (last_packet.length == LAUNCH_T0_PACKET_SIZE
+              && last_packet.data[0] == PACKET_TYPE_LAUNCH_T0) {
+        memset(&last_launch_t0, 0, sizeof(last_launch_t0));
+        memcpy(&last_launch_t0, last_packet.data, sizeof(last_launch_t0));
+        if (RF_RocketFilter(1, last_launch_t0.rocket_id)) {
+          launch_t0_pending = 1;
           last_packet_time = HAL_GetTick();
         }
       } else if ((last_packet.length == HEARTBEAT_PACKET_SIZE
@@ -893,6 +920,22 @@ uint8_t RF_Receiver_GetLastHeartbeat(HeartbeatPacket_t *hb, uint32_t *age_ms)
   }
   if (hb) memcpy(hb, &last_heartbeat, sizeof(*hb));
   if (age_ms) *age_ms = HAL_GetTick() - last_heartbeat_time;
+  return 1;
+}
+
+uint8_t RF_Receiver_GetImuTrace(ImuTracePacket_t *imu)
+{
+  if (!imu_pending || imu == NULL) return 0;
+  memcpy(imu, &last_imu_trace, sizeof(*imu));
+  imu_pending = 0;
+  return 1;
+}
+
+uint8_t RF_Receiver_GetLaunchT0(LaunchT0Packet_t *t0)
+{
+  if (!launch_t0_pending || t0 == NULL) return 0;
+  memcpy(t0, &last_launch_t0, sizeof(*t0));
+  launch_t0_pending = 0;
   return 1;
 }
 

@@ -269,6 +269,11 @@ void loop() {
 
         // Add a delay to ensure the radio is ready
         delay(10);
+
+        /* Certified T0 first, so even a shred-one-second-later records the
+         * one timestamp that turns "silent after packet N" into "failed at
+         * T0+xx ms". */
+        beacon_transmit_launch_t0(system_time_seconds, /*fast=*/1);
     }
     
     if (beacon_state == BEACON_STATE_LAUNCH) {
@@ -299,18 +304,29 @@ void loop() {
     if (transmit_beacon_flag) {
         Serial.print(F("[Beacon] Flag set, attempting transmission. Time since last: "));
         Serial.println(system_time_seconds - last_transmission_time);
-        
-        gps_poll_rx();
+
+        bool in_flight = (beacon_state == BEACON_STATE_LAUNCH ||
+                          beacon_state == BEACON_STATE_POST_LAUNCH);
+
+        if (in_flight) {
+            /* Flight window: the raw GPS stream is replaced by the inertial
+             * trace (fused still carries position). Seeing axes move beats
+             * position-copies position-copies under a mechanical failure; a
+             * lost-GPS fused stream degrades into the EKF's honest DR. */
+            beacon_transmit_imu_trace(transmit_fast_flag);
+            last_transmission_time = system_time_seconds;
+        } else {
+            gps_poll_rx();
 
 #if USE_BINARY_PACKETS
         uint8_t tx_result = beacon_transmit_gps_data_binary(gps_get_current_coordinates(), system_time_seconds, transmit_fast_flag);
 #else
         uint8_t tx_result = beacon_transmit_gps_data(gps_get_current_coordinates(), system_time_seconds, transmit_fast_flag);
 #endif
-        
+
         Serial.print(F("[Beacon] Transmission result: "));
         Serial.println(tx_result);
-        
+
         // Only update transmission timing if transmission was successful
         if (tx_result) {
             last_transmission_time = system_time_seconds;
@@ -319,6 +335,7 @@ void loop() {
              * rate-limited heartbeat so the receiver still hears us. */
             beacon_transmit_heartbeat(gps_get_current_coordinates(),
                                       system_time_seconds, transmit_fast_flag);
+        }
         }
 
         if (!transmit_fast_flag) {

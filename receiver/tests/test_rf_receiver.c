@@ -484,6 +484,88 @@ TEST(test_heartbeat_v3_reset_cause)
     CHECK(out.reset_info == 0);
 }
 
+static void inject_imu_trace(uint8_t rocket_id, uint16_t ts_ms,
+                             int16_t ax_cg, int16_t az_cg)
+{
+    ImuTracePacket_t im = {
+        .packet_type = PACKET_TYPE_IMU,
+        .rocket_id   = rocket_id,
+        .ts_ms       = ts_ms,
+        .accel_x_cg  = ax_cg,
+        .accel_y_cg  = -50,       /* moved off 0 so we can check fields */
+        .accel_z_cg  = az_cg,
+        .gyro_x_cds  = 12,
+        .gyro_y_cds  = 34,
+        .gyro_z_cds  = -56,
+        .peak_accel_mg = 31000,
+        .temp_c10    = 250,
+    };
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    memcpy(fake_pkt.data, &im, sizeof(im));
+    fake_pkt.length = IMU_TRACE_PACKET_SIZE;
+    fake_pkt.rssi = -40;
+    fake_pkt.snr = 9;
+    fake_pkt_pending = 1;
+}
+
+static void inject_launch_t0(uint8_t rocket_id, uint16_t uptime_s)
+{
+    LaunchT0Packet_t t0 = {
+        .packet_type = PACKET_TYPE_LAUNCH_T0,
+        .rocket_id   = rocket_id,
+        .uptime_s    = uptime_s,
+        .age_ds      = 25,
+    };
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    memcpy(fake_pkt.data, &t0, sizeof(t0));
+    fake_pkt.length = LAUNCH_T0_PACKET_SIZE;
+    fake_pkt.rssi = -40;
+    fake_pkt.snr = 9;
+    fake_pkt_pending = 1;
+}
+
+TEST(test_imu_trace_and_launch_t0)
+{
+    /* Receives and returns one-shot an inertial-trace packet from OUR airframe */
+    inject_imu_trace(OUR_ROCKET_ID, 500, 6234, -9800);
+    run_for(500, 250);
+
+    ImuTracePacket_t out;
+    CHECK(RF_Receiver_GetImuTrace(&out) == 1);
+    CHECK(out.rocket_id == OUR_ROCKET_ID);
+    CHECK(out.ts_ms == 500);
+    CHECK(out.accel_x_cg == 6234 && out.accel_z_cg == -9800);
+    CHECK(out.gyro_y_cds == 34);
+    CHECK(out.peak_accel_mg == 31000);
+    CHECK(out.temp_c10 == 250);
+    CHECK(RF_Receiver_GetImuTrace(&out) == 0);    /* one-shot */
+
+    /* Packet-liveliness latch updated even though nav state was untouched */
+    CHECK(RF_Receiver_GetLastPacketTime() != 0);
+}
+
+TEST(test_launch_t0_one_shot)
+{
+    inject_launch_t0(OUR_ROCKET_ID, 8);
+    run_for(500, 250);
+
+    LaunchT0Packet_t t0;
+    CHECK(RF_Receiver_GetLaunchT0(&t0) == 1);
+    CHECK(t0.rocket_id == OUR_ROCKET_ID);
+    CHECK(t0.uptime_s == 8);
+    CHECK(t0.age_ds == 25);
+    CHECK(RF_Receiver_GetLaunchT0(&t0) == 0);
+}
+
+TEST(test_imu_trace_foreign_id_dropped)
+{
+    /* A foreign beacon's IMU packet must not overwrite our trace state */
+    inject_imu_trace(FOREIGN_ROCKET_ID, 123, 9999, -9999);
+    run_for(500, 250);
+    ImuTracePacket_t out;
+    CHECK(RF_Receiver_GetImuTrace(&out) == 0);
+}
+
 TEST(test_position_packet_flow)
 {
     inject_gps_packet(40.0, -105.0, OUR_ROCKET_ID);
@@ -1863,6 +1945,9 @@ int main(void)
     run_test_callsign_captured_in_binary_mode();
     run_test_heartbeat_lifecycle();
     run_test_heartbeat_v3_reset_cause();
+    run_test_imu_trace_and_launch_t0();
+    run_test_launch_t0_one_shot();
+    run_test_imu_trace_foreign_id_dropped();
     run_test_band_garbage_packets_are_ignored();
     run_test_final_packet_position_persists_through_blackout();
     run_test_position_packet_flow();

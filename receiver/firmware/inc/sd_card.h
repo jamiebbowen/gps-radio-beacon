@@ -16,6 +16,7 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 #include "gps.h"
+#include "packet_format.h"
 
 /* Defines -------------------------------------------------------------------*/
 #define SD_CARD_TIMEOUT         5000    /* 5 second timeout */
@@ -172,6 +173,12 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
  * @retval SD_CARD_ERROR if uninitialized/no open session file
  */
 SD_Card_Status SD_Card_LogBase(const GPS_Data *base_gps);
+
+/**
+ * @brief Log one inertial-trace packet as an IMU row (flight forensics)
+ * @retval SD_CARD_OK even when there's no log file yet (dropped quietly)
+ */
+SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, int16_t rssi);
 
 /**
  * @brief Save last known beacon location to BEACON.TXT for persistence across power cycles

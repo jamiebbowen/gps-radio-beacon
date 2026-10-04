@@ -109,6 +109,11 @@ float gps_nmea_to_decimal(const char *nmea_coord, char direction)
 
 static launch_state_t fake_launch_state = LAUNCH_STATE_IDLE;
 launch_state_t launch_detect_get_state(void) { return fake_launch_state; }
+uint32_t gps_get_fix_age_ms(void) { return 250; }
+void launch_detect_get_gyro_rads(float *x, float *y, float *z) { if (x) *x=0; if (y) *y=0; if (z) *z=0; }
+void launch_detect_get_accel_xyz(float *x, float *y, float *z) { if (x) *x=0; if (y) *y=0; if (z) *z=0; }
+float launch_detect_get_current_accel(void) { return 0.0f; }
+
 static bool fake_landed = false;
 bool launch_detect_has_landed(void) { return fake_landed; }
 

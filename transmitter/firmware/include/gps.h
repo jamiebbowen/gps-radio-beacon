@@ -51,6 +51,9 @@ const GPSCoordinates_t* gps_get_current_coordinates(void);
 // distinguishes "still acquiring" from "UART silent" / "data garbled".
 uint8_t gps_get_health(void);
 
+// Milliseconds since the last accepted fix; UINT32_MAX if never had one.
+uint32_t gps_get_fix_age_ms(void);
+
 // Convert NMEA coordinate to decimal degrees
 float gps_nmea_to_decimal(const char* nmea_coord, char direction);
 

@@ -346,6 +346,87 @@ uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t syste
 }
 
 /**
+ * Transmit the one-shot launch T0 packet. Fired by the main loop the instant
+ * launch-detect confirms. Contains enough context (uptime, GPS age) that a
+ * crash record found on the card unambiguously opens flight forensics.
+ */
+uint8_t beacon_transmit_launch_t0(uint32_t system_time_seconds, uint8_t transmit_fast) {
+    LaunchT0Packet_t t0;
+    t0.packet_type = PACKET_TYPE_LAUNCH_T0;
+    t0.rocket_id   = (uint8_t)ROCKET_ID;
+    t0.uptime_s    = (system_time_seconds > 65535UL) ? 65535U : (uint16_t)system_time_seconds;
+    /* Age of the freshest GPS fix in deciseconds at T0 - a pad-side estimate
+     * of how trustworthy the first post-shred position is. */
+    uint32_t age_ms = gps_get_fix_age_ms();
+    t0.age_ds = (age_ms > 25500UL) ? 255U : (uint16_t)(age_ms / 100U);
+
+    if (!transmit_fast) {
+        radio_enable();
+        delay(10);
+    }
+    int result = transmit_packet((uint8_t*)&t0, sizeof(t0));
+    if (!transmit_fast) {
+        delay(1);
+        radio_disable();
+    }
+    return (result == 0) ? 1 : 0;
+}
+
+/**
+ * Transmit an inertial trace packet. Called at ~1 Hz during the flight
+ * window. Feeds from the launch-detect layer's cached linear-accel + gyro.
+ * peak/reset kept here so every packet reports peak-since-previous-packet.
+ */
+uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast) {
+    ImuTracePacket_t p;
+    memset(&p, 0, sizeof(p));
+    p.packet_type = PACKET_TYPE_IMU;
+    p.rocket_id   = (uint8_t)ROCKET_ID;
+    /* Millisecond-carrier timestamp (0..999) fused with the SD log's
+     * seconds-level Timestamp column on the receiver side. */
+    p.ts_ms       = (uint16_t)(millis() % 1000UL);
+
+    float ax, ay, az;
+    launch_detect_get_accel_xyz(&ax, &ay, &az);
+    float gx, gy, gz;
+    launch_detect_get_gyro_rads(&gx, &gy, &gz);
+
+    p.accel_x_cg = (int16_t)lroundf(ax * 100.0f);
+    p.accel_y_cg = (int16_t)lroundf(ay * 100.0f);
+    p.accel_z_cg = (int16_t)lroundf(az * 100.0f);
+    /* Gyro from BNO085 calibrated report: radians/second. Convert to
+     * centi-deg/s: rad * 57.2958 * 100 = _deg * 5729.58 - under int16 when
+     * we're below 5.7 rad/s; clamps above (flutter past 327 deg/s stays
+     *  saturated - the story lies in the burst, not the absolute rate). */
+    p.gyro_x_cds = (int16_t)lroundf(gx * 5729.58f);
+    p.gyro_y_cds = (int16_t)lroundf(gy * 5729.58f);
+    p.gyro_z_cds = (int16_t)lroundf(gz * 5729.58f);
+
+    /* Peak linear accel since last IMU packet */
+    static float peak_g = 0.0f;
+    float curr_g = launch_detect_get_current_accel();
+    if (curr_g > peak_g) peak_g = curr_g;
+    p.peak_accel_mg = (int16_t)lroundf(peak_g * 1000.0f);
+    peak_g = 0.0f;
+
+    /* BNO085 reports temperature fused internally; not exposed on this
+     * firmware path. Send -273.1°C-ish sentinel (int16 min + 273.1) so the
+     * receiver knows "sensor-not-wired" rather than 0°C. */
+    p.temp_c10 = (int16_t)-3276;
+
+    if (!transmit_fast) {
+        radio_enable();
+        delay(10);
+    }
+    int result = transmit_packet((uint8_t*)&p, sizeof(p));
+    if (!transmit_fast) {
+        delay(1);
+        radio_disable();
+    }
+    return (result == 0) ? 1 : 0;
+}
+
+/**
  * Transmit callsign via LoRa beacon
  * @param transmit_fast If true, transmit callsign in fast mode
  */

@@ -84,7 +84,7 @@ uint8_t radio_get_channel(void) { return 0; }
 int transmit_packet(const uint8_t *data, size_t length)
 {
     uint8_t t = data[0];
-    if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_HEARTBEAT) {
+    if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_LAUNCH_T0) {
         tx_by_type[t]++;
     } else if (t >= 0x20 && t <= 0x7E) {
         tx_callsigns++;              /* printable = callsign text */
@@ -147,6 +147,7 @@ void    gps_init(void) {}
 uint8_t gps_poll_rx(void) { return 0; }
 const GPSCoordinates_t* gps_get_current_coordinates(void) { return &fake_coords; }
 uint8_t gps_get_health(void) { return HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0); }
+uint32_t gps_get_fix_age_ms(void) { return 250; }
 float   gps_nmea_to_decimal(const char *n, char d)
 {
     double v = atof(n);
@@ -288,14 +289,15 @@ int main(void)
     CHECK(transmit_fast_flag == 0);
     CHECK(radio_enabled_flag == 0);               /* radio released */
 
-    /* ---------- Descent under chute: fused + paced raw ------------- */
+    /* ---------- Descent under chute: fused + paced inertial stream ----- */
     uint32_t fus0 = type_count(PACKET_TYPE_FUSED);
-    uint32_t gps0 = type_count(PACKET_TYPE_GPS);
+    uint32_t imu0 = type_count(PACKET_TYPE_IMU);
     sim_run(30000);                               /* 30 s of recovery window */
     uint32_t fus = type_count(PACKET_TYPE_FUSED) - fus0;
-    uint32_t gps = type_count(PACKET_TYPE_GPS) - gps0;
+    uint32_t imu = type_count(PACKET_TYPE_IMU) - imu0;
     CHECK(fus == 20);                             /* 1500 ms cadence exactly */
-    CHECK((gps == 15 || gps == 16));              /* 2 s paced raw stream */
+    CHECK((imu == 15 || imu == 16));              /* 2 s paced inertial stream */
+    /* Raw GPS position packets stop on air - fused+IMU carry the invade */
 
     /* ---------- Touchdown: quiet IMU + stable alt -> battery save ---- */
     sim_run((LAND_QUIET_S + 20) * 1000UL);

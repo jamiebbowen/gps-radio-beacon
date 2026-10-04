@@ -18,5 +18,7 @@ uint8_t beacon_transmit_fused_data(uint32_t system_time_seconds, uint8_t transmi
  * Call when a beacon TX was requested but the GPS data was rejected.
  * Returns 1 if a heartbeat was transmitted, 0 if rate-limited or TX failed. */
 uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast_flag);
+uint8_t beacon_transmit_launch_t0(uint32_t system_time_seconds, uint8_t transmit_fast_flag);
+uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast_flag);
 
 #endif // BEACON_H

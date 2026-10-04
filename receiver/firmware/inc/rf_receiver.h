@@ -72,6 +72,12 @@ uint8_t RF_Receiver_GetHeartbeat(HeartbeatPacket_t *hb);
  * heard on the current channel; hb/age_ms filled if non-NULL) */
 uint8_t RF_Receiver_GetLastHeartbeat(HeartbeatPacket_t *hb, uint32_t *age_ms);
 
+/* Flight-window forensics: inertial trace (one-shot; 1 = new trace) and
+ * certified T0 declaration (one-shot; 1 = a new T0 was packaged). The IMU
+ * row goes straight to the SD log from main.c; T0 fires one event row. */
+uint8_t RF_Receiver_GetImuTrace(ImuTracePacket_t *imu);
+uint8_t RF_Receiver_GetLaunchT0(LaunchT0Packet_t *t0);
+
 /* Ambient noise-floor monitor. The floor is the 25th percentile of ~1 Hz
  * GetRssiInst samples taken while the radio idles in continuous RX; the
  * alert engages at RF_NOISE_ALERT_DBM and clears at RF_NOISE_CLEAR_DBM.

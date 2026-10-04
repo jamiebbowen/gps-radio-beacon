@@ -21,6 +21,12 @@ static float accel_y = 0.0f;
 static float accel_z = 0.0f;
 static float total_accel = 0.0f;
 
+/* Inertial-trace bookkeeping. During the flight window every degree of
+ * rotation and burst of thrust matters for post-shred forensics; the radio
+ * keeps up with a ~1 Hz IMU packet while armed. Cached here; header reads. */
+static float gyro_x = 0.0f, gyro_y = 0.0f, gyro_z = 0.0f;
+static uint32_t last_gyro_ms = 0;
+
 // Latest BNO085 rotation vector (body -> earth). w is the real part.
 // If IMU_FUSION_USE_GAME_ROTVEC is set this is the game rotation vector
 // (gyro+accel only, no magnetometer).
@@ -81,8 +87,16 @@ void launch_detect_init(void) {
         imu_initialized = false;
         return;
     }
-    
+
     Serial.println("[Launch] ✓ Linear acceleration enabled");
+
+    // Calibrated gyroscope alongside: rotation rates are the only measurable
+    // witness to "which axis went first" in a mid-flight structural failure.
+    if (!bno08x.enableReport(SH2_GYROSCOPE_CALIBRATED)) {
+        Serial.println("[Launch] ⚠ Gyro report unavailable - inertial packet without it");
+    } else {
+        Serial.println("[Launch] ✓ Gyroscope enabled");
+    }
 
     // Also enable a rotation vector report so the nav/EKF layer can rotate
     // body-frame accel into earth-frame.  GAME_ROTATION_VECTOR omits the
@@ -134,6 +148,7 @@ void launch_detect_update(uint32_t system_time_seconds, uint32_t ms_counter) {
     if (bno08x.wasReset()) {
         Serial.println("[Launch] Sensor was reset, re-enabling reports");
         bno08x.enableReport(SH2_LINEAR_ACCELERATION);
+        bno08x.enableReport(SH2_GYROSCOPE_CALIBRATED);
 #if IMU_FUSION_USE_GAME_ROTVEC
         bno08x.enableReport(SH2_GAME_ROTATION_VECTOR);
 #else
@@ -157,6 +172,13 @@ void launch_detect_update(uint32_t system_time_seconds, uint32_t ms_counter) {
         rot_z = sensorValue.un.rotationVector.k;
         rot_valid = true;
         last_rotvec_ms = millis();
+    }
+
+    if (sensorValue.sensorId == SH2_GYROSCOPE_CALIBRATED) {
+        gyro_x = sensorValue.un.gyroscope.x;
+        gyro_y = sensorValue.un.gyroscope.y;
+        gyro_z = sensorValue.un.gyroscope.z;
+        last_gyro_ms = millis();
     }
 
     // Process linear acceleration data (gravity already removed by sensor)
@@ -376,6 +398,16 @@ bool launch_detect_get_imu_status(void) {
 /**
  * Get individual acceleration components
  */
+void launch_detect_get_gyro_rads(float* x, float* y, float* z) {
+    if (x) *x = gyro_x;
+    if (y) *y = gyro_y;
+    if (z) *z = gyro_z;
+}
+
+uint32_t launch_detect_imu_staleness_ms(void) {
+    return last_accel_ms ? millis() - last_accel_ms : UINT32_MAX;
+}
+
 void launch_detect_get_accel_xyz(float* x, float* y, float* z) {
     if (x) *x = accel_x;
     if (y) *y = accel_y;

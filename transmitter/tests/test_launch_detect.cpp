@@ -114,8 +114,8 @@ TEST(test_init_success)
     CHECK(bno_begin_calls == 1);
     CHECK(launch_detect_get_imu_status() == true);
     CHECK(launch_detect_get_state() == LAUNCH_STATE_IDLE);
-    /* Linear accel + full rotation vector (IMU_FUSION_USE_GAME_ROTVEC=0) */
-    CHECK(bno_enable_calls == 2);
+    /* Linear accel + gyro + rotation vector (IMU_FUSION_USE_GAME_ROTVEC=0) */
+    CHECK(bno_enable_calls == 3);
     CHECK(bno_last_report == SH2_ROTATION_VECTOR);
     CHECK(strstr(Serial.log, "Launch detection ready") != NULL);
 }
@@ -260,7 +260,7 @@ TEST(test_sensor_reset_reenables_reports)
     tick(10, 0);
     bno_was_reset = false;
 
-    CHECK(bno_enable_calls == calls_before + 2);   /* accel + rotvec */
+    CHECK(bno_enable_calls == calls_before + 3);   /* accel + gyro + rotvec */
     CHECK(imu_has_quaternion() == false);          /* rot_valid cleared */
     CHECK(strstr(Serial.log, "Sensor was reset") != NULL);
 }

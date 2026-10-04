@@ -12,12 +12,14 @@
 #define SH2_LINEAR_ACCELERATION   0x04
 #define SH2_ROTATION_VECTOR       0x05
 #define SH2_GAME_ROTATION_VECTOR  0x08
+#define SH2_GYROSCOPE_CALIBRATED  0x02
 
 typedef struct {
     uint8_t sensorId;
     union {
         struct { float real, i, j, k; } rotationVector;
         struct { float x, y, z; } linearAcceleration;
+        struct { float x, y, z; } gyroscope;   /* rad/s, calibrated */
     } un;
 } sh2_SensorValue_t;
 

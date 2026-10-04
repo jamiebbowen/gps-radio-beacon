@@ -79,6 +79,8 @@ int transmit_string(const char *str)
 
 static uint8_t fake_gps_health = 0x01;    /* HB_GPS_ACQUIRING-ish */
 uint8_t gps_get_health(void) { return fake_gps_health; }
+static uint32_t fake_fix_age = 250;    /* plausible fix age for T0 test */
+uint32_t gps_get_fix_age_ms(void) { return fake_fix_age; }
 
 float gps_nmea_to_decimal(const char *nmea_coord, char direction)
 {
@@ -99,6 +101,16 @@ bool launch_detect_has_landed(void) { return fake_landed; }
 
 static NavFused_t fake_fused;
 void nav_get_fused(NavFused_t *out) { *out = fake_fused; }
+
+/* launch_detect IMU accessors (in-flight IMU trace packet pulls these) */
+static float fake_ax = 1.25f, fake_ay = 0.f, fake_az = -9.8f;
+void launch_detect_get_accel_xyz(float *x, float *y, float *z)
+{ if (x) *x = fake_ax; if (y) *y = fake_ay; if (z) *z = fake_az; }
+static float fake_gx = 0.5f, fake_gy = 0.f, fake_gz = -0.75f;
+void launch_detect_get_gyro_rads(float *x, float *y, float *z)
+{ if (x) *x = fake_gx; if (y) *y = fake_gy; if (z) *z = fake_gz; }
+static float fake_total_accel = 1.25f;
+float launch_detect_get_current_accel(void) { return fake_total_accel; }
 
 static uint32_t fake_gps_rejects = 0;
 uint32_t nav_get_gps_rejects(void) { return fake_gps_rejects; }
@@ -397,6 +409,48 @@ TEST(test_heartbeat_tx_failure_does_not_consume_slot)
     CHECK(beacon_transmit_heartbeat(NULL, 2, 0) == 1);
 }
 
+TEST(test_launch_t0_packet_contents)
+{
+    reset_tx();
+    fake_fix_age = 2500;                              /* 2.5 s fix age */
+    CHECK(beacon_transmit_launch_t0(123, 0) == 1);
+    CHECK(tx_len == sizeof(LaunchT0Packet_t));
+    CHECK(sizeof(LaunchT0Packet_t) == LAUNCH_T0_PACKET_SIZE);  /* =6 */
+    const LaunchT0Packet_t *t0 = (const LaunchT0Packet_t *)tx_buf;
+    CHECK(t0->packet_type == PACKET_TYPE_LAUNCH_T0);
+    CHECK(t0->rocket_id   == ROCKET_ID);
+    CHECK(t0->uptime_s    == 123);
+    CHECK(t0->age_ds      == 25);                     /* 2.5 s in deciseconds */
+}
+
+TEST(test_imu_trace_packet_contents)
+{
+    reset_tx();
+    fake_ax = 0.55f; fake_ay = -1.25f; fake_az = 0.0f;
+    fake_gx = 0.01f; fake_gy = -0.02f; fake_gz = 0.0f;
+    fake_total_accel = 1.35f;
+
+    CHECK(beacon_transmit_imu_trace(0) == 1);
+    CHECK(tx_len == sizeof(ImuTracePacket_t));
+    CHECK(sizeof(ImuTracePacket_t) == IMU_TRACE_PACKET_SIZE);  /* =16 */
+    const ImuTracePacket_t *im = (const ImuTracePacket_t *)tx_buf;
+    CHECK(im->packet_type == PACKET_TYPE_IMU);
+    CHECK(im->rocket_id   == ROCKET_ID);
+    CHECK(im->accel_x_cg  == 55);
+    CHECK(im->accel_y_cg  == -125);
+    CHECK(im->accel_z_cg  == 0);
+    CHECK(im->gyro_x_cds  == 57);                     /* 0.01 rad/s */
+    CHECK(im->gyro_y_cds  == -115);                   /* -0.02 rad/s */
+    CHECK(im->peak_accel_mg == 1350);
+
+    /* Peak resets after transmit; next one captures fresh only */
+    fake_total_accel = 0.5f;
+    now_ms += 1000;
+    CHECK(beacon_transmit_imu_trace(0) == 1);
+    im = (const ImuTracePacket_t *)tx_buf;
+    CHECK(im->peak_accel_mg == 500);
+}
+
 /* ------------------------------------------------------------------ */
 /* Callsign tests                                                      */
 /* ------------------------------------------------------------------ */
@@ -681,6 +735,8 @@ int main(void)
     run_test_heartbeat_null_coords_and_saturation();
     run_test_callsign_format();
     run_test_heartbeat_tx_failure_does_not_consume_slot();
+    run_test_launch_t0_packet_contents();
+    run_test_imu_trace_packet_contents();
     run_test_fused_not_anchored_no_tx();
     run_test_fused_packet_fields();
     run_test_fused_velocity_clamps_and_flags();

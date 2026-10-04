@@ -28,6 +28,8 @@ typedef struct __attribute__((packed)) {
 #define PACKET_TYPE_TELEMETRY   0x03  // Future use
 #define PACKET_TYPE_FUSED       0x04  // EKF-fused position + velocity (TX nav module)
 #define PACKET_TYPE_HEARTBEAT   0x05  // No-fix keepalive (see HeartbeatPacket_t)
+#define PACKET_TYPE_IMU         0x06  // Inertial trace during ascent (forensics)
+#define PACKET_TYPE_LAUNCH_T0   0x07  // "T0 declared, uptime=N" - one-shot
 
 /* Heartbeat: V3 = 9 bytes (V2 = 8, V1 = 7). The transmitter sends this
  * instead of a GPS packet when it has no transmittable fix (no fix / <4
@@ -120,6 +122,34 @@ typedef struct __attribute__((packed)) {
 
 #define FUSED_PACKET_SIZE       20
 #define FUSED_PACKET_SIZE_V1    19   /* legacy layout without rocket_id   */
+
+/* LAUNCH_T0: 6 bytes - one-shot on the air at the instant detection trips,
+ * so any crash record (beacon silent) still carries a certified T0. */
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;    // PACKET_TYPE_LAUNCH_T0
+    uint8_t  rocket_id;
+    uint16_t uptime_s;       // TX uptime at T0
+    uint16_t age_ds;         // age of the newest GPS fix at T0 (deciseconds)
+} LaunchT0Packet_t;
+#define LAUNCH_T0_PACKET_SIZE   6
+
+/* IMU inertial trace: 16 bytes, interleaved with fused packets during
+ * LAUNCH/POST_LAUNCH at ~1 Hz. The missing-narrative parts of a
+ * shred-the-airframe failure mode. */
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;    // PACKET_TYPE_IMU
+    uint8_t  rocket_id;
+    uint16_t ts_ms;          // ms mod 1000
+    int16_t  accel_x_cg;     // centi-g, BNO085 linear accel
+    int16_t  accel_y_cg;
+    int16_t  accel_z_cg;
+    int16_t  gyro_x_cds;     // centi-deg/s
+    int16_t  gyro_y_cds;
+    int16_t  gyro_z_cds;
+    int16_t  peak_accel_mg;  // milli-g peak |a| since previous IMU packet
+    int16_t  temp_c10;       // BNO085 temperature * 10
+} ImuTracePacket_t;
+#define IMU_TRACE_PACKET_SIZE   20
 
 // Helper macros for encoding/decoding
 #define GPS_COORD_SCALE         10000000.0  // Scale factor for lat/lon (10^7)

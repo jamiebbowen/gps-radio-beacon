@@ -28,6 +28,8 @@ typedef struct __attribute__((packed)) {
 #define PACKET_TYPE_TELEMETRY   0x03  // Future use
 #define PACKET_TYPE_FUSED       0x04  // EKF-fused position + velocity
 #define PACKET_TYPE_HEARTBEAT   0x05  // No-fix keepalive (see HeartbeatPacket_t)
+#define PACKET_TYPE_IMU         0x06  // Inertial trace during ascent (forensics)
+#define PACKET_TYPE_LAUNCH_T0   0x07  // "T0 declared, uptime=N" - one-shot
 
 /* Heartbeat: 8 bytes. Sent instead of a GPS packet when no transmittable fix
  * exists (no fix / <4 sats), so the receiver's channel scan can lock and the
@@ -124,6 +126,37 @@ typedef struct __attribute__((packed)) {
     uint8_t  flags;          // FUSED_FLAG_*
     uint8_t  rocket_id;      // ROCKET_ID of this airframe (V2)
 } FusedPosPacket_t;
+
+/* LAUNCH_T0: 6 bytes. Sent once, the instant launch detection trips, so a
+ * flight record always starts with a crisp T0 mark regardless of what the
+ * packet cadence happened to be doing that second. */
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;    // PACKET_TYPE_LAUNCH_T0
+    uint8_t  rocket_id;
+    uint16_t uptime_s;       // TX uptime at the moment T0 was declared
+    uint16_t age_ds;         // age of the newest GPS fix at T0 (deciseconds)
+} LaunchT0Packet_t;
+#define LAUNCH_T0_PACKET_SIZE   6
+
+/* IMU inertial trace: 16 bytes, interleaved with fused packets during
+ * LAUNCH/POST_LAUNCH at ~1 Hz. Thought experiment that motivated it: a
+ * shredded-at-burnout flight like L0016 gives two position packets and
+ * nothing else; peak accel + rotation rates are the only measurable
+ * evidence of what came apart. */
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;    // PACKET_TYPE_IMU
+    uint8_t  rocket_id;
+    uint16_t ts_ms;          // ms within the last second (timestamp mod 1000)
+    int16_t  accel_x_cg;     // centi-g (1/100 g); BNO085 linear accel
+    int16_t  accel_y_cg;
+    int16_t  accel_z_cg;
+    int16_t  gyro_x_cds;     // centi-deg/s (1/100 deg/s)
+    int16_t  gyro_y_cds;
+    int16_t  gyro_z_cds;
+    int16_t  peak_accel_mg;  // milli-g: highest |a| since previous IMU packet
+    int16_t  temp_c10;       // C * 10 from BNO085 (self-heating witness)
+} ImuTracePacket_t;
+#define IMU_TRACE_PACKET_SIZE   20
 
 // Helper macros for encoding/decoding
 #define GPS_COORD_SCALE         10000000.0f  // Scale factor for lat/lon (10^7)
