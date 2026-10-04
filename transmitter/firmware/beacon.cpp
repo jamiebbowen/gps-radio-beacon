@@ -345,6 +345,31 @@ uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t syste
     return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Two-way channel: answer commands during RF-quiet gaps               */
+/* ------------------------------------------------------------------ */
+
+/* Listen-at-most 40 ms per cadence gap, only outside flight windows.
+ * PING echoes; TUNE_NEXT_CH is answered with echo=0xFF (unsupported on
+ * beacon channels set by jumper) so the RX side learns the truth. */
+void beacon_poll_commands(uint8_t in_flight)
+{
+    if (in_flight) return;   /* flight windows are TX-dense; don't listen */
+    if (!radio_is_transmitting()) {
+        uint8_t buf[32];
+        int n = radio_poll_rx(buf, sizeof(buf), 40 /*ms*/);
+        if (n >= CMD_ACK_PACKET_SIZE && buf[0] == PACKET_TYPE_CMD &&
+            buf[1] == (uint8_t)ROCKET_ID) {
+            uint8_t echo;
+            if (buf[2] == CMD_PING)        echo = buf[5];
+            else if (buf[2] == CMD_TUNE_NEXT_CH) echo = 0xFF; /* unsupported */
+            else                           echo = 0xFE;       /* unknown */
+            radio_transmit_ack((uint8_t)ROCKET_ID, buf[2], buf[3], buf[4], echo);
+            Serial.println(F("[2way] CMD answered"));
+        }
+    }
+}
+
 /**
  * Transmit the one-shot launch T0 packet. Fired by the main loop the instant
  * launch-detect confirms. Contains enough context (uptime, GPS age) that a

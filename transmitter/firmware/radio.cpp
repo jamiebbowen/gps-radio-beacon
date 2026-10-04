@@ -272,8 +272,67 @@ bool radio_is_transmitting(void) {
     if (!radio_initialized) {
         return false;
     }
-    
+
     // Check if radio is busy transmitting
     // The BUSY pin goes high during transmission
     return digitalRead(LORA_BUSY);
+}
+
+/**
+ * Poll for a short inbound LoRa packet (two-way channel scaffolding).
+ *
+ * Called on the cadence gap between our own transmissions. Uses
+ * RadioLib's receive-with-timeout, so it bounds the listen window to
+ * timeout_ms of airtime and returns instantly if nothing is on the wire.
+ * The opcode isn't message-scheduled: a packet sitting in the radio's
+ * FIFO beyond this call is read out before returning.
+ *
+ * @param out      output buffer
+ * @param max_len  buffer size; longer packets are truncated to fit
+ * @param timeout_ms max listen window
+ * @return number of bytes captured, 0 for none/timeout, <0 for error
+ */
+int radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms) {
+    if (!radio_initialized || out == NULL || max_len == 0) {
+        return 0;
+    }
+
+    if (!radio_enabled) radio_enable();
+
+    int state = radio.startReceive();
+    if (state != RADIOLIB_ERR_NONE) return -state;
+
+    /* Poll the RX_DONE / timeout IRQ flags until the window closes. */
+    uint32_t start = millis();
+    while (millis() - start < timeout_ms) {
+        uint32_t flags = radio.getIrqFlags();
+        if (flags & RADIOLIB_SX126X_IRQ_RX_DONE) {
+            if (flags & RADIOLIB_SX126X_IRQ_CRC_ERR) {  /* corrupt: ignore */
+                radio.standby();
+                return 0;
+            }
+            size_t n = radio.getPacketLength();
+            if (n > max_len) n = max_len;
+            state = radio.readData(out, n);
+            radio.standby();
+            return (state == RADIOLIB_ERR_NONE) ? (int)n : -state;
+        }
+        if (flags & RADIOLIB_SX126X_IRQ_TIMEOUT) break;
+        delay(1);
+    }
+    radio.standby();
+    return 0;
+}
+
+/** Transmit a 6-byte ACK packet as an answer to a parsed command. */
+int radio_transmit_ack(uint8_t rocket_id, uint8_t cmd_code,
+                       uint8_t seq_hi, uint8_t seq_lo, uint8_t echo) {
+    uint8_t buf[6];
+    buf[0] = 0x09; /* PACKET_TYPE_ACK */
+    buf[1] = rocket_id;
+    buf[2] = cmd_code;
+    buf[3] = seq_hi;
+    buf[4] = seq_lo;
+    buf[5] = echo;
+    return transmit_packet(buf, sizeof(buf));
 }

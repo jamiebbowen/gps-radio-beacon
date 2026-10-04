@@ -20,5 +20,6 @@ uint8_t beacon_transmit_fused_data(uint32_t system_time_seconds, uint8_t transmi
 uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast_flag);
 uint8_t beacon_transmit_launch_t0(uint32_t system_time_seconds, uint8_t transmit_fast_flag);
 uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast_flag);
+void beacon_poll_commands(uint8_t in_flight);
 
 #endif // BEACON_H

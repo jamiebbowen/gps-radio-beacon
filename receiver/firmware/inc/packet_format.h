@@ -30,6 +30,29 @@ typedef struct __attribute__((packed)) {
 #define PACKET_TYPE_HEARTBEAT   0x05  // No-fix keepalive (see HeartbeatPacket_t)
 #define PACKET_TYPE_IMU         0x06  // Inertial trace during ascent (forensics)
 #define PACKET_TYPE_LAUNCH_T0   0x07  // "T0 declared, uptime=N" - one-shot
+#define PACKET_TYPE_CMD         0x08  // RX -> TX command channel (v2 radio)
+#define PACKET_TYPE_ACK         0x09  // TX -> RX acknowledgement of command
+
+/* Two-way channel: 6-byte frames; see transmitter copy for field notes. */
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;
+    uint8_t  rocket_id;
+    uint8_t  cmd_code;
+    uint8_t  seq_hi;
+    uint8_t  seq_lo;
+    uint8_t  param;
+} CmdPacket_t;
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;
+    uint8_t  rocket_id;
+    uint8_t  cmd_code;
+    uint8_t  seq_hi;
+    uint8_t  seq_lo;
+    uint8_t  echo;
+} AckPacket_t;
+#define CMD_ACK_PACKET_SIZE   6
+#define CMD_PING              0x01
+#define CMD_TUNE_NEXT_CH      0x02
 
 /* Heartbeat: V3 = 9 bytes (V2 = 8, V1 = 7). The transmitter sends this
  * instead of a GPS packet when it has no transmittable fix (no fix / <4

@@ -18,6 +18,13 @@ int transmit_string(const char* str);
 // Radio status
 bool radio_is_transmitting(void);
 
+/* Two-way channel scaffolding (v2 radios). Bounded listen once per cadence
+ * gap; negative return = driver fault, 0 = nothing inbound this window,
+ * positive = bytes captured. */
+int  radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms);
+int  radio_transmit_ack(uint8_t rocket_id, uint8_t cmd_code,
+                        uint8_t seq_hi, uint8_t seq_lo, uint8_t echo);
+
 // Active rocket channel after backup-jumper resolution (see mpu_config.h)
 uint8_t radio_get_channel(void);
 

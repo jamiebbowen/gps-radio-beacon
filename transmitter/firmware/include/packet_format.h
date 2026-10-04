@@ -30,6 +30,8 @@ typedef struct __attribute__((packed)) {
 #define PACKET_TYPE_HEARTBEAT   0x05  // No-fix keepalive (see HeartbeatPacket_t)
 #define PACKET_TYPE_IMU         0x06  // Inertial trace during ascent (forensics)
 #define PACKET_TYPE_LAUNCH_T0   0x07  // "T0 declared, uptime=N" - one-shot
+#define PACKET_TYPE_CMD         0x08  // RX -> TX command channel (v2 radio)
+#define PACKET_TYPE_ACK         0x09  // TX -> RX acknowledgement of command
 
 /* Heartbeat: 8 bytes. Sent instead of a GPS packet when no transmittable fix
  * exists (no fix / <4 sats), so the receiver's channel scan can lock and the
@@ -157,6 +159,33 @@ typedef struct __attribute__((packed)) {
     int16_t  temp_c10;       // C * 10 from BNO085 (self-heating witness)
 } ImuTracePacket_t;
 #define IMU_TRACE_PACKET_SIZE   20
+
+/* ------------------------------------------------------------------
+ * Two-way channel (post-landing / diagnostics). Both frames are 6 bytes:
+ *   [0] type   [1] rocket_id   [2] cmd_code   [3] seq_hi   [4] seq_lo
+ *   [5] param/echo
+ * cmd_code: 0x01=PING (receiver answers with ACK echo), 0x02=TUNE_NEXT_CH
+ * (move us both to the next frequency - dissent tolerated between sites),
+ * spare values reserved for future hardware. */
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;
+    uint8_t  rocket_id;
+    uint8_t  cmd_code;
+    uint8_t  seq_hi;
+    uint8_t  seq_lo;
+    uint8_t  param;
+} CmdPacket_t;
+typedef struct __attribute__((packed)) {
+    uint8_t  packet_type;
+    uint8_t  rocket_id;
+    uint8_t  cmd_code;
+    uint8_t  seq_hi;
+    uint8_t  seq_lo;
+    uint8_t  echo;
+} AckPacket_t;
+#define CMD_ACK_PACKET_SIZE   6
+#define CMD_PING              0x01
+#define CMD_TUNE_NEXT_CH      0x02
 
 // Helper macros for encoding/decoding
 #define GPS_COORD_SCALE         10000000.0f  // Scale factor for lat/lon (10^7)

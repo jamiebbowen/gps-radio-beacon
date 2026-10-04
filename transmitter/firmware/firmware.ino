@@ -397,4 +397,16 @@ void loop() {
         last_fused_tx_ms = now_ms;
     }
 #endif
+
+    /* Two-way channel (v2 radios): only in pad/recovery phases the beacon
+     * has a real radio-quiet gap. Tune: ~1 Hz worth of short listens, so a
+     * command sequence sees multiple windows per second. */
+    {
+        static uint32_t last_listen_ms = 0;
+        if (now_ms - last_listen_ms >= 1000) {
+            last_listen_ms = now_ms;
+            beacon_poll_commands(beacon_state == BEACON_STATE_LAUNCH ||
+                                 beacon_state == BEACON_STATE_POST_LAUNCH);
+        }
+    }
 }
