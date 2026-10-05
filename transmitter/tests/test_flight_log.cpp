@@ -315,6 +315,51 @@ TEST(event_record_persists_kind_and_time)
     CHECK(flash_rec(1)->f.kind == 4);
 }
 
+TEST(event_ex_persists_code_and_value)
+{
+    reset_all();
+    flight_log_arm();
+    /* kind 5 = flight event (e.g. ANOM_BALLISTIC at -15.5 m/s),
+     * kind 8 = boot reset cause (RSTC byte) */
+    flight_log_event_ex(46000, 5, 7, -1550);
+    flight_log_event_ex(46001, 8, 0x12, 0);
+    for (uint32_t i = 2; i < RECS_PER_PAGE; i++)
+        flight_log_event(46000 + i, 6);
+    const flog_rec_t *ev = flash_rec(0);
+    CHECK(ev->f.kind == 5);
+    CHECK(ev->f.p.evt.code == 7);
+    CHECK(ev->f.p.evt.value == -1550);
+    const flog_rec_t *boot = flash_rec(1);
+    CHECK(boot->f.kind == 8);
+    CHECK(boot->f.p.evt.code == 0x12);
+    CHECK(boot->f.p.evt.value == 0);
+    /* plain markers log through event_ex with code/value zeroed */
+    const flog_rec_t *mk = flash_rec(2);
+    CHECK(mk->f.kind == 6);
+    CHECK(mk->f.p.evt.code == 0);
+    CHECK(mk->f.p.evt.value == 0);
+}
+
+TEST(fused_record_persists_position_velocity_and_flags)
+{
+    reset_all();
+    flight_log_arm();
+    for (uint32_t i = 0; i < RECS_PER_PAGE; i++)
+        flight_log_fused(47000 + i,
+                         398812345, -1048987654, 1655,
+                         1234, -321, (int16_t)-5500,
+                         0x02 | 0x04);   /* DR, IMU healthy */
+    const flog_rec_t *r0 = flash_rec(0);
+    CHECK(r0->f.kind == FLOG_KIND_FUSED);
+    CHECK(r0->f.p.fus.lat_e7 == 398812345);
+    CHECK(r0->f.p.fus.lon_e7 == -1048987654);
+    CHECK(r0->f.p.fus.alt_m == 1655);
+    CHECK(r0->f.p.fus.vn_cms == 1234);
+    CHECK(r0->f.p.fus.ve_cms == -321);
+    CHECK(r0->f.p.fus.vd_cms == -5500);
+    CHECK(r0->f.p.fus.flags == (0x02 | 0x04));
+}
+
 /* ------------------------------------------------------------------ */
 /* Capacity                                                            */
 /* ------------------------------------------------------------------ */
@@ -356,6 +401,11 @@ TEST(dump_emits_csv_for_flushed_records_only)
             flight_log_gps(1235, 398900000, -1048851712, 1655, 8, 1);
         else if (i == 2)
             flight_log_event(1236, 3);
+        else if (i == 3)
+            flight_log_event_ex(1237, 5, 9, -550);
+        else if (i == 4)
+            flight_log_fused(1238, 398812345, -1048987654, 1655,
+                             123, -45, (int16_t)-2200, 0x07);
         else
             flight_log_gps(1236 + i, 1, 1, 1, 1, 1);
     }
@@ -371,7 +421,11 @@ TEST(dump_emits_csv_for_flushed_records_only)
           != nullptr);                                      /* IMU row  */
     CHECK(strstr(Serial.log, "1235,2,398900000,-1048851712,1655,8,1")
           != nullptr);                                      /* GPS row  */
-    CHECK(strstr(Serial.log, "1236,3") != nullptr);          /* event row */
+    CHECK(strstr(Serial.log, "1236,3") != nullptr);          /* marker row */
+    CHECK(strstr(Serial.log, "1237,5,9,-550") != nullptr);    /* event+id  */
+    CHECK(strstr(Serial.log,
+                 "1238,9,398812345,-1048987654,1655,123,-45,-2200,7")
+          != nullptr);                                        /* fused row */
     CHECK(strstr(Serial.log, "7777") == nullptr);            /* unflushed */
     CHECK(strstr(Serial.log, "0x") == nullptr);
     /* exactly header + the 16 flushed records: erased space is skipped */
@@ -419,6 +473,8 @@ int main(void)
     run_page_boundary_commit_is_byte_exact();
     run_gps_record_persists_full_payload();
     run_event_record_persists_kind_and_time();
+    run_event_ex_persists_code_and_value();
+    run_fused_record_persists_position_velocity_and_flags();
     run_region_never_wraps_past_end();
     run_dump_emits_csv_for_flushed_records_only();
     run_arm_commit_reboot_notice_rearm();

@@ -338,6 +338,56 @@ class TestCalibrateRf(unittest.TestCase):
             self.assertIn("loaded 21 NAV rows", buf.getvalue())
 
 
+class TestImuRows(unittest.TestCase):
+    """IMU trace rows: beacon accel/gyro forwarded to the log in flight."""
+
+    def imu_row(self, t, peak_mg=1350, with_snr=True):
+        # <ts>,IMU,ts_ms,ax,ay,az(cg),gx,gy,gz(cds),peak_mg,temp,rssi[,snr]
+        tail = f",{-95},{-12}" if with_snr else f",{-95}"
+        return (f"{t:.2f},IMU,{int(t*1000)%1000},55,-125,980,57,-114,12,"
+                f"{peak_mg},231{tail}\n")
+
+    def test_parses_both_widths_and_reports_stats(self):
+        with tempfile.TemporaryDirectory() as td:
+            body = (HEADER + "\n"
+                    + self.imu_row(10.0, peak_mg=900, with_snr=False)  # legacy 12-field
+                    + self.imu_row(11.0, peak_mg=1700)         # new: has SNR
+                    + "12.0,IMU,junk,x,y,z\n")                 # malformed: skipped
+            log = write_log(body, Path(td))
+            imu = af.load_imu_rows(log)
+            self.assertEqual(len(imu), 2)
+            self.assertEqual(imu[0]["peak"], 900)
+            self.assertEqual(imu[0]["ax"], 55)
+            self.assertEqual(imu[1]["gx"], 57)
+            self.assertIsNone(imu[0]["snr"])          # legacy row
+            self.assertEqual(imu[1]["snr"], -12)      # new schema
+            self.assertEqual(imu[0]["rssi"], -95)
+
+    def test_analyze_prints_inertial_trace_section(self):
+        with tempfile.TemporaryDirectory() as td:
+            t = [r.split(",")[0] for r in synthetic_flight().splitlines()[1:]]
+            imu = "".join(self.imu_row(float(ts), peak_mg=1700) for ts in t[3:])
+            log = write_log(synthetic_flight() + imu, Path(td))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = af.analyze(str(log))
+            out = buf.getvalue()
+            self.assertEqual(rc, 0)
+            self.assertIn("INERTIAL TRACE", out)
+            self.assertIn("Peak accel:", out)
+            self.assertIn("1.70 g", out)
+            self.assertIn("SNR range:          -12 to -12 dB", out)
+
+    def test_analyze_without_imu_rows_omits_section(self):
+        with tempfile.TemporaryDirectory() as td:
+            log = write_log(synthetic_flight(), Path(td))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = af.analyze(str(log))
+            self.assertEqual(rc, 0)
+            self.assertNotIn("INERTIAL TRACE", buf.getvalue())
+
+
 # ── heading_residuals.py ─────────────────────────────────────────────
 
 class TestHeadingResiduals(unittest.TestCase):

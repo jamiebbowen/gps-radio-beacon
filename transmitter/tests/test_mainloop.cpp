@@ -166,6 +166,14 @@ void     flight_log_gps(uint32_t ms, int32_t, int32_t, int16_t, uint8_t, uint8_t
          { (void)ms; flog_gps_calls++; }
 void     flight_log_event(uint32_t ms, uint8_t kind)
          { (void)ms; (void)kind; flog_event_calls++; }
+static uint8_t flog_last_event_code = 0;
+static int16_t flog_last_event_value = 0;
+void     flight_log_event_ex(uint32_t ms, uint8_t kind, uint8_t code, int16_t value)
+         { (void)ms; (void)kind; flog_event_calls++;
+           flog_last_event_code = code; flog_last_event_value = value; }
+static uint32_t flog_fused_calls = 0;
+void     flight_log_fused(uint32_t ms, int32_t, int32_t, int16_t, int16_t, int16_t, int16_t, uint8_t)
+         { (void)ms; flog_fused_calls++; }
 void     flight_log_dump_serial(void) {}
 uint8_t  flog_armed_count_value(void) { return flog_armed_count; }
 uint32_t flog_gps_calls_value(void)   { return flog_gps_calls; }

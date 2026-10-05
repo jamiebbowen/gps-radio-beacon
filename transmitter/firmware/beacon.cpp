@@ -405,7 +405,12 @@ uint8_t beacon_transmit_launch_t0(uint32_t system_time_seconds, uint8_t transmit
  * Transmit an inertial trace packet. Called at ~1 Hz during the flight
  * window. Feeds from the launch-detect layer's cached linear-accel + gyro.
  * peak/reset kept here so every packet reports peak-since-previous-packet.
+ * The same value is handed to the on-chip flight log via
+ * beacon_last_imu_peak_mg() right after this call in the main loop.
  */
+static int16_t s_last_imu_peak_mg = 0;
+int16_t beacon_last_imu_peak_mg(void) { return s_last_imu_peak_mg; }
+
 uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast) {
     ImuTracePacket_t p;
     memset(&p, 0, sizeof(p));
@@ -436,6 +441,7 @@ uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast) {
     float curr_g = launch_detect_get_current_accel();
     if (curr_g > peak_g) peak_g = curr_g;
     p.peak_accel_mg = (int16_t)lroundf(peak_g * 1000.0f);
+    s_last_imu_peak_mg = p.peak_accel_mg;
     peak_g = 0.0f;
 
     if (!transmit_fast) {

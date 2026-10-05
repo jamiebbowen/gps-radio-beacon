@@ -46,10 +46,22 @@
 #define FLOG_RECORD      32u
 #define FLOG_MAGIC       0x464C4647u /* 'GFLF' - little-endian scalar   */
 
-#define FLOG_KIND_IMU     1
-#define FLOG_KIND_GPS     2
-#define FLOG_KIND_LAUNCH  3
-#define FLOG_KIND_LANDED  4
+#define FLOG_KIND_IMU           1
+#define FLOG_KIND_GPS           2
+#define FLOG_KIND_LAUNCH        3
+#define FLOG_KIND_LANDED        4
+#define FLOG_KIND_FLIGHT_EVENT  5
+#define FLOG_KIND_POST_LAUNCH   6
+#define FLOG_KIND_BATTERY_SAVE  7
+#define FLOG_KIND_BOOT          8
+#define FLOG_KIND_FUSED         9
+
+/* Fused-record health flags (kind 9 payload). Same meaning as the fused
+ * wire packet's flags, kept separate so the crash copy can't drift with
+ * future wire-format versions. */
+#define FLOG_FUS_GPS_FRESH   0x01
+#define FLOG_FUS_DR          0x02
+#define FLOG_FUS_IMU_HEALTHY 0x04
 
 typedef union {
     uint8_t  raw[FLOG_RECORD];
@@ -70,6 +82,17 @@ typedef union {
                 uint8_t  sats;
                 uint8_t  fix_q;
             } gps;                                    /* 12 B */
+            struct {
+                uint8_t  code;                        /* event id / RCAUSE */
+                uint8_t  rsv1;
+                int16_t  value;                       /* event magnitude   */
+            } evt;                                    /* 4 B, kinds 5-8    */
+            struct {
+                int32_t  lat_e7, lon_e7;              /* fused EKF snapshot */
+                int16_t  alt_m;
+                int16_t  vn_cms, ve_cms, vd_cms;
+                uint8_t  flags;
+            } fus;                                    /* 15 B, kind 9      */
         } p;
     } f;
 } flog_rec_t;
@@ -206,11 +229,37 @@ void flight_log_gps(uint32_t ms,
 
 void flight_log_event(uint32_t ms, uint8_t kind)
 {
+    flight_log_event_ex(ms, kind, 0, 0);
+}
+
+void flight_log_event_ex(uint32_t ms, uint8_t kind, uint8_t code, int16_t value)
+{
     flog_rec_t r;
     memset(&r, 0, sizeof(r));
     r.f.magic = FLOG_MAGIC;
     r.f.ms = ms;
     r.f.kind = kind;
+    r.f.p.evt.code = code;
+    r.f.p.evt.value = value;
+    flog_append_record(&r);
+}
+
+void flight_log_fused(uint32_t ms, int32_t lat_e7, int32_t lon_e7,
+                      int16_t alt_m, int16_t vn_cms, int16_t ve_cms,
+                      int16_t vd_cms, uint8_t flags)
+{
+    flog_rec_t r;
+    memset(&r, 0, sizeof(r));
+    r.f.magic = FLOG_MAGIC;
+    r.f.ms = ms;
+    r.f.kind = FLOG_KIND_FUSED;
+    r.f.p.fus.lat_e7 = lat_e7;
+    r.f.p.fus.lon_e7 = lon_e7;
+    r.f.p.fus.alt_m = alt_m;
+    r.f.p.fus.vn_cms = vn_cms;
+    r.f.p.fus.ve_cms = ve_cms;
+    r.f.p.fus.vd_cms = vd_cms;
+    r.f.p.fus.flags = flags;
     flog_append_record(&r);
 }
 
@@ -237,6 +286,18 @@ void flight_log_dump_serial(void)
             Serial.print(r->f.p.gps.alt_m);  Serial.print(',');
             Serial.print(r->f.p.gps.sats);   Serial.print(',');
             Serial.print(r->f.p.gps.fix_q);
+        } else if (r->f.kind == FLOG_KIND_FUSED) {
+            Serial.print(r->f.p.fus.lat_e7); Serial.print(',');
+            Serial.print(r->f.p.fus.lon_e7); Serial.print(',');
+            Serial.print(r->f.p.fus.alt_m);  Serial.print(',');
+            Serial.print(r->f.p.fus.vn_cms); Serial.print(',');
+            Serial.print(r->f.p.fus.ve_cms); Serial.print(',');
+            Serial.print(r->f.p.fus.vd_cms); Serial.print(',');
+            Serial.print(r->f.p.fus.flags);
+        } else if (r->f.kind == FLOG_KIND_FLIGHT_EVENT ||
+                   r->f.kind == FLOG_KIND_BOOT) {
+            Serial.print(r->f.p.evt.code);   Serial.print(',');
+            Serial.print(r->f.p.evt.value);
         }
         Serial.println();
     }

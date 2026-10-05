@@ -137,7 +137,11 @@ static struct lfs_file_config adhoc_file_cfg = {
  *    1  Timestamp (SSS.mmm since boot)   2  Type ("NAV")
  *    3  PktSrc ("GPS"/"FUS")             4-6  Beacon lat/lon/alt
  *    7  BeaconSats                       8-10 VN/VE/VD  (fused only)
- *   11  FusedAge_ds                     12  FusedFlags (hex byte)
+ *   11  FusedAge_ds                     12  FusedFlags (hex byte; for FUS
+ *        rows: bit0 fused 1=set, bit1 DR, bit2 GPS fresh, bit3 IMU healthy,
+ *        bit4 launch, bit5 landed, bit6 sensor degraded, bit7 gate reject.
+ *        For GPS rows: low nibble = beacon fix type from the raw packet
+ *        (0=no fix, 1=GPS fix, 2+ = higher-quality), bit4/bit5 as above)
  *   13-15 Base lat/lon/alt              16  Distance_km
  *   17-18 Bearing/Heading deg           19-20 RSSI dBm / SNR dB
  *   21-22 RX antenna Pitch/Roll deg     (pointing diagnostics for the
@@ -668,13 +672,16 @@ SD_Card_Status SD_Card_LogBase(const GPS_Data *base_gps)
  *
  * Schema (self-described in row; no shared NAV columns):
  *   Timestamp,IMU,ts_ms,AccelX_cg,AccelY_cg,AccelZ_cg,GyroX_cds,GyroY_cds,
- *   GyroZ_cds,PeakAccel_mg,Temp_c10,RSSI_dBm
+ *   GyroZ_cds,PeakAccel_mg,Temp_c10,RSSI_dBm,SNR_dB
  *
+ * The boost window is exactly where the noise floor rises and RSSI alone
+ * can't show it, so the flight-cadence rows carry SNR alongside RSSI.
  * The follow-the-shredder story this exists for needs inertial values at
  * flight cadence, so this hits the SD log unconditionally once we've heard
  * the beacon (same lazy-file via the ensure hook around IMU packets).
  */
-SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, int16_t rssi)
+SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, int16_t rssi,
+                                   int8_t snr)
 {
     if (!sd_initialized || imu == NULL) return SD_CARD_ERROR;
     if (!log_file_open) return SD_CARD_ERROR;
@@ -682,11 +689,11 @@ SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, int16_t rssi)
     char ts[32];
     SD_Card_GetTimestamp(ts, sizeof(ts));
     snprintf(log_buffer, sizeof(log_buffer),
-             "%s,IMU,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+             "%s,IMU,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
              ts, (unsigned)imu->ts_ms,
              (int)imu->accel_x_cg, (int)imu->accel_y_cg, (int)imu->accel_z_cg,
              (int)imu->gyro_x_cds, (int)imu->gyro_y_cds, (int)imu->gyro_z_cds,
-             (int)imu->peak_accel_mg, (int)imu->temp_c10, (int)rssi);
+             (int)imu->peak_accel_mg, (int)imu->temp_c10, (int)rssi, (int)snr);
     return SD_Card_WriteLogEntry(log_buffer);
 }
 
@@ -772,8 +779,12 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
             /* 0x80 = TX-side EKF gate rejected a fix since last fused packet */
             if (beacon_gps->fused_gate_reject)     fused_flags |= 0x80;
             if (beacon_gps->launch_detected)   fused_flags |= 0x10;
-        } else if (beacon_gps->launch_detected) {
-            fused_flags = 0x10;
+        } else {
+            /* Raw GPS row: low nibble carries the beacon's claimed fix type
+             * (the raw packet's flags bits 3-0) so post-flight descent-phase
+             * positions can be weighted by what the beacon said it had. */
+            fused_flags = beacon_gps->fix & 0x0F;
+            if (beacon_gps->launch_detected) fused_flags |= 0x10;
         }
         /* Landed (0x20) applies to both streams; kept out of the branches
          * so a landed raw-GPS row logs it even if the launch bit cleared. */

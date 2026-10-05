@@ -341,7 +341,8 @@ void loop() {
         uint8_t ev = flight_events_feed(&ev_in, now_evt_ms, &ev_value);
         if (ev != FLIGHT_EVENT_NONE) {
             beacon_queue_flight_event(ev, ev_value, FLIGHT_EVENT_REPEATS);
-            flight_log_event(now_evt_ms, 5 /* flight event / anomaly */);
+            flight_log_event_ex(now_evt_ms, 5 /* flight event / anomaly */,
+                                ev, ev_value);
             if (FLIGHT_EVENT_IS_ANOMALY(ev)) {
                 last_anom_announce_ms = now_evt_ms;
             }
@@ -378,6 +379,14 @@ void loop() {
         beacon_transmit_launch_t0(system_time_seconds, /*fast=*/1);
         flight_log_arm();
         flight_log_event(millis(), 3 /* launch */);
+        /* Reboot evidence at the top of the new flight's record: a brown-out
+         * or watchdog reboot earlier this boot is otherwise invisible (the
+         * flash was erased with this arm; the RF heartbeat may never be
+         * heard). RCAUSE byte rides the event record's code slot. */
+        if (g_boot_rcause) {
+            flight_log_event_ex(millis(), 8 /* boot reset cause */,
+                                (uint8_t)(g_boot_rcause & 0xFF), 0);
+        }
     }
     
     // TURN_ON boot grace -> quiet pad once the operator-feedback minute ends.
@@ -396,6 +405,7 @@ void loop() {
             post_launch_start_time = system_time_seconds;
             transmit_beacon_flag = 1;
             transmit_fast_flag = 0;
+            flight_log_event(millis(), 6 /* post-launch transition */);
 
             // Disable radio
             radio_disable(); 
@@ -409,6 +419,9 @@ void loop() {
             beacon_state = BEACON_STATE_BATTERY_SAVE;
             transmit_beacon_flag = 1;
             transmit_fast_flag = 0;
+            /* Cadence-timeout path only: the landing-detect path already
+             * marks this transition with the kind-4 landed record. */
+            flight_log_event(millis(), 7 /* battery-save transition */);
         }
     }
     
@@ -434,6 +447,7 @@ void loop() {
                 float ax, ay, az, gx, gy, gz;
                 launch_detect_get_accel_xyz(&ax, &ay, &az);
                 launch_detect_get_gyro_rads(&gx, &gy, &gz);
+                /* Same peak as the RF packet just transmitted. */
                 flight_log_imu(millis(),
                                (int16_t)lroundf(ax * 100.0f),
                                (int16_t)lroundf(ay * 100.0f),
@@ -441,7 +455,28 @@ void loop() {
                                (int16_t)lroundf(gx * 5729.58f),
                                (int16_t)lroundf(gy * 5729.58f),
                                (int16_t)lroundf(gz * 5729.58f),
-                               0);
+                               beacon_last_imu_peak_mg());
+            }
+
+            /* GPS-hole forensics: when the fix goes stale the fused EKF
+             * stream is the only position+velocity the beacon still has.
+             * Keep a snapshot in the wreck copy, gated on staleness so
+             * region space goes to the moments the raw stream is silent. */
+            {
+                NavFused_t fz;
+                nav_get_fused(&fz);
+                if (fz.valid && !fz.gps_fresh) {
+                    flight_log_fused(millis(),
+                                     (int32_t)lroundf(fz.lat_deg * 10000000.0f),
+                                     (int32_t)lroundf(fz.lon_deg * 10000000.0f),
+                                     (int16_t)lroundf(fz.alt_m),
+                                     (int16_t)lroundf(fz.v_n * 100.0f),
+                                     (int16_t)lroundf(fz.v_e * 100.0f),
+                                     (int16_t)lroundf(fz.v_d * 100.0f),
+                                     (uint8_t)((fz.gps_fresh      ? 0x01 : 0) |
+                                               (fz.dead_reckoning ? 0x02 : 0) |
+                                               (fz.imu_healthy    ? 0x04 : 0)));
+                }
             }
 
             const GPSCoordinates_t* c = gps_get_current_coordinates();

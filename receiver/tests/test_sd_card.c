@@ -331,6 +331,17 @@ TEST(test_all_log_row_formats)
     CHECK(SD_Card_LogNavigation(&fused, &base, 2.5f, 180.0f, 90.0f,
                                 12.0f, -4.0f, -88, 8) == SD_CARD_OK);
 
+    /* Inertial-trace row: in-flight forensics at flight cadence. RSSI and
+     * SNR both ride the row - during boost the noise floor rises and RSSI
+     * alone can't show it. */
+    ImuTracePacket_t imu; memset(&imu, 0, sizeof(imu));
+    imu.ts_ms = 512;
+    imu.accel_x_cg = 55;  imu.accel_y_cg = -125; imu.accel_z_cg = 980;
+    imu.gyro_x_cds = 57;  imu.gyro_y_cds = -114; imu.gyro_z_cds = 12;
+    imu.peak_accel_mg = 1350; imu.temp_c10 = 231;
+    CHECK(SD_Card_LogImuTrace(&imu, -95, -12) == SD_CARD_OK);
+    CHECK(SD_Card_LogImuTrace(NULL, 0, 0) == SD_CARD_ERROR);
+
     /* BASE (operator-position walk forensics) row */
     base.hdop = 0.9f;
     CHECK(SD_Card_LogBase(&base) == SD_CARD_OK);
@@ -347,8 +358,42 @@ TEST(test_all_log_row_formats)
     CHECK(strstr(big, "ERROR,test error") != NULL);
     CHECK(strstr(big, "NAV,FUS,39.9") != NULL);
     CHECK(strstr(big, "12.50,-3.25,40.00") != NULL);      /* velocities */
+    CHECK(strstr(big, ",IMU,512,55,-125,980,57,-114,12,1350,231,-95,-12\n")
+          != NULL);                                       /* full IMU row */
     CHECK(strstr(big, ",BASE,") != NULL);
     CHECK(strstr(big, "1650.0,0,0.9") != NULL);   /* alt, sats, hdop */
+}
+
+TEST(test_raw_nav_row_flags_carry_beacon_fix_type)
+{
+    /* Raw (non-fused) NAV rows put the beacon's claimed fix type in the
+     * FusedFlags low nibble so post-flight rows can be weighted by it. */
+    wipe_card();
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+    CHECK(SD_Card_EnsureLogFile() == SD_CARD_OK);
+    Test_SetTick(3000);
+
+    GPS_Data beacon; memset(&beacon, 0, sizeof(beacon));
+    beacon.latitude = 39.5f; beacon.longitude = -105.2f; beacon.altitude = 900.0f;
+    beacon.fix = 1;                       /* beacon claims a GPS fix */
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 0, 0, 0, 0, 0, -90, 5) == SD_CARD_OK);
+
+    /* Same row with launch + landed set: nibble survives both flags */
+    beacon.launch_detected = 1;
+    beacon.fused_landed = 1;
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 0, 0, 0, 0, 0, -90, 5) == SD_CARD_OK);
+
+    /* No-fix beacon: nibble stays 0 */
+    GPS_Data nofix = beacon;
+    nofix.fix = 0;
+    CHECK(SD_Card_LogNavigation(&nofix, NULL, 0, 0, 0, 0, 0, -90, 5) == SD_CARD_OK);
+
+    char big[2048];
+    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
+    CHECK(strstr(big, "0.00,0.00,0.00,0,01,") != NULL);   /* fix only     */
+    CHECK(strstr(big, "0.00,0.00,0.00,0,31,") != NULL);   /* fix|launch|landed */
+    CHECK(strstr(big, "0.00,0.00,0.00,0,30,") != NULL);   /* no fix, both flags */
 }
 
 TEST(test_apis_reject_when_uninitialized)
@@ -842,6 +887,7 @@ int main(void)
     run_test_remount_preserves_files();
     run_test_log_file_lazy_creation_and_sequencing();
     run_test_all_log_row_formats();
+    run_test_raw_nav_row_flags_carry_beacon_fix_type();
     run_test_apis_reject_when_uninitialized();
     run_test_beacon_persistence_validation();
     run_test_compass_cal_persistence();

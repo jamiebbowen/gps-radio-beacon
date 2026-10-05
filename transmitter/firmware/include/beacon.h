@@ -23,6 +23,11 @@ uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t syste
                                   uint32_t min_interval_s, uint8_t transmit_fast_flag);
 uint8_t beacon_transmit_launch_t0(uint32_t system_time_seconds, uint8_t transmit_fast_flag);
 uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast_flag);
+/* Peak accel (mg) carried by the most recent IMU trace packet. The flight
+ * log records its IMU sample immediately after beacon_transmit_imu_trace,
+ * so this getter puts the SAME peak on the crash-survivable copy as went
+ * over the air (previously the flash record's peak was hardwired to 0). */
+int16_t beacon_last_imu_peak_mg(void);
 void beacon_poll_commands(uint8_t in_flight);
 
 /* Certified flight events (PACKET_TYPE_FLIGHT_EVENT). Queue an edge with

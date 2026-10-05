@@ -99,6 +99,41 @@ def load_nav_rows(path):
     return rows, base
 
 
+def load_imu_rows(path):
+    """Parse IMU rows (beacon inertial-trace packets forwarded to the log).
+
+    Schema (self-described in row, not the NAV header):
+        <ts>,IMU,ts_ms,ax_cg,ay_cg,az_cg,gx_cds,gy_cds,gz_cds,
+        peak_mg,temp_c10,rssi[,snr]
+    The SNR column was added later; both widths parse. IMU rows are
+    narrower than the NAV header, so DictReader right-pads with None -
+    take the leading non-None fields positionally. Empty list when the
+    flight predates the IMU wire format.
+    """
+    out = []
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f):
+            if r.get("Type") != "IMU":
+                continue
+            try:
+                flds = [v for v in r.values() if v is not None]
+                row = {
+                    "t":    float(flds[0]),
+                    "ax":   int(flds[3]),  "ay":   int(flds[4]),
+                    "az":   int(flds[5]),
+                    "gx":   int(flds[6]),  "gy":   int(flds[7]),
+                    "gz":   int(flds[8]),
+                    "peak": int(flds[9]),
+                    "rssi": int(flds[11]),
+                    "snr":  int(flds[12]) if len(flds) > 12 else None,
+                }
+            except (IndexError, TypeError, ValueError):
+                continue
+            out.append(row)
+    out.sort(key=lambda r: r["t"])
+    return out
+
+
 def central_diff(rows, key):
     """Central-difference derivative of <key> w.r.t. time, padded at ends."""
     n = len(rows)
@@ -649,6 +684,30 @@ def analyze(log_path, sensitivity_dbm=DEFAULT_SENSITIVITY_DBM,
     print(f"  Last position:    {rows[-1]['lat']:.6f}, {rows[-1]['lon']:.6f}")
     print(f"  Landing offset:   {rows[-1]['r_pad_m']:7.0f} m from pad")
     print()
+
+    # Inertial trace: the beacon's own accel/gyro at flight cadence. This
+    # is the shred-forensics stream - peaks here are packet-window peaks,
+    # not the GPS sampling-rate underestimate the velocity section warns
+    # about. Absent in logs from pre-IMU-wire-format firmware.
+    imu_rows = load_imu_rows(log_path)
+    if imu_rows:
+        pk = max(imu_rows, key=lambda r: r["peak"])
+        gy = max(imu_rows,
+                 key=lambda r: r["gx"] ** 2 + r["gy"] ** 2 + r["gz"] ** 2)
+        print("--- INERTIAL TRACE  (beacon IMU @ flight cadence) ---")
+        print(f"  Samples:            {len(imu_rows)}")
+        print(f"  Peak accel:         {pk['peak'] / 1000.0:7.2f} g  "
+              f"(peak per packet window) at log T+{pk['t']:.1f}s")
+        print(f"  Max gyro magnitude: {math.sqrt(gy['gx'] ** 2 + gy['gy'] ** 2 + gy['gz'] ** 2) / 100.0:7.0f} deg/s  "
+              f"at log T+{gy['t']:.1f}s")
+        print(f"  RSSI range:         {min(r['rssi'] for r in imu_rows)} to "
+              f"{max(r['rssi'] for r in imu_rows)} dBm")
+        snrs = [r["snr"] for r in imu_rows if r["snr"] is not None]
+        if snrs:
+            print(f"  SNR range:          {min(snrs)} to {max(snrs)} dB  "
+                  f"(boost-window noise floor, not on older rows)")
+        print()
+
     print("--- RF LINK ---")
     print(f"  Pre-launch cadence:  {pre_mean:4.2f}s "
           f"(min {pre_min:.2f}, max {pre_max:.2f})")

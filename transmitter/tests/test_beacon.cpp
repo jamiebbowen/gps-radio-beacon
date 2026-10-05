@@ -581,6 +581,9 @@ TEST(test_imu_trace_packet_contents)
     CHECK(im->gyro_x_cds  == 57);                     /* 0.01 rad/s */
     CHECK(im->gyro_y_cds  == -115);                   /* -0.02 rad/s */
     CHECK(im->peak_accel_mg == 1350);
+    /* The flash flight log reads the same peak via this getter right after
+     * transmit, both copies of the peak must agree. */
+    CHECK(beacon_last_imu_peak_mg() == im->peak_accel_mg);
 
     /* Peak resets after transmit; next one captures fresh only */
     fake_total_accel = 0.5f;
@@ -588,6 +591,7 @@ TEST(test_imu_trace_packet_contents)
     CHECK(beacon_transmit_imu_trace(0) == 1);
     im = (const ImuTracePacket_t *)tx_buf;
     CHECK(im->peak_accel_mg == 500);
+    CHECK(beacon_last_imu_peak_mg() == 500);
 }
 
 /* ------------------------------------------------------------------ */

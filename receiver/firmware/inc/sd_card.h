@@ -178,7 +178,8 @@ SD_Card_Status SD_Card_LogBase(const GPS_Data *base_gps);
  * @brief Log one inertial-trace packet as an IMU row (flight forensics)
  * @retval SD_CARD_OK even when there's no log file yet (dropped quietly)
  */
-SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, int16_t rssi);
+SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, int16_t rssi,
+                                   int8_t snr);
 
 /**
  * @brief Save last known beacon location to BEACON.TXT for persistence across power cycles
