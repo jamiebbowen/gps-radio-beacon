@@ -23,7 +23,8 @@ BINS     := $(BUILD)/test_ekf $(BUILD)/test_nmea_fields $(BUILD)/test_beacon \
             $(BUILD)/test_launch_detect $(BUILD)/test_uart \
             $(BUILD)/test_flight_profile $(BUILD)/test_flight_cadence \
             $(BUILD)/test_flight_events $(BUILD)/test_flight_maxima \
-            $(BUILD)/test_airlink_roundtrip $(BUILD)/test_mainloop
+            $(BUILD)/test_airlink_roundtrip $(BUILD)/test_mainloop \
+            $(BUILD)/test_flight_log
 
 .PHONY: all test coverage clean
 
@@ -120,6 +121,12 @@ $(BUILD)/test_mainloop: test_mainloop.cpp ../firmware/flight_cadence.cpp \
 	    ../firmware/flight_cadence.cpp ../firmware/flight_events.cpp \
 	    ../firmware/flight_maxima.cpp $(LDFLAGS)
 
+# On-chip flight recorder: file #included by the test; the NVMCTRL register
+# block and the FLOG_BASE flash region are faked in the test file.
+$(BUILD)/test_flight_log: test_flight_log.cpp ../firmware/flight_log.cpp \
+                          stubs/Arduino.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
+
 test: $(BINS)
 	@rc=0; for b in $(BINS); do \
 	    echo "== $$b =="; ./$$b || rc=1; \
@@ -144,6 +151,8 @@ coverage: clean $(BINS)
 	    | grep -A1 "File.*firmware/launch_detect.cpp"
 	@gcov -o $(BUILD) $(BUILD)/test_uart.gcno 2>/dev/null \
 	    | grep -A1 "File.*firmware/uart.cpp"
+	@gcov -o $(BUILD) $(BUILD)/test_flight_log.gcno 2>/dev/null \
+	    | grep -A1 "File.*firmware/flight_log.cpp"
 	@mv -f *.gcov $(BUILD)/ 2>/dev/null || true
 
 clean:

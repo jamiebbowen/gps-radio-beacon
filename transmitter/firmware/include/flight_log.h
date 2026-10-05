@@ -11,12 +11,13 @@
  * beacon back (and therefore its radio-packed telemetry) - this log is the
  * copy a "good summer" would hand you on a post-crash NAND dump.
  *
- * Format: fixed 16-byte records, all little-endian:
+ * Format: fixed 32-byte records, all little-endian:
  *   u32 magic 'FLOG'      (0x4C464C46 = "FLF" then a kind byte)
  *   u32 ms since TX boot
  *   u8  kind (1=imu, 2=gps, 3=launch marker, 4=landed marker)
  *   u8  reserved[3]
- *   payload x8 (kind-dependent)
+ *   payload x20 (kind-dependent: 7x i16 accel/gyro/peak for IMU,
+ *                lat_e7/lon_e7/alt/sats/fix for GPS)
  *
  * Erase policy: full-region erase at next launch. The space spans twelve
  * 16KB erase rows; that takes NVMCTL row-erase time per row (~20 ms each,

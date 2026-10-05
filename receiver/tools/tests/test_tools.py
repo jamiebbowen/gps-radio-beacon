@@ -25,6 +25,7 @@ sys.path.insert(0, str(TOOLS_DIR))
 
 import analyze_flight as af  # noqa: E402
 import calibrate_rf as crf  # noqa: E402
+import heading_residuals as hres  # noqa: E402
 
 
 # ── Synthetic-log builders ────────────────────────────────────────────
@@ -335,6 +336,87 @@ class TestCalibrateRf(unittest.TestCase):
                 sys.argv = argv
             self.assertEqual(rc, 0)
             self.assertIn("loaded 21 NAV rows", buf.getvalue())
+
+
+# ── heading_residuals.py ─────────────────────────────────────────────
+
+class TestHeadingResiduals(unittest.TestCase):
+    """Arrow-bias diagnostic: residual = wrap180(heading - bearing)."""
+
+    def test_wrap180_boundaries(self):
+        self.assertEqual(hres.wrap180(0.0), 0.0)
+        self.assertEqual(hres.wrap180(180.0), 180.0)
+        self.assertEqual(hres.wrap180(-180.0), -180.0)
+        self.assertEqual(hres.wrap180(181.0), -179.0)
+        self.assertEqual(hres.wrap180(-181.0), 179.0)
+        self.assertEqual(hres.wrap180(360.0), 0.0)
+        self.assertEqual(hres.wrap180(359.0), -1.0)
+
+    def _walk_log(self, bearing, heading, dist_m=50.0):
+        """One NAV row where the operator faces the beacon: Bearing_deg is
+        truth from the geometry, Heading_deg is what the arrow showed."""
+        return (f"1.0,NAV,L,45.0010,-75.0000,100.0,9,"
+                f"45.0000,-75.0000,100.0,{dist_m/1000.0:.4f},"
+                f"{bearing},{heading},0,0,0,0,-80,8\n")
+
+    def _run_main(self, path):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = hres.main(["heading_residuals.py", str(path)])
+        return rc, buf.getvalue()
+
+    def test_median_bias_is_reported(self):
+        """A constant +12 deg mounting bias survives wrapping and medians."""
+        with tempfile.TemporaryDirectory() as td:
+            body = HEADER + "\n" + "".join(
+                self._walk_log(b, b + 12.0) for b in (10.0, 90.0, 175.0, 350.0)
+            )
+            log = write_log(body, Path(td))
+            rc, out = self._run_main(log)
+            self.assertEqual(rc, 0)
+            self.assertIn("Samples:         4", out)
+            self.assertIn("Median residual: +12.0 deg", out)
+            self.assertIn("Mean residual:   +12.0 deg", out)
+
+    def test_negative_angles_and_malformed_rows_are_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            body = HEADER + "\n" + "".join([
+                self._walk_log(45.0, 50.0),                # keep
+                self._walk_log(45.0, -1.0),                # bad heading: skip
+                self._walk_log(-5.0, 100.0),               # bad bearing: skip
+                "2.0,NAV,L,45.0,-75.0,100.0,9,45.0,-75.0,100.0,0.05,"
+                "junk,junk,0,0,0,0,-80,8\n",                # unparseable: skip
+                "3.0,STAT,L,ignored\n",                     # non-NAV: skip
+            ])
+            log = write_log(body, Path(td))
+            rc, out = self._run_main(log)
+            self.assertEqual(rc, 0)
+            self.assertIn("Samples:         1", out)
+            self.assertIn("Median residual: +5.0 deg", out)
+
+    def test_wraparound_residuals_median_near_zero(self):
+        """Residuals on both sides of ±180 must not average out to nonsense:
+        headings 358 vs bearings 2 and 4 are small negative residuals."""
+        with tempfile.TemporaryDirectory() as td:
+            body = HEADER + "\n" + "".join([
+                self._walk_log(2.0, 358.0 + 360.0 - 360.0),  # residual -4
+                self._walk_log(4.0, 0.0),                    # residual -4
+                self._walk_log(359.0, 355.0),                # residual -4
+            ])
+            log = write_log(body, Path(td))
+            rc, out = self._run_main(log)
+            self.assertEqual(rc, 0)
+            self.assertIn("Median residual: -4.0 deg", out)
+
+    def test_no_qualified_rows_returns_one(self):
+        with tempfile.TemporaryDirectory() as td:
+            log = write_log(HEADER + "\n3.0,STAT,L,ignored\n", Path(td))
+            rc, out = self._run_main(log)
+            self.assertEqual(rc, 1)
+            self.assertIn("No NAV rows", out)
+
+    def test_wrong_arg_count_returns_two(self):
+        self.assertEqual(hres.main(["heading_residuals.py"]), 2)
 
 
 if __name__ == "__main__":

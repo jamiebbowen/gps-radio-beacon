@@ -8,10 +8,13 @@
  * reads over the debug UART.
  *
  * Memory model: a flat append-only log at the back of the 512 KB on-chip
- * flash, laid out as 16-byte fixed records (the same 16-byte stride the
- * card's LittleFS rows use for IMU). Pages are written when full
+ * flash, laid out as 32-byte fixed records. Pages are written when full
  * (page-register buffer), so a power loss mid-write costs at most the
- * current page.
+ * current page. The record layout is a PER-KIND payload union: the header
+ * (magic/ms/kind) plus the largest payload must fit inside FLOG_RECORD
+ * bytes - flog_append_record only persists FLOG_RECORD per append, and the
+ * host test static-asserts sizeof(flog_rec_t) == FLOG_RECORD so the
+ * struct can't silently outgrow the write stride again.
  */
 
 #include "include/flight_log.h"
@@ -27,12 +30,20 @@
  * If the sketch ever approaches this base the linker's build output and
  * the arm-time delete get attention.
  * ===================================================================== */
+/* FLOG_BASE is overridable so host tests can redirect the log region at a
+ * real buffer (transmitter/tests/test_flight_log.cpp); on target it is the
+ * fixed 0x00040000 carve-up above. */
+#ifndef FLOG_BASE
 #define FLOG_BASE        0x00040000u
+#endif
+#ifndef FLOG_BYTES
 #define FLOG_BYTES       (256u * 1024u)
+#endif
 #define FLOG_PAGE        512u        /* SAMD51 NVM page */
 #define FLOG_ROW         8192u       /* erase granularity (16 pages; SAMD51
                                         rev B calls this 'Erase Block') */
-#define FLOG_RECORD      16u
+/* 16 records per 512 B page; 8192 records in the 256 KB region. */
+#define FLOG_RECORD      32u
 #define FLOG_MAGIC       0x464C4647u /* 'GFLF' - little-endian scalar   */
 
 #define FLOG_KIND_IMU     1
@@ -47,13 +58,19 @@ typedef union {
         uint32_t ms;
         uint8_t  kind;
         uint8_t  rsv[3];
-        int16_t  a_x_cg, a_y_cg, a_z_cg;
-        int16_t  g_x_cds, g_y_cds, g_z_cds;   /* IMU */
-        int32_t  lat_e7, lon_e7;              /* GPS (reuses a/g slots) */
-        int16_t  alt_m;
-        uint8_t  sats;
-        uint8_t  fix_q;
-        int16_t  peak_mg;
+        union {
+            struct {
+                int16_t  a_x_cg, a_y_cg, a_z_cg;
+                int16_t  g_x_cds, g_y_cds, g_z_cds;   /* IMU */
+                int16_t  peak_mg;
+            } imu;                                    /* 14 B */
+            struct {
+                int32_t  lat_e7, lon_e7;              /* GPS */
+                int16_t  alt_m;
+                uint8_t  sats;
+                uint8_t  fix_q;
+            } gps;                                    /* 12 B */
+        } p;
     } f;
 } flog_rec_t;
 
@@ -164,9 +181,9 @@ void flight_log_imu(uint32_t ms,
     r.f.magic = FLOG_MAGIC;
     r.f.ms = ms;
     r.f.kind = FLOG_KIND_IMU;
-    r.f.a_x_cg = ax_cg; r.f.a_y_cg = ay_cg; r.f.a_z_cg = az_cg;
-    r.f.g_x_cds = gx_cds; r.f.g_y_cds = gy_cds; r.f.g_z_cds = gz_cds;
-    r.f.peak_mg = peak_mg;
+    r.f.p.imu.a_x_cg = ax_cg; r.f.p.imu.a_y_cg = ay_cg; r.f.p.imu.a_z_cg = az_cg;
+    r.f.p.imu.g_x_cds = gx_cds; r.f.p.imu.g_y_cds = gy_cds; r.f.p.imu.g_z_cds = gz_cds;
+    r.f.p.imu.peak_mg = peak_mg;
     flog_append_record(&r);
 }
 
@@ -179,11 +196,11 @@ void flight_log_gps(uint32_t ms,
     r.f.magic = FLOG_MAGIC;
     r.f.ms = ms;
     r.f.kind = FLOG_KIND_GPS;
-    r.f.lat_e7 = lat_e7;
-    r.f.lon_e7 = lon_e7;
-    r.f.alt_m = alt_m;
-    r.f.sats = sats;
-    r.f.fix_q = fix_q;
+    r.f.p.gps.lat_e7 = lat_e7;
+    r.f.p.gps.lon_e7 = lon_e7;
+    r.f.p.gps.alt_m = alt_m;
+    r.f.p.gps.sats = sats;
+    r.f.p.gps.fix_q = fix_q;
     flog_append_record(&r);
 }
 
@@ -207,19 +224,19 @@ void flight_log_dump_serial(void)
         Serial.print(r->f.ms);         Serial.print(',');
         Serial.print(r->f.kind);       Serial.print(',');
         if (r->f.kind == FLOG_KIND_IMU) {
-            Serial.print(r->f.a_x_cg); Serial.print(',');
-            Serial.print(r->f.a_y_cg); Serial.print(',');
-            Serial.print(r->f.a_z_cg); Serial.print(',');
-            Serial.print(r->f.g_x_cds);Serial.print(',');
-            Serial.print(r->f.g_y_cds);Serial.print(',');
-            Serial.print(r->f.g_z_cds);Serial.print(',');
-            Serial.print(r->f.peak_mg);
+            Serial.print(r->f.p.imu.a_x_cg); Serial.print(',');
+            Serial.print(r->f.p.imu.a_y_cg); Serial.print(',');
+            Serial.print(r->f.p.imu.a_z_cg); Serial.print(',');
+            Serial.print(r->f.p.imu.g_x_cds);Serial.print(',');
+            Serial.print(r->f.p.imu.g_y_cds);Serial.print(',');
+            Serial.print(r->f.p.imu.g_z_cds);Serial.print(',');
+            Serial.print(r->f.p.imu.peak_mg);
         } else if (r->f.kind == FLOG_KIND_GPS) {
-            Serial.print(r->f.lat_e7); Serial.print(',');
-            Serial.print(r->f.lon_e7); Serial.print(',');
-            Serial.print(r->f.alt_m);  Serial.print(',');
-            Serial.print(r->f.sats);   Serial.print(',');
-            Serial.print(r->f.fix_q);
+            Serial.print(r->f.p.gps.lat_e7); Serial.print(',');
+            Serial.print(r->f.p.gps.lon_e7); Serial.print(',');
+            Serial.print(r->f.p.gps.alt_m);  Serial.print(',');
+            Serial.print(r->f.p.gps.sats);   Serial.print(',');
+            Serial.print(r->f.p.gps.fix_q);
         }
         Serial.println();
     }
