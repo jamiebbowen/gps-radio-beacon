@@ -92,18 +92,22 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
     /* NVIC enabled after successful RX entry at the end of LoRa_Init */
     
-    /* NOTE: the module's TXEN pin is NOT connected on this board, and its
-     * former GPIO assignment (PB10) is the mode button. Do not configure or
-     * drive it here - the SX1268 controls the RF switch via DIO2 (automatic
-     * mode) plus the wired RXEN line below. */
-    
-    /* Configure RXEN pin (RF switch RX enable) */
-    GPIO_InitStruct.Pin = LORA_RXEN_PIN;
+    /* Configure RF switch control pins (v2.0: BOTH manually driven).
+     * RXEN (PA9) and TXEN (PA10) both start LOW = antenna isolated. DIO2
+     * (PA15) is input-only and never driven - it merely observes the SX1268
+     * DIO2 line for possible future use as a second IRQ source. */
+    GPIO_InitStruct.Pin = LORA_RXEN_PIN | LORA_TXEN_PIN;
     GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(LORA_RXEN_PORT, &GPIO_InitStruct);
-    HAL_GPIO_WritePin(LORA_RXEN_PORT, LORA_RXEN_PIN, GPIO_PIN_RESET);  // RXEN=0 initially
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+    HAL_GPIO_WritePin(LORA_RXEN_PORT, LORA_RXEN_PIN, GPIO_PIN_RESET);  // RXEN=0
+    HAL_GPIO_WritePin(LORA_TXEN_PORT, LORA_TXEN_PIN, GPIO_PIN_RESET);  // TXEN=0
+
+    GPIO_InitStruct.Pin = LORA_DIO2_PIN;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+    HAL_GPIO_Init(LORA_DIO2_PORT, &GPIO_InitStruct);
     
     /* Reset the module */
     LoRa_Reset();
@@ -300,9 +304,13 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     }
     HAL_Delay(50);  // Wait for IRQ config to complete
     
-    /* Configure DIO2 as RF switch control - AUTOMATIC mode */
-    /* The SX1268 will control TXEN/RXEN automatically via DIO2 */
-    uint8_t dio2_params[1] = {0x00};  // Enable DIO2 as RF switch (automatic)
+    /* DIO2 mode: 0x00 = DIO2 available as plain IRQ line; the RF switch is
+     * NOT driven via DIO2. (The old comment here claimed "automatic mode" but
+     * the parameter for that is 0x01 - the code never actually enabled it.
+     * With TXEN now wired to PA10 and driven manually, 0x00 is the correct
+     * and contention-free choice; EByte documents TXEN as MCU-or-DIO2, never
+     * both at once.) */
+    uint8_t dio2_params[1] = {0x00};  // DIO2 = IRQ configuration (switch NOT auto-driven)
     if (LoRa_SendCommand(SX1268_CMD_SET_RFSWITCHMODE, dio2_params, 1) != LORA_OK) {
         return 0xC8;  // DIO2 RF switch config failed
     }
@@ -328,7 +336,7 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     LoRa_SendCommand(SX1268_CMD_CLR_IRQSTATUS, clear_irq, 2);
     HAL_Delay(10);
     
-    /* Manual RF switch control - set to RX mode (TXEN not connected) */
+    /* Manual RF switch control - set to RX mode (TXEN stays low) */
     HAL_GPIO_WritePin(LORA_RXEN_PORT, LORA_RXEN_PIN, GPIO_PIN_SET);    // RXEN=1 (RX mode!)
     HAL_Delay(20);  // Let RF switch settle
     
@@ -726,10 +734,11 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
     /* Set standby mode */
     LoRa_SetStandbyMode();
     
-    /* Drop RXEN before transmitting so the PA output is not routed into the
-     * LNA path. TXEN is not connected; the SX1268 drives the switch via DIO2
-     * (automatic mode configured in init). */
+    /* Steering the RF switch manually (v2.0): RXEN drops FIRST so the PA
+     * output is never routed into the LNA path, then TXEN rises to route
+     * PA -> antenna for the duration of the SetTx. */
     HAL_GPIO_WritePin(LORA_RXEN_PORT, LORA_RXEN_PIN, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(LORA_TXEN_PORT, LORA_TXEN_PIN, GPIO_PIN_SET);
     
     /* Write data to buffer */
     if (LoRa_WriteBuffer(0, data, length) == LORA_OK) {
@@ -774,6 +783,8 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
         0x00    // IQ standard
     };
     LoRa_SendCommand(SX1268_CMD_SET_PACKETPARAMS, rx_pkt_params, 6);
+    /* TXEN down first, then RXEN up: never both high simultaneously. */
+    HAL_GPIO_WritePin(LORA_TXEN_PORT, LORA_TXEN_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(LORA_RXEN_PORT, LORA_RXEN_PIN, GPIO_PIN_SET);
     LoRa_SetReceiveMode();
     

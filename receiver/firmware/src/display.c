@@ -1,232 +1,159 @@
 /**
  * @file display.c
- * @brief Display driver implementation for SSD1309 OLED
+ * @brief SHARP Memory LCD driver (Adafruit 3502, 168x144) over shared SPI1
+ *
+ * Replaces the v1.x SSD1309 I2C driver; same public API (display.h) so all
+ * display_modes pages work unchanged on the larger canvas (they simply use
+ * the top-left 128x64 region until layouts catch up).
+ *
+ * Hardware quirks handled here (from the Adafruit_SHARP_Memory reference):
+ *  - CS is ACTIVE HIGH (inverted vs SD card / eInk sharing SPI1)
+ *  - Wire bit order is LSB-first, but SPI1 is MSB-first for the SD card:
+ *    every byte is software-reversed (__RBIT) before HAL transmission
+ *  - 1 bit in the frame = WHITE (reflecting), 0 = black - the opposite of
+ *    the drawing convention, so the bit is inverted at stream time
+ *  - VCOM must toggle at ~1-10 Hz or the panel degrades: handled by flipping
+ *    the M1 bit in every frame write, guaranteed by the 250 ms throttle
+ *  - SHARP tops out at ~2 MHz: SPI1 is re-prescled to /16 (1.3 MHz at 21 MHz
+ *    PCLK2) before every transfer, matching what sd_diskio does for the SD
  */
 
 #include "display.h"
-#include "stm32f4xx_hal_i2c.h"
+#include "main.h"      /* SHARP_CS_PIN / SHARP_DISP_PIN, hspi1 extern via... */
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
 #include "font.h"
 
-/* Private defines */
-#define SSD1309_I2C                  I2C1
-#define SSD1309_I2C_ADDR             0x3C
-/* Per-chunk I2C timeout. Chunks are 17 bytes; at 100 kHz that's ~1.7 ms and at
- * 400 kHz ~0.4 ms, so 10 ms is plenty of headroom without noticeably blocking
- * the LoRa RX path (Display_Update is already throttled in main.c). */
-#define SSD1309_I2C_TIMEOUT          10
-#define SSD1309_COMMAND              0x00
-#define SSD1309_DATA                 0x40
-#define SSD1309_BUFFER_SIZE          (DISPLAY_HW_WIDTH * DISPLAY_HW_HEIGHT / 8) /* 128*64/8 = 1024 bytes */
+extern SPI_HandleTypeDef hspi1;  /* shared SPI1 handle (main.c) */
 
-/* Private variables */
-I2C_HandleTypeDef hi2c_display; /* Global for sharing with compass module */
-static uint8_t display_buffer[SSD1309_BUFFER_SIZE];
+/* Framebuffer: SSD1306-style page packing (bit y%8 in byte x + (y/8)*W).
+ * 1 = pixel on (black). 168*144/8 = 3024 bytes. */
+#define SHARP_BUFFER_SIZE   (DISPLAY_HW_WIDTH * DISPLAY_HW_HEIGHT / 8)
+#define SHARP_BYTES_PER_LINE (DISPLAY_HW_WIDTH / 8)   /* 21 */
+#define SHARP_SPI_TIMEOUT_MS 25
 
-/* Orientation switch: 1 = 180° (legacy build), 0 = upright.
- * Set to 0 for the redesigned RX case. */
-/* Orientation switch: 1 = 180° (old case), 0 = upright (redesigned case,
- * 2026-09). Hardware reality driven by how the case mounts the SSD1309. */
-#ifndef DISPLAY_ROTATE_180
-#define DISPLAY_ROTATE_180  0
-#endif
+/* SHARP command bits EXPRESSED IN MSB-FIRST WIRE ORDER (we bit-reverse the
+ * library-pretzel at stream time; these are the datasheet-facing values):
+ *   M0 = 0x01 write line mode, M1 = 0x02 VCOM toggle, M2 = 0x04 clear */
+#define SHARP_CMD_WRITE   0x01
+#define SHARP_CMD_VCOM    0x02
+#define SHARP_CMD_CLEAR   0x04
 
-#if DISPLAY_ROTATE_180
-  #define SSD1309_SEGREMAP_VAL  (SSD1309_SEGREMAP | 0x01)  /* flip horizontal */
-  #define SSD1309_COMSCAN_VAL   SSD1309_COMSCANDEC         /* flip vertical   */
+static uint8_t display_buffer[SHARP_BUFFER_SIZE];
+static uint8_t sharp_vcom = 0;       /* 0 or SHARP_CMD_VCOM - frame polarity */
+static uint32_t sharp_err_count = 0; /* observability only: SPI can't wedge */
+
+/** Reverse a byte (SHARP wants LSB-first; SPI1 peripheral is MSB-first). */
+static inline uint8_t sharp_rev8(uint8_t b)
+{
+#if defined(__ARM_ARCH)
+  return (uint8_t)(__RBIT((uint32_t)b) >> 24);
 #else
-  #define SSD1309_SEGREMAP_VAL  (SSD1309_SEGREMAP | 0x00)
-  #define SSD1309_COMSCAN_VAL   SSD1309_COMSCANINC
+  /* Host-test builds: portable nibble/bit dance */
+  b = (uint8_t)((b >> 4) | (b << 4));
+  b = (uint8_t)(((b & 0xCC) >> 2) | ((b & 0x33) << 2));
+  b = (uint8_t)(((b & 0xAA) >> 1) | ((b & 0x55) << 1));
+  return b;
 #endif
+}
 
-static const uint8_t ssd1309_init_sequence[] = {
-  SSD1309_DISPLAYOFF,
-  SSD1309_SETDISPLAYCLOCKDIV, 0x80,
-  SSD1309_SETMULTIPLEX, 0x3F,
-  SSD1309_SETDISPLAYOFFSET, 0x00,
-  SSD1309_SETSTARTLINE | 0x00,
-  SSD1309_CHARGEPUMP, 0x14,
-  SSD1309_MEMORYMODE, 0x00,
-  SSD1309_SEGREMAP_VAL,
-  SSD1309_COMSCAN_VAL,
-  SSD1309_SETCOMPINS, 0x12,
-  SSD1309_SETCONTRAST, 0xCF,
-  SSD1309_SETPRECHARGE, 0xF1,
-  SSD1309_SETVCOMDETECT, 0x40,
-  SSD1309_DISPLAYALLON_RESUME,
-  SSD1309_NORMALDISPLAY,
-  SSD1309_DISPLAYON
-};
+/** Drop SPI1 to a SHARP-safe clock before touching the panel. */
+static void sharp_set_bus_speed(void)
+{
+  /* APB2 = 21 MHz; /16 = 1.31 MHz - comfortably under the ~2 MHz limit. */
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  HAL_SPI_Init(&hspi1);
+}
 
-/* Private function prototypes */
-static void Display_I2C_Init(void);
-static void Display_SendCommand(uint8_t command);
-static void Display_SendData(uint8_t* data, uint16_t size);
-static void Display_SetPosition(uint8_t x, uint8_t y);
+static void sharp_select(void)
+{
+  HAL_GPIO_WritePin(SHARP_CS_GPIO_PORT, SHARP_CS_PIN, GPIO_PIN_SET);   /* HIGH */
+}
+
+static void sharp_deselect(void)
+{
+  HAL_GPIO_WritePin(SHARP_CS_GPIO_PORT, SHARP_CS_PIN, GPIO_PIN_RESET);
+}
+
+static void sharp_write(const uint8_t *buf, uint16_t len)
+{
+  if (HAL_SPI_Transmit(&hspi1, (uint8_t *)buf, len, SHARP_SPI_TIMEOUT_MS)
+      != HAL_OK) {
+    sharp_err_count++;
+  }
+}
 
 /**
- * @brief Initialize display
+ * @brief Initialize display (and the shared I2C bus it used to own)
  * @retval Status code
  */
 uint8_t Display_Init(void)
 {
-  /* Initialize I2C for display communication */
-  Display_I2C_Init();
-  
-  /* Send initialization sequence */
-  for (uint8_t i = 0; i < sizeof(ssd1309_init_sequence); i++) {
-    Display_SendCommand(ssd1309_init_sequence[i]);
-  }
-  
-  /* Orientation is set by ssd1309_init_sequence above. */
-  
-  /* Clear display buffer */
+  /* Panel on, CS idle-low were already established in MX_GPIO_Init. */
+
+  /* Clear command: vcom | M2, followed by an 8-bit dummy. Banishes whatever
+   * random pattern the panel woke up with. */
+  sharp_set_bus_speed();
+  uint8_t clr[2] = { (uint8_t)(sharp_rev8(SHARP_CMD_CLEAR | SHARP_CMD_VCOM)),
+                     0x00 };
+  sharp_select();
+  sharp_write(clr, sizeof(clr));
+  sharp_deselect();
+  sharp_vcom = SHARP_CMD_VCOM;
+
   Display_Clear();
   Display_Update();
-  
+
   return DISPLAY_OK;
 }
 
 /**
- * @brief Clear display buffer
+ * @brief Clear display buffer (all pixels off = all white on the panel)
  * @retval None
  */
 void Display_Clear(void)
 {
-  memset(display_buffer, 0, SSD1309_BUFFER_SIZE);
-}
-
-/* Set when I2C1 fails to initialize. The receiver keeps running headless:
- * RF reception, SD logging and the packet-activity LED all work without
- * the display, and hanging here would turn a broken OLED into a dead
- * ground station. All I2C traffic is skipped so a dead bus doesn't cost
- * a 25 ms HAL timeout per chunk in the main loop. */
-static uint8_t display_i2c_failed = 0;
-
-/* Runtime wedge handling: the boot-time flag above only covers init. If the
- * bus wedges mid-session (SDA held low by a crashed device, a loose wire
- * shorting), every HAL call would cost its timeout in the main loop. Count
- * consecutive failures; past the streak limit go headless, then probe the
- * bus every 10 s and come back automatically when it recovers. */
-static uint32_t display_i2c_error_streak = 0;
-static uint32_t display_last_probe_ms = 0;
-#define DISPLAY_I2C_STREAK_LIMIT   32
-#define DISPLAY_I2C_PROBE_MS       10000
-
-/* ----------------------------------------------------------------
- * Bus speed ladder for the shared I2C1 (SSD1309 display + BNO055 compass).
- * Default fast (400 kHz); proven error streaks drop one rung; a sustained
- * quiet window at the slow rung re-tests the fast rung (one shot), and
- * only imposes headless as a last resort. */
-#define DISPLAY_I2C_KHZ_DEFAULT  400
-#define DISPLAY_I2C_KHZ_SLOW     100
-static uint32_t display_i2c_khz = DISPLAY_I2C_KHZ_DEFAULT;
-static uint32_t display_i2c_slow_since_ms = 0;   /* entered-slow timestamp */
-#define DISPLAY_I2C_RAMPUP_QUIET_MS  120000u     /* 2 min clean -> try fast */
-
-/** Current I2C1 clock for observability. */
-uint32_t Display_I2CClockKHz(void) { return display_i2c_khz; }
-
-/** Re-init I2C1 at a new clock. Used for runtime speed changes. */
-static void display_i2c_set_clock(uint32_t khz)
-{
-  hi2c_display.Init.ClockSpeed = khz * 1000u;
-  (void)HAL_I2C_DeInit(&hi2c_display);
-  (void)HAL_I2C_Init(&hi2c_display);
-  display_i2c_khz = khz;
-}
-
-/** Was the display still responding at the current clock? Cheap probe. */
-static uint8_t display_i2c_fast_ok(void)
-{
-  return HAL_I2C_IsDeviceReady(&hi2c_display, SSD1309_I2C_ADDR << 1, 1, 50)
-         == HAL_OK;
-}
-
-static void Display_NoteI2CResult(HAL_StatusTypeDef st)
-{
-  if (st == HAL_OK) {
-    display_i2c_error_streak = 0;
-    return;
-  }
-  if (++display_i2c_error_streak >= DISPLAY_I2C_STREAK_LIMIT) {
-    /* First failure point when fast: try slower before giving up. */
-    if (display_i2c_khz > DISPLAY_I2C_KHZ_SLOW) {
-      display_i2c_set_clock(DISPLAY_I2C_KHZ_SLOW);
-      display_i2c_slow_since_ms = HAL_GetTick();
-      display_i2c_error_streak = 0;
-      return;   /* slower rung comes up; next errors re-streak there */
-    }
-    /* Already slow (or tried both) and still wedged: go headless */
-    display_i2c_failed = 1;
-  }
-}
-
-/* Called from Display_Update while headless. Rate-limited so a permanently
- * wedged bus costs at most one 50 ms probe per 10 s. Re-inits the HAL
- * peripheral first: a wedge often leaves hi2c->State stuck at BUSY, which
- * would make the probe return HAL_BUSY instantly and never recover. */
-static void Display_TryBusRecovery(void)
-{
-  uint32_t now = HAL_GetTick();
-  if (now - display_last_probe_ms < DISPLAY_I2C_PROBE_MS) return;
-  display_last_probe_ms = now;
-
-  if (hi2c_display.State != HAL_I2C_STATE_READY) {
-    HAL_I2C_DeInit(&hi2c_display);
-    HAL_I2C_Init(&hi2c_display);
-  }
-  if (HAL_I2C_IsDeviceReady(&hi2c_display, SSD1309_I2C_ADDR << 1, 1, 50) == HAL_OK) {
-    display_i2c_failed = 0;
-    display_i2c_error_streak = 0;
-    /* Next Display_Update repaints the full framebuffer. */
-  }
+  memset(display_buffer, 0, SHARP_BUFFER_SIZE);
 }
 
 /**
- * @brief Update display with buffer contents
+ * @brief Push framebuffer to the panel (full frame, ~20 ms at 1.3 MHz)
  * @retval None
  */
 void Display_Update(void)
 {
-  if (display_i2c_failed) {
-    Display_TryBusRecovery();
-    return;
-  }
+  sharp_set_bus_speed();
 
-  /* Hesitant ramp-up: only after a long enough uninterrupted clean run at
-   * the slow speed, probe the fast speed once. If it survives tonight, we
-   * stay fast; if anything trips again, the streak logic drops us back. */
-  if (display_i2c_khz < DISPLAY_I2C_KHZ_DEFAULT &&
-      DISPLAY_I2C_KHZ_SLOW == display_i2c_khz &&
-      display_i2c_error_streak == 0 &&
-      (HAL_GetTick() - display_i2c_slow_since_ms) >= DISPLAY_I2C_RAMPUP_QUIET_MS) {
-    display_i2c_set_clock(DISPLAY_I2C_KHZ_DEFAULT);
-    if (!display_i2c_fast_ok()) {
-      display_i2c_set_clock(DISPLAY_I2C_KHZ_SLOW);
-      display_i2c_slow_since_ms = HAL_GetTick();   /* new quiet window */
+  /* Toggle VCOM polarity for this frame and build the write-mode command. */
+  sharp_vcom ^= SHARP_CMD_VCOM;
+  uint8_t cmd = sharp_rev8((uint8_t)(SHARP_CMD_WRITE | sharp_vcom));
+
+  sharp_select();
+  sharp_write(&cmd, 1);
+
+  /* Per line: [reversed 1-based line addr][21 reversed/inverted data bytes]
+   * [0x00 dummy]. SHARP bit: 1 = white, 0 = black -> invert our "on" bits. */
+  static uint8_t line[2 + SHARP_BYTES_PER_LINE];  /* addr + data(+trailer) */
+  for (uint8_t y = 0; y < DISPLAY_HW_HEIGHT; y++) {
+    const uint8_t *page_row = &display_buffer[(y >> 3) * DISPLAY_HW_WIDTH];
+    uint8_t bit = (uint8_t)(1u << (y & 7));
+    line[0] = sharp_rev8((uint8_t)(y + 1));
+    for (uint8_t j = 0; j < SHARP_BYTES_PER_LINE; j++) {
+      uint8_t out = 0xFF;   /* default white */
+      for (uint8_t k = 0; k < 8; k++) {
+        if (page_row[8 * j + k] & bit) {
+          out &= (uint8_t)~(1u << k);   /* black pixel -> 0 */
+        }
+      }
+      line[1 + j] = sharp_rev8(out);
     }
-    /* else: leave the clock fast; the streak path will re-throttle on any
-     * real bus trouble */
+    line[1 + SHARP_BYTES_PER_LINE] = 0x00;
+    sharp_write(line, sizeof(line));
   }
-
-  /* Always rotate buffer for fixed 90° orientation */
-  // Display_RotateBuffer(display_buffer, rotated_buffer);
-  
-  /* Set column address range */
-  Display_SendCommand(SSD1309_COLUMNADDR);
-  Display_SendCommand(0); /* Start column */
-  Display_SendCommand(DISPLAY_HW_WIDTH - 1); /* End column */
-  
-  /* Set page address range */
-  Display_SendCommand(SSD1309_PAGEADDR);
-  Display_SendCommand(0);
-  Display_SendCommand((DISPLAY_HW_HEIGHT / 8) - 1); /* Use hardware height in pages */
-  
-  /* Send the rotated buffer */
-  Display_SendData(display_buffer, SSD1309_BUFFER_SIZE);
+  uint8_t trailer = 0x00;
+  sharp_write(&trailer, 1);
+  sharp_deselect();
 }
 
 /**
@@ -242,14 +169,10 @@ void Display_DrawPixel(uint8_t x, uint8_t y, uint8_t color)
   if (x >= DISPLAY_WIDTH || y >= DISPLAY_HEIGHT) {
     return;
   }
-  
-  /* Calculate buffer position using hardware coordinates */
-  /* For 90° fixed orientation, we draw directly to the buffer */
-  /* The rotation to hardware coordinates happens in Display_RotateBuffer */
+
   uint16_t byte_pos = x + (y / 8) * DISPLAY_HW_WIDTH;
   uint8_t bit_pos = y % 8;
-  
-  /* Set or clear the pixel */
+
   if (color) {
     display_buffer[byte_pos] |= (1 << bit_pos);
   } else {
@@ -274,17 +197,17 @@ void Display_DrawLine(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, uint8_t co
   int16_t sy = y0 < y1 ? 1 : -1;
   int16_t err = dx + dy;
   int16_t e2;
-  
+
   while (1) {
     Display_DrawPixel(x0, y0, color);
-    
+
     if (x0 == x1 && y0 == y1) {
       break;
     }
-    
+
     e2 = 2 * err;
 
-    /* (Exhaustively verified over the full 128x64 display grid: with this
+    /* (Exhaustively verified over the full display grid: with this
      * formulation the coordinates never overshoot, so the top check alone
      * terminates every line exactly on its endpoint.) */
     if (e2 >= dy) {
@@ -349,23 +272,23 @@ void Display_DrawCircle(uint8_t x0, uint8_t y0, uint8_t r, uint8_t color)
   int16_t ddF_y = -2 * r;
   int16_t x = 0;
   int16_t y = r;
-  
+
   Display_DrawPixel(x0, y0 + r, color);
   Display_DrawPixel(x0, y0 - r, color);
   Display_DrawPixel(x0 + r, y0, color);
   Display_DrawPixel(x0 - r, y0, color);
-  
+
   while (x < y) {
     if (f >= 0) {
       y--;
       ddF_y += 2;
       f += ddF_y;
     }
-    
+
     x++;
     ddF_x += 2;
     f += ddF_x;
-    
+
     Display_DrawPixel(x0 + x, y0 + y, color);
     Display_DrawPixel(x0 - x, y0 + y, color);
     Display_DrawPixel(x0 + x, y0 - y, color);
@@ -389,11 +312,10 @@ void Display_DrawChar(uint8_t x, uint8_t y, char c)
   if (c < 32 || c > 126) {
     c = '?';
   }
-  
+
   /* Get character data from font */
   const uint8_t *char_data = &font_5x7[(c - 32) * 5];
-  
-  /* Draw character */
+
   for (uint8_t i = 0; i < 5; i++) {
     uint8_t line = char_data[i];
     for (uint8_t j = 0; j < 7; j++) {
@@ -414,14 +336,12 @@ void Display_DrawChar(uint8_t x, uint8_t y, char c)
 void Display_DrawText(uint8_t x, uint8_t y, const char *text)
 {
   uint8_t cursor_x = x;
-  
+
   while (*text) {
-    /* Check if the next character would be cut off */
-    /* With fixed 90° orientation, we can use the full width */
     if (cursor_x + 5 > DISPLAY_WIDTH) {
       break;
     }
-    
+
     Display_DrawChar(cursor_x, y, *text);
     cursor_x += 6; /* 5 pixels + 1 pixel space */
     text++;
@@ -437,12 +357,9 @@ void Display_DrawText(uint8_t x, uint8_t y, const char *text)
  */
 void Display_DrawTextRowCol(uint8_t row, uint8_t col, const char *text)
 {
-  /* Convert row/col to pixel coordinates */
-  /* Each character is 5x7 pixels with 1 pixel spacing */
-  uint8_t x = col * 6; /* 6 pixels per column (5 + 1 space) */
-  uint8_t y = row * 8; /* 8 pixels per row (7 + 1 space) */
-  
-  /* Call the pixel-based text drawing function */
+  uint8_t x = col * 6;
+  uint8_t y = row * 8;
+
   Display_DrawText(x, y, text);
 }
 
@@ -457,15 +374,15 @@ void Display_DrawDirectionIndicator(uint8_t x, uint8_t y, float angle)
 {
   /* Convert angle to radians */
   float rad = angle * M_PI / 180.0f;
-  
+
   /* Draw compass circle */
   uint8_t radius = 15;
   Display_DrawCircle(x, y, radius, 1);
-  
+
   /* Calculate arrow points - make arrow slightly longer */
   int8_t tip_x = x + (int8_t)(sinf(rad) * (radius - 2));
   int8_t tip_y = y - (int8_t)(cosf(rad) * (radius - 2));
-  
+
   /* Calculate points for arrow base */
   float rad_left = rad - M_PI * 0.7f;  /* Adjusted for better arrow shape */
   float rad_right = rad + M_PI * 0.7f;
@@ -473,32 +390,26 @@ void Display_DrawDirectionIndicator(uint8_t x, uint8_t y, float angle)
   int8_t base_left_y = y - (int8_t)(cosf(rad_left) * radius * 0.5f);
   int8_t base_right_x = x + (int8_t)(sinf(rad_right) * radius * 0.5f);
   int8_t base_right_y = y - (int8_t)(cosf(rad_right) * radius * 0.5f);
-  
+
   /* Draw arrow */
   Display_DrawLine(x, y, tip_x, tip_y, 1);
   Display_DrawLine(tip_x, tip_y, base_left_x, base_left_y, 1);
   Display_DrawLine(tip_x, tip_y, base_right_x, base_right_y, 1);
   Display_DrawLine(base_left_x, base_left_y, base_right_x, base_right_y, 1);
-  
-  /* Draw cardinal direction markers */
-  /* North marker */
+
+  /* Cardinal direction markers */
   Display_DrawPixel(x, y - radius, 1);
   Display_DrawPixel(x, y - radius + 1, 1);
-  
-  /* East marker */
+
   Display_DrawPixel(x + radius, y, 1);
   Display_DrawPixel(x + radius - 1, y, 1);
-  
-  /* South marker */
+
   Display_DrawPixel(x, y + radius, 1);
   Display_DrawPixel(x, y + radius - 1, 1);
-  
-  /* West marker */
+
   Display_DrawPixel(x - radius, y, 1);
   Display_DrawPixel(x - radius + 1, y, 1);
 }
-
-/* Display rotation functions removed - using fixed 90° orientation */
 
 /**
  * @brief Show boot screen with logo and version info
@@ -507,129 +418,19 @@ void Display_DrawDirectionIndicator(uint8_t x, uint8_t y, float angle)
 void Display_ShowBootScreen(void)
 {
   Display_Clear();
-  
+
   /* Draw border */
   Display_DrawRect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, 1);
-  
+
   /* Draw title */
   Display_DrawTextRowCol(1, 1, "GPS RADIO BEACON");
   Display_DrawTextRowCol(2, 5, "RECEIVER");
-  
+
   /* Draw version info */
   Display_DrawTextRowCol(5, 3, "FW v1.0.0");
-  
+
   Display_Update();
 }
 
-/**
- * @brief Initialize I2C for display communication
- * @retval None
- */
-static void Display_I2C_Init(void)
-{
-  /* Enable I2C1 clock */
-  __HAL_RCC_I2C1_CLK_ENABLE();
-  __HAL_RCC_GPIOB_CLK_ENABLE();
-  
-  /* Configure GPIO pins for I2C */
-  GPIO_InitTypeDef GPIO_InitStruct = {0};
-  
-  /* I2C1 GPIO Configuration    
-     PB6 --> I2C1_SCL
-     PB7 --> I2C1_SDA 
-  */
-  GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;
-  GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-  
-  /* Configure I2C */
-  hi2c_display.Instance = I2C1;
-  /* Try fast mode first: SSD1309 + BNO055 both support Fast Mode per their
-   * datasheets. Verify with a device probe; if the wiring marginalizes it
-   * out, fall back to the always-good 100 kHz. Runtime streak logic drops
-   * to slow under sustained trouble and re-tries fast after a clean
-   * window (see Display_Update, 2 min rule). */
-  hi2c_display.Init.ClockSpeed = DISPLAY_I2C_KHZ_DEFAULT * 1000u;
-  hi2c_display.Init.DutyCycle = I2C_DUTYCYCLE_2;
-  hi2c_display.Init.OwnAddress1 = 0;
-  hi2c_display.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
-  hi2c_display.Init.DualAddressMode = I2C_DUALADDRESS_DISABLED;
-  hi2c_display.Init.OwnAddress2 = 0;
-  hi2c_display.Init.GeneralCallMode = I2C_GENERALCALL_DISABLED;
-  hi2c_display.Init.NoStretchMode = I2C_NOSTRETCH_DISABLED;
-
-  if (HAL_I2C_Init(&hi2c_display) != HAL_OK) {
-    display_i2c_failed = 1;  /* run headless - never hang the receiver */
-    return;
-  }
-  display_i2c_khz = DISPLAY_I2C_KHZ_DEFAULT;
-
-  if (!display_i2c_fast_ok()) {
-    display_i2c_set_clock(DISPLAY_I2C_KHZ_SLOW);
-    if (!display_i2c_fast_ok()) {
-      display_i2c_failed = 1;
-      display_i2c_khz = DISPLAY_I2C_KHZ_SLOW;
-    }
-  }
-}
-
-/**
- * @brief Send command to display
- * @param command Command byte
- * @retval None
- */
-static void Display_SendCommand(uint8_t command)
-{
-  if (display_i2c_failed) {
-    return;
-  }
-  uint8_t buffer[2] = {SSD1309_COMMAND, command};
-  Display_NoteI2CResult(HAL_I2C_Master_Transmit(&hi2c_display, SSD1309_I2C_ADDR << 1, buffer, 2, SSD1309_I2C_TIMEOUT));
-}
-
-/**
- * @brief Send data to display
- * @param data Pointer to data buffer
- * @param size Size of data buffer
- * @retval None
- */
-static void Display_SendData(uint8_t* data, uint16_t size)
-{
-  if (display_i2c_failed) {
-    return;
-  }
-  /* We need to send the data in chunks due to I2C buffer limitations */
-  uint8_t buffer[17]; /* 1 byte for data/command flag + 16 bytes of data */
-  buffer[0] = SSD1309_DATA;
-  
-  for (uint16_t i = 0; i < size; i += 16) {
-    uint16_t chunk_size = (i + 16 > size) ? (size - i) : 16;
-    memcpy(&buffer[1], &data[i], chunk_size);
-    if (HAL_I2C_Master_Transmit(&hi2c_display, SSD1309_I2C_ADDR << 1,
-                                buffer, chunk_size + 1,
-                                SSD1309_I2C_TIMEOUT) != HAL_OK) {
-      /* Bail out early: if the bus is stuck/stretching, retrying the remaining
-       * chunks just wastes time that the LoRa RX path needs. The next
-       * Display_Update will retry the whole frame. */
-      Display_NoteI2CResult(HAL_ERROR);
-      return;
-    }
-    Display_NoteI2CResult(HAL_OK);
-  }
-}
-
-/**
- * @brief Set cursor position for text
- * @param x X coordinate (column)
- * @param y Y coordinate (page)
- * @retval None
- */
-static __attribute__((unused)) void Display_SetPosition(uint8_t x, uint8_t y)
-{
-  Display_SendCommand(0xB0 + y);
-  Display_SendCommand(((x & 0xF0) >> 4) | 0x10);
-  Display_SendCommand(x & 0x0F);
-}
+/** Error counter for bring-up visibility (counts HAL failures only). */
+uint32_t Display_GetErrorCount(void) { return sharp_err_count; }

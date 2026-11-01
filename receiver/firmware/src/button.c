@@ -1,298 +1,162 @@
 /**
  ******************************************************************************
  * @file    button.c
- * @brief   Button input handling for STM32F4
+ * @brief   Button input via the NULLLAB/emakefun I2C jogpad (v2.0 hardware)
+ ******************************************************************************
+ * Physical buttons are gone: "button 1" (page cycle) is a joystick flick
+ * (up OR down - forward-only page model) or button A; "button 2" (context /
+ * home) is the joystick click (Z) or button B. The jogpad's onboard MCU does
+ * the electrical debouncing, so the vibration-immunity machinery the old
+ * EXTI+debounce scheme carried here is replaced by stick hysteresis gating:
+ * a direction only engages past 60 counts off-center and releases inside 32,
+ * which movement contact and pad knocks can't fake for a full sample.
  ******************************************************************************
  */
 
 #include "button.h"
+#include "jogpad.h"
 
-/* Private variables. ISR-shared variables are volatile: they are written
- * from EXTI15_10_IRQHandler and read/written from the main loop, so the
- * compiler must not cache them in registers across accesses. */
-static volatile uint32_t last_button_time = 0;
-static volatile Button_State_t last_stable_state = BUTTON_RELEASED;
-static volatile uint8_t press_pending = 0;       /* Press seen, short/long undecided */
-static volatile uint8_t button_press_detected = 0;       /* Short press (set at release) */
-static uint8_t button_long_press_detected = 0;           /* Long press (set while held) */
+/* Stick deflection thresholds on the 0..255 axis (top = 0 for Y):
+ * engage at |deflection| >= 60, release inside 32. */
+#define JOG_ENGAGE_DELTA   60
+#define JOG_RELEASE_DELTA  32
 
-/* Button 2 (PB2/BOOT1, EXTI2). Wired between PB2 and 3V3: ACTIVE HIGH.
- * Rising edge = press candidate (see below); pin LOW = released.
- * Press edges are edge-candidates, not events: the main loop confirms the
- * pin is still held when the debounce window closes before exposing the
- * press. That is the electrically-unsurprising fix for 'fires from
- * vibration' - single rising edges caused by movement contact or marginal
- * solder joints clear within BUTTON_DEBOUNCE_MS; real presses don't. */
-static volatile uint32_t last_button2_time = 0;
-static volatile Button_State_t button2_stable_state = BUTTON_RELEASED;
-static volatile uint8_t button2_press_detected = 0;
-static volatile uint8_t button2_press_candidate = 0;
-static volatile uint32_t button2_candidate_time = 0;
-
-/* Debounce time in milliseconds */
-#define BUTTON_DEBOUNCE_MS 50  /* Typical button bounce is 5-20ms, 50ms is safe */
-
-/* Hold duration that turns a press into a long press. A press shorter than
- * this is reported by Button_WasPressed() at release; holding at least this
- * long fires Button_WasLongPressed() immediately (before release) and
- * suppresses the short-press event. */
+/* Hold duration that turns "button 1" into a long press (fires while held,
+ * matching the old PB10 semantics main.c relies on). */
 #define BUTTON_LONG_PRESS_MS 700
 
-/**
- * @brief Initialize button GPIO with interrupt
- * @retval None
- */
+typedef enum { STICK_CENTERED = 0, STICK_UP, STICK_DOWN } StickDir;
+
+static uint8_t stick_dir_engaged = STICK_CENTERED;
+static uint32_t stick_engaged_ms = 0;
+
+static uint8_t button_press_detected = 0;      /* one-shot: page next */
+static uint8_t button_long_press_detected = 0; /* one-shot while held */
+static uint8_t long_press_done = 0;            /* this engage already long-fired */
+
+static uint8_t prev_a_held = 0;
+static uint8_t prev_b_held = 0;
+static uint8_t prev_z_held = 0;
+static uint8_t button2_press_detected = 0;
+
 void Button_Init(void)
 {
-    GPIO_InitTypeDef GPIO_InitStruct = {0};
-    
-    /* Enable GPIOB clock */
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    
-    /* Configure PB12 as input with pull-up and falling edge interrupt */
-    GPIO_InitStruct.Pin = BUTTON_PIN;
-    GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;  // Interrupt on falling edge (button press)
-    GPIO_InitStruct.Pull = GPIO_PULLUP;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(BUTTON_GPIO_PORT, &GPIO_InitStruct);
-    
-    /* Enable and set EXTI line interrupt priority */
-    HAL_NVIC_SetPriority(EXTI15_10_IRQn, 2, 0);
-    HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
-    
-    /* Configure PB2 (button 2): wired to 3V3 -> ACTIVE HIGH. Pull-down so
-     * the input can't float mid-level (a floating High would masquerade as
-     * "pressed" and block the EXTI rising edge), rising-edge interrupt. */
-    GPIO_InitStruct.Pin = BUTTON2_PIN;
-    GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-    GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(BUTTON2_GPIO_PORT, &GPIO_InitStruct);
-    
-    HAL_NVIC_SetPriority(EXTI2_IRQn, 2, 0);
-    HAL_NVIC_EnableIRQ(EXTI2_IRQn);
-    
-    /* Initialize state variables */
-    last_button_time = HAL_GetTick();
-    last_stable_state = BUTTON_RELEASED;
-    press_pending = 0;
-    button_press_detected = 0;
-    button_long_press_detected = 0;
-    
-    last_button2_time = HAL_GetTick();
-    button2_stable_state = BUTTON_RELEASED;
-    button2_press_detected = 0;
-    button2_press_candidate = 0;
-    button2_candidate_time = 0;
+  (void)Jogpad_Init();   /* absent pad is fine - receiver just has no UI input */
+  stick_dir_engaged = STICK_CENTERED;
+  button_press_detected = 0;
+  button_long_press_detected = 0;
+  long_press_done = 0;
+  prev_a_held = prev_b_held = prev_z_held = 0;
+  button2_press_detected = 0;
 }
 
 /**
- * @brief Get current button state (raw, not debounced)
- * @retval Button_State_t Current button state
+ * @brief Get current "button 1" state (stick flicked up/down, or A held)
+ * @retval Button_State_t Current state
  */
 Button_State_t Button_GetState(void)
 {
-    /* Read GPIO pin - button is active LOW with pull-up */
-    GPIO_PinState pin_state = HAL_GPIO_ReadPin(BUTTON_GPIO_PORT, BUTTON_PIN);
-    
-    if (pin_state == GPIO_PIN_RESET) {
-        return BUTTON_PRESSED;  /* Pin low = button pressed */
-    } else {
-        return BUTTON_RELEASED; /* Pin high = button released */
-    }
+  if (stick_dir_engaged != STICK_CENTERED || Jogpad_ButtonHeld(JOGPAD_BTN_A)) {
+    return BUTTON_PRESSED;
+  }
+  return BUTTON_RELEASED;
 }
+
+uint8_t Button_IsPressed(void) { return Button_GetState() == BUTTON_PRESSED; }
+uint8_t Button_IsReleased(void) { return Button_GetState() == BUTTON_RELEASED; }
 
 /**
- * @brief Check if button is currently pressed (debounced)
- * @retval 1 if pressed, 0 if released
- */
-uint8_t Button_IsPressed(void)
-{
-    return (last_stable_state == BUTTON_PRESSED) ? 1 : 0;
-}
-
-/**
- * @brief Check if button is currently released (debounced)
- * @retval 1 if released, 0 if pressed
- */
-uint8_t Button_IsReleased(void)
-{
-    return (last_stable_state == BUTTON_RELEASED) ? 1 : 0;
-}
-
-/**
- * @brief Check if button was short-pressed (one-shot detection)
- * @retval 1 if a short press was detected since last call, 0 otherwise
- * @note Fires at release for presses shorter than BUTTON_LONG_PRESS_MS.
- *       This function clears the press detection flag when called.
- */
-uint8_t Button_WasPressed(void)
-{
-    if (button_press_detected) {
-        button_press_detected = 0;  /* Clear flag */
-        return 1;
-    }
-    return 0;
-}
-
-/**
- * @brief Check if button was long-pressed (one-shot detection)
- * @retval 1 if a long press was detected since last call, 0 otherwise
- * @note Fires while the button is still held, once the hold reaches
- *       BUTTON_LONG_PRESS_MS. The short-press event is then suppressed.
- */
-uint8_t Button_WasLongPressed(void)
-{
-    if (button_long_press_detected) {
-        button_long_press_detected = 0;  /* Clear flag */
-        return 1;
-    }
-    return 0;
-}
-
-/**
- * @brief Check if button 2 was pressed (one-shot detection)
- * @retval 1 if a press was detected since last call, 0 otherwise
- * @note Fires on press (falling edge), so the action feels instant.
- *       This function clears the press detection flag when called.
- */
-uint8_t Button2_WasPressed(void)
-{
-    if (button2_press_detected) {
-        button2_press_detected = 0;  /* Clear flag */
-        return 1;
-    }
-    return 0;
-}
-
-/* Diagnostics: raw pin level directly, and debounced state transitions,
- * plus init-time "is this line sane?" reading. Useful when a freshly
- * wired button is silent in the field. */
-uint8_t Button2_RawLevel(void)
-{
-    return HAL_GPIO_ReadPin(BUTTON2_GPIO_PORT, BUTTON2_PIN) == GPIO_PIN_SET ? 1 : 0;
-}
-
-uint8_t Button2_IsHeld(void)
-{
-    return button2_stable_state == BUTTON_PRESSED ? 1 : 0;
-}
-
-/**
- * @brief Update button state (long-press promotion and release detection)
+ * @brief Poll the pad and turn stick motion / button edges into events.
  * @retval None
- * @note Called from main loop. Button presses are interrupt-driven.
+ * @note Called from the main loop. The pad itself holds state - no IRQs.
  */
 void Button_Update(void)
 {
-    uint32_t current_time = HAL_GetTick();
-    Button_State_t raw_state = Button_GetState();
+  Jogpad_Update();
+  uint32_t now = HAL_GetTick();
+  uint8_t y = Jogpad_GetY();
 
-    if (last_stable_state == BUTTON_PRESSED) {
-        /* Glitch rejection: the pin released BEFORE the debounce window
-         * closed = the falling edge was movement/contact noise, not a
-         * human press. Void it entirely - no press event. */
-        if (raw_state == BUTTON_RELEASED &&
-            (current_time - last_button_time) < BUTTON_DEBOUNCE_MS) {
-            last_stable_state = BUTTON_RELEASED;
-            press_pending = 0;
-            last_button_time = current_time;    /* re-arm vs following edges */
-        } else {
-            /* Promote a held press to a long press while still held */
-            if (press_pending &&
-                (current_time - last_button_time) >= BUTTON_LONG_PRESS_MS) {
-                press_pending = 0;
-                button_long_press_detected = 1;
-            }
-
-            /* Check for button release after debounce time */
-            if (raw_state == BUTTON_RELEASED) {
-                last_stable_state = BUTTON_RELEASED;
-
-                /* Released before the long-press threshold: short press */
-                if (press_pending) {
-                    press_pending = 0;
-                    button_press_detected = 1;
-                }
-
-                /* Re-arm the debounce window at the release edge so any release
-                 * bounce (falling edges) within the next BUTTON_DEBOUNCE_MS is
-                 * rejected by the time gate in the ISR. */
-                last_button_time = current_time;
-            }
-        }
+  /* --- Hysteresis gate on the Y axis (up = low counts) --- */
+  if (stick_dir_engaged == STICK_CENTERED) {
+    if (y <= (128 - JOG_ENGAGE_DELTA)) {
+      stick_dir_engaged = STICK_UP;
+      stick_engaged_ms = now;
+      long_press_done = 0;
+      button_press_detected = 1;   /* edge = short press (old: at release) */
+    } else if (y >= (128 + JOG_ENGAGE_DELTA)) {
+      stick_dir_engaged = STICK_DOWN;
+      stick_engaged_ms = now;
+      long_press_done = 0;
+      button_press_detected = 1;
     }
+  } else if (stick_dir_engaged == STICK_UP) {
+    if (y >= (128 - JOG_RELEASE_DELTA)) stick_dir_engaged = STICK_CENTERED;
+  } else { /* STICK_DOWN */
+    if (y <= (128 + JOG_RELEASE_DELTA)) stick_dir_engaged = STICK_CENTERED;
+  }
 
-    /* Button 2 release detection */
-    if (button2_stable_state == BUTTON_PRESSED &&
-        HAL_GPIO_ReadPin(BUTTON2_GPIO_PORT, BUTTON2_PIN) == GPIO_PIN_RESET &&
-        (current_time - last_button2_time) >= BUTTON_DEBOUNCE_MS) {
-        button2_stable_state = BUTTON_RELEASED;
-        last_button2_time = current_time;
-    }
+  /* --- Long press: fires while still held, once per engage --- */
+  if (stick_dir_engaged != STICK_CENTERED && !long_press_done &&
+      (now - stick_engaged_ms) >= BUTTON_LONG_PRESS_MS) {
+    long_press_done = 1;
+    button_long_press_detected = 1;
+  }
 
-    /* Button 2 press confirmation: an edge becomes a press ONLY if the pin
-     * is still held HIGH when the debounce window closes. */
-    if (button2_press_detected == 0 && button2_press_candidate &&
-        (current_time - button2_candidate_time) >= BUTTON_DEBOUNCE_MS) {
-        button2_press_candidate = 0;
-        if (HAL_GPIO_ReadPin(BUTTON2_GPIO_PORT, BUTTON2_PIN) == GPIO_PIN_SET) {
-            button2_press_detected = 1;
-            button2_stable_state = BUTTON_PRESSED;
-            last_button2_time = current_time;   /* arm release detection */
-        }
-    }
+  /* --- Physical pad buttons (module is already debounced) --- */
+  uint8_t a = Jogpad_ButtonHeld(JOGPAD_BTN_A);
+  uint8_t b = Jogpad_ButtonHeld(JOGPAD_BTN_B);
+  uint8_t z = Jogpad_ButtonHeld(JOGPAD_BTN_Z);
+
+  if (a && !prev_a_held) button_press_detected = 1;   /* A = page next alias */
+  if ((b && !prev_b_held) || (z && !prev_z_held)) {
+    button2_press_detected = 1;                        /* B or Z = context/home */
+  }
+  prev_a_held = a;
+  prev_b_held = b;
+  prev_z_held = z;
 }
 
 /**
- * @brief GPIO EXTI interrupt handler for button
- * @retval None
+ * @brief Page-next event (stick flick up/down or button A)
+ * @retval 1 if detected since last call; clears the flag
  */
-void EXTI15_10_IRQHandler(void)
+uint8_t Button_WasPressed(void)
 {
-    /* Check if interrupt is from our button pin */
-    if (__HAL_GPIO_EXTI_GET_IT(BUTTON_PIN) != RESET) {
-        /* Clear interrupt flag FIRST to prevent re-triggering */
-        __HAL_GPIO_EXTI_CLEAR_IT(BUTTON_PIN);
-        
-        uint32_t current_time = HAL_GetTick();
-        
-        /* Debounce without disabling the IRQ line (disabling it until the
-         * main loop confirmed release could drop presses that arrived during
-         * long loop iterations, e.g. SD writes or OLED I2C pushes):
-         *  - time gate rejects press-bounce edges within BUTTON_DEBOUNCE_MS
-         *  - state guard rejects release-bounce edges, which arrive while the
-         *    debounced state is still BUTTON_PRESSED */
-        if ((current_time - last_button_time) >= BUTTON_DEBOUNCE_MS &&
-            last_stable_state == BUTTON_RELEASED) {
-            last_button_time = current_time;
-            last_stable_state = BUTTON_PRESSED;
-            /* Outcome (short vs long) is decided in Button_Update */
-            press_pending = 1;
-        }
-    }
+  if (button_press_detected) {
+    button_press_detected = 0;
+    return 1;
+  }
+  return 0;
 }
 
 /**
- * @brief GPIO EXTI interrupt handler for button 2 (PB2)
- * @retval None
- * @note Same debounce scheme as button 1, but the press event fires here on
- *       the falling edge - button 2 triggers a one-shot context action, so
- *       there is no short/long outcome to wait for.
+ * @brief Long-press event (stick held in one direction >= 700 ms)
+ * @retval 1 if detected since last call; clears the flag
  */
-void EXTI2_IRQHandler(void)
+uint8_t Button_WasLongPressed(void)
 {
-    if (__HAL_GPIO_EXTI_GET_IT(BUTTON2_PIN) != RESET) {
-        __HAL_GPIO_EXTI_CLEAR_IT(BUTTON2_PIN);
-        
-        uint32_t current_time = HAL_GetTick();
-        
-        if ((current_time - last_button2_time) >= BUTTON_DEBOUNCE_MS &&
-            button2_stable_state == BUTTON_RELEASED) {
-            /* Mark a candidate; the press only exists if the pin is still
-             * held at the end of the window (see Button_Update). */
-            button2_press_candidate = 1;
-            button2_candidate_time  = current_time;
-        }
-    }
+  if (button_long_press_detected) {
+    button_long_press_detected = 0;
+    return 1;
+  }
+  return 0;
 }
+
+/**
+ * @brief Context/home event (joystick click Z or button B)
+ * @retval 1 if detected since last call; clears the flag
+ */
+uint8_t Button2_WasPressed(void)
+{
+  if (button2_press_detected) {
+    button2_press_detected = 0;
+    return 1;
+  }
+  return 0;
+}
+
+/* Diagnostics for the SD breadcrumb paths in main.c: "raw level" now means
+ * "context action currently held" (1 = pressed), matching the old polarity
+ * where 1 = pressed. */
+uint8_t Button2_RawLevel(void) { return prev_z_held || prev_b_held; }
+uint8_t Button2_IsHeld(void)   { return prev_z_held || prev_b_held; }

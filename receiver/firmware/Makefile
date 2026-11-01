@@ -29,6 +29,9 @@ C_SOURCES = \
 	$(SRC_DIR)/button.c \
 	$(SRC_DIR)/compass.c \
 	$(SRC_DIR)/display.c \
+	$(SRC_DIR)/eink.c \
+	$(SRC_DIR)/i2c_bus.c \
+	$(SRC_DIR)/jogpad.c \
 	$(SRC_DIR)/gps.c \
 	$(SRC_DIR)/gps_parser.c \
 	$(SRC_DIR)/math_utils.c \

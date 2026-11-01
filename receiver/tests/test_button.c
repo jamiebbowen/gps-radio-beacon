@@ -1,11 +1,12 @@
 /**
  * @file test_button.c
- * @brief Host-side unit tests for the receiver's button driver.
+ * @brief Host-side unit tests for the receiver's jogpad-based button shim.
  *
- * Simulates the EXTI interrupt controller and GPIO pins to exercise the
- * full debounce scheme: time-gated press edges, state-guarded release
- * bounce, short-press (fires at release) vs long-press (fires while held,
- * >= 700 ms), and the independent button 2 (fires on press).
+ * v2.0 hardware: physical buttons are gone. button.c maps the I2C jogpad
+ * (joystick Y + A/B/Z buttons) onto the legacy button.h API. The jogpad
+ * driver itself (jogpad.c, I2C register reads) is faked here - these tests
+ * exercise the shim's semantics: stick hysteresis, edge-fired page-next
+ * events, long-press-while-held, and the context/home button edge logic.
  *
  * Build & run:  make -C receiver/tests          (see tests/Makefile)
  * Coverage:     make -C receiver/tests coverage
@@ -16,52 +17,33 @@
 #include <stdint.h>
 
 #include "button.h"
+#include "jogpad.h"
 #include "test_harness.h"
 
 /* Include the module under test directly (not linked - see tests/Makefile) */
 #include "../firmware/src/button.c"
 
 /* ------------------------------------------------------------------ */
-/* Fake hardware: GPIO pins + EXTI pending bits + tick                 */
+/* Fake jogpad                                                         */
 /* ------------------------------------------------------------------ */
 
-static uint32_t now_ms = 1000;   /* non-zero so debounce windows are sane */
+static uint8_t fake_x = 128;
+static uint8_t fake_y = 128;
+static uint8_t fake_held[JOGPAD_BTN_COUNT] = {0};
+static uint8_t fake_present = 1;
 
-static GPIO_PinState fake_pin10 = GPIO_PIN_SET;   /* released (pull-up) */
-static GPIO_PinState fake_pin2  = GPIO_PIN_RESET; /* B2 released (pull-down) */
-
-static uint32_t exti_pending = 0;   /* bitmask of pending EXTI lines */
-
-void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *init)
-{
-    (void)port; (void)init;
-}
-
-GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint16_t pin)
-{
-    (void)port;
-    if (pin == BUTTON_PIN)  return fake_pin10;
-    if (pin == BUTTON2_PIN) return fake_pin2;
-    return GPIO_PIN_SET;
-}
-
-void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint16_t pin, GPIO_PinState st)
-{
-    (void)port; (void)pin; (void)st;
-}
-
-void HAL_NVIC_SetPriority(IRQn_Type irq, uint32_t p, uint32_t s)
-{
-    (void)irq; (void)p; (void)s;
-}
-void HAL_NVIC_EnableIRQ(IRQn_Type irq) { (void)irq; }
-
-uint32_t Test_EXTI_GetIt(uint32_t pin)  { return exti_pending & pin; }
-void     Test_EXTI_ClearIt(uint32_t pin) { exti_pending &= ~pin; }
+uint8_t Jogpad_Init(void) { return fake_present; }
+void    Jogpad_Update(void) {}
+uint8_t Jogpad_IsPresent(void) { return fake_present; }
+uint8_t Jogpad_GetX(void) { return fake_x; }
+uint8_t Jogpad_GetY(void) { return fake_y; }
+uint8_t Jogpad_ButtonHeld(Jogpad_Button b) { return fake_held[b]; }
 
 /* ------------------------------------------------------------------ */
 /* Simulation helpers                                                  */
 /* ------------------------------------------------------------------ */
+
+static uint32_t now_ms = 1000;   /* non-zero so time windows are sane */
 
 static void advance(uint32_t ms)
 {
@@ -69,386 +51,229 @@ static void advance(uint32_t ms)
     Test_SetTick(now_ms);
 }
 
-/** Falling edge on button 1: pin goes low + EXTI fires */
-static void press_edge(void)
-{
-    fake_pin10 = GPIO_PIN_RESET;
-    exti_pending |= BUTTON_PIN;
-    EXTI15_10_IRQHandler();
-}
+static void flick_up(void)   { fake_y = 128 - 70; Button_Update(); }
+static void flick_down(void) { fake_y = 128 + 70; Button_Update(); }
+static void center_stick(void) { fake_y = 128; Button_Update(); }
 
-/** Button 1 physical release (pin high; detected by Button_Update) */
-static void release_pin(void)
+static void reset_all(void)
 {
-    fake_pin10 = GPIO_PIN_SET;
-}
-
-/** Rising edge on button 2 (B2 is wired to 3V3: active HIGH) */
-static void press2_edge(void)
-{
-    fake_pin2 = GPIO_PIN_SET;
-    exti_pending |= BUTTON2_PIN;
-    EXTI2_IRQHandler();
-}
-
-static void release2_pin(void)
-{
-    fake_pin2 = GPIO_PIN_RESET;
-}
-
-/** Full clean short-press cycle: press, hold, release, settle */
-static void do_short_press(uint32_t hold_ms)
-{
-    press_edge();
-    advance(hold_ms);
-    Button_Update();
-    release_pin();
-    advance(1);
-    Button_Update();
-    advance(BUTTON_DEBOUNCE_MS + 1);   /* leave the release window */
+    Button_Init();
+    fake_x = 128;
+    fake_y = 128;
+    memset(fake_held, 0, sizeof(fake_held));
+    (void)Button_WasPressed();
+    (void)Button_WasLongPressed();
+    (void)Button2_WasPressed();
 }
 
 /* ------------------------------------------------------------------ */
 /* Tests                                                               */
 /* ------------------------------------------------------------------ */
 
-TEST(test_init_and_raw_state)
+TEST(test_init_centered_is_released)
 {
-    Button_Init();
+    reset_all();
+    advance(10);
+    Button_Update();
 
+    CHECK(stick_dir_engaged == STICK_CENTERED);
     CHECK(Button_GetState() == BUTTON_RELEASED);
     CHECK(Button_IsPressed() == 0);
     CHECK(Button_IsReleased() == 1);
     CHECK(Button_WasPressed() == 0);
     CHECK(Button_WasLongPressed() == 0);
     CHECK(Button2_WasPressed() == 0);
-
-    fake_pin10 = GPIO_PIN_RESET;
-    CHECK(Button_GetState() == BUTTON_PRESSED);
-    fake_pin10 = GPIO_PIN_SET;
 }
 
-TEST(test_short_press_fires_at_release)
+TEST(test_flick_up_fires_once_on_edge)
 {
-    Button_Init();
+    reset_all();
+    flick_up();
+    CHECK(stick_dir_engaged == STICK_UP);
+    CHECK(Button_GetState() == BUTTON_PRESSED);   /* still held */
+    CHECK(Button_WasPressed() == 1);              /* one-shot consumed */
+    CHECK(Button_WasPressed() == 0);              /* not latched */
+
+    /* Staying deflected must not re-fire */
     advance(100);
-
-    press_edge();
-    CHECK(Button_IsPressed() == 1);
-    CHECK(Button_WasPressed() == 0);        /* not yet - outcome undecided */
-
-    advance(100);                           /* held 100 ms < long threshold */
     Button_Update();
-    CHECK(Button_WasPressed() == 0);        /* still held */
-
-    release_pin();
-    advance(1);
-    Button_Update();
-
-    CHECK(Button_IsReleased() == 1);
-    CHECK(Button_WasPressed() == 1);        /* fires exactly once */
-    CHECK(Button_WasPressed() == 0);        /* one-shot: cleared */
-    CHECK(Button_WasLongPressed() == 0);    /* short, not long */
-}
-
-TEST(test_long_press_fires_while_held)
-{
-    Button_Init();
-    advance(100);
-
-    press_edge();
-    advance(BUTTON_LONG_PRESS_MS);          /* reach the threshold while held */
-    Button_Update();
-
-    CHECK(Button_WasLongPressed() == 1);    /* fires before release */
-    CHECK(Button_WasLongPressed() == 0);    /* one-shot */
-    CHECK(Button_IsPressed() == 1);         /* still physically held */
-
-    release_pin();
-    advance(1);
-    Button_Update();
-
-    /* The short-press event must be suppressed after a long press */
     CHECK(Button_WasPressed() == 0);
-    CHECK(Button_IsReleased() == 1);
-}
 
-TEST(test_press_bounce_rejected_by_time_gate)
-{
-    Button_Init();
-    advance(100);
-
-    press_edge();                    /* real press */
-    exti_pending |= BUTTON_PIN;      /* bounce edge 5 ms later */
-    advance(5);
-    EXTI15_10_IRQHandler();
-
-    advance(100);
-    release_pin();
-    advance(1);
-    Button_Update();
-
-    CHECK(Button_WasPressed() == 1); /* exactly one press despite the bounce */
+    center_stick();
     CHECK(Button_WasPressed() == 0);
 }
 
-TEST(test_release_bounce_rejected_by_state_guard)
+TEST(test_flick_down_also_pages_forward)
 {
-    Button_Init();
-    advance(100);
-
-    press_edge();
-    advance(100);
-    Button_Update();
-
-    /* Release with bounce: pin flickers low again right at release.
-     * The ISR sees a falling edge while the debounced state is still
-     * PRESSED - the state guard must reject it. */
-    release_pin();
-    exti_pending |= BUTTON_PIN;
-    fake_pin10 = GPIO_PIN_RESET;     /* bounce: momentarily low again */
-    EXTI15_10_IRQHandler();
-    fake_pin10 = GPIO_PIN_SET;
-
-    advance(1);
-    Button_Update();
-
-    CHECK(Button_WasPressed() == 1); /* single press event */
-    CHECK(Button_WasPressed() == 0); /* no phantom second press */
-    CHECK(Button_IsReleased() == 1);
-}
-
-TEST(test_glitched_press_within_debounce_window_voided)
-{
-    /* Glitch semantics POST-hardening: a press released 10 ms in is NOT a
-     * press at all - pin must remain low through the debounce window. This
-     * is the vibration-resistant behavior the field flagged. */
-    Button_Init();
-    advance(100);
-
-    press_edge();
-    release_pin();
-    advance(10);
-    Button_Update();                    /* released before window closed */
-    CHECK(Button_IsPressed() == 0);     /* voided, not "still debouncing" */
-    CHECK(Button_IsReleased() == 1);
-    CHECK(Button_WasPressed() == 0);    /* no press event */
-}
-
-TEST(test_real_short_press_still_confirmable_after_hold)
-{
-    /* Same press shape, but the pin stays low through the window: real press. */
-    Button_Init();
-    advance(100);
-
-    press_edge();
-    advance(BUTTON_DEBOUNCE_MS + 10);   /* pin still low -> confirmed */
-    Button_Update();
-    CHECK(Button_IsPressed() == 1);
-
-    release_pin();
-    advance(1);
-    Button_Update();                    /* now-release: window long past */
+    reset_all();
+    flick_down();
+    CHECK(stick_dir_engaged == STICK_DOWN);
     CHECK(Button_WasPressed() == 1);
-}
-
-TEST(test_exti_for_other_line_ignored)
-{
-    Button_Init();
-    advance(100);
-
-    /* Pending bit for a different line on the same EXTI15_10 group */
-    exti_pending |= GPIO_PIN_12;
-    EXTI15_10_IRQHandler();
-    CHECK(Button_IsPressed() == 0);      /* no press latched */
-
-    /* Same for the EXTI2 handler with nothing pending */
-    exti_pending = 0;
-    EXTI2_IRQHandler();
-    CHECK(Button2_WasPressed() == 0);
-    exti_pending = 0;
-}
-
-TEST(test_button2_fires_on_confirmed_press)
-{
-    Button_Init();
-    advance(100);
-
-    press2_edge();
-    /* Not instant: confirmation requires the pin still held at window end */
-    CHECK(Button2_WasPressed() == 0);
-    advance(BUTTON_DEBOUNCE_MS + 1);     /* pin still low */
-    Button_Update();
-    CHECK(Button2_WasPressed() == 1);
-    CHECK(Button2_WasPressed() == 0);    /* one-shot */
-
-    /* Release and settle */
-    release2_pin();
-    advance(BUTTON_DEBOUNCE_MS + 1);
-    Button_Update();
-
-    /* A second real press is accepted after release + debounce */
-    advance(100);
-    press2_edge();
-    advance(BUTTON_DEBOUNCE_MS + 1);
-    Button_Update();
-    CHECK(Button2_WasPressed() == 1);
-    release2_pin();
-    advance(BUTTON_DEBOUNCE_MS + 1);
-    Button_Update();
-}
-
-TEST(test_button2_glitch_edge_voided)
-{
-    Button_Init();
-    advance(100);
-
-    /* Movement/contact noise: edge hits, pin clears before window closes */
-    press2_edge();
-    advance(BUTTON_DEBOUNCE_MS / 2);
-    release2_pin();
-    advance(BUTTON_DEBOUNCE_MS);
-    Button_Update();
-    CHECK(Button2_WasPressed() == 0);    /* glitch swallowed */
-    CHECK(Button2_IsHeld() == 0);
-
-    /* A real press right after still works */
-    advance(100);
-    press2_edge();
-    advance(BUTTON_DEBOUNCE_MS + 1);
-    Button_Update();
-    CHECK(Button2_WasPressed() == 1);
-}
-
-TEST(test_button2_stuck_pressed_blocks_retrigger)
-{
-    Button_Init();
-    advance(100);
-
-    press2_edge();
-    advance(BUTTON_DEBOUNCE_MS + 1);    /* confirmation window passes, held */
-    Button_Update();
-    CHECK(Button2_WasPressed() == 1);
-
-    /* Still held: another edge long after debounce must NOT re-fire
-     * (state guard - the debounced state is still PRESSED) */
-    exti_pending |= BUTTON2_PIN;
-    advance(500);
-    EXTI2_IRQHandler();
-    CHECK(Button2_WasPressed() == 0);
-
-    release2_pin();
-    advance(BUTTON_DEBOUNCE_MS + 1);
-    Button_Update();
-}
-
-TEST(test_rapid_press_sequence)
-{
-    Button_Init();
-    advance(100);
-
-    /* Three clean short presses in a row */
-    for (int i = 0; i < 3; i++) {
-        do_short_press(100);
-        CHECK(Button_WasPressed() == 1);
-    }
     CHECK(Button_WasPressed() == 0);
+    center_stick();
 }
 
-TEST(test_press_bounce_beyond_time_gate_caught_by_state_guard)
+TEST(test_hysteresis_rejects_small_deflections)
 {
-    /* Bounce edges > BUTTON_DEBOUNCE_MS after the press. The time-gate alone
-     * would accept them, so the state guard must be the reject."""
-     */
-    Button_Init();
-    advance(100);
+    reset_all();
 
-    press_edge();
-    advance(BUTTON_DEBOUNCE_MS + 20);     /* past the time gate */
-    /* Late bounce edge: pin is still low (= pressed), exti fires again */
-    exti_pending |= BUTTON_PIN;
-    EXTI15_10_IRQHandler();
-    /* Only one press must exist */
-    CHECK(Button_IsPressed() == 1);          /* state didn't bobble */
-
-    advance(100);
-    release_pin();
-    advance(1);
+    /* Below the engage threshold: nothing */
+    fake_y = 128 - 50;               /* engage needs >= 60 */
     Button_Update();
-    CHECK(Button_WasPressed() == 1);         /* single press */
-    CHECK(Button_WasPressed() == 0);         /* no duplicate */
+    CHECK(stick_dir_engaged == STICK_CENTERED);
+    CHECK(Button_WasPressed() == 0);
+
+    /* Noise back to center, then just past the threshold */
+    center_stick();
+    CHECK(Button_WasPressed() == 0);
+    flick_up();
+    CHECK(Button_WasPressed() == 1);
+
+    /* Partial return (still outside the release band) keeps it engaged -
+     * no re-fire on wobble toward center without full release */
+    fake_y = 128 - 40;               /* release needs <= 128-32 */
+    Button_Update();
+    CHECK(stick_dir_engaged == STICK_UP);
+    CHECK(Button_WasPressed() == 0);
+
+    /* Wobble back deep, still same engage - no new edge */
+    flick_up();
+    CHECK(Button_WasPressed() == 0);
+
+    center_stick();
 }
 
-TEST(test_long_press_boundary)
+TEST(test_re_engage_after_release_fires_again)
 {
-    Button_Init();
-    advance(100);
+    reset_all();
+    flick_up();
+    CHECK(Button_WasPressed() == 1);
+    center_stick();
+    flick_down();
+    CHECK(Button_WasPressed() == 1);   /* fresh engage = fresh event */
+    center_stick();
+}
 
-    /* 1 ms shy of the threshold: not yet a long press */
-    press_edge();
-    advance(BUTTON_LONG_PRESS_MS - 1);
+TEST(test_long_press_fires_while_held_once)
+{
+    reset_all();
+    flick_up();
+    CHECK(Button_WasPressed() == 1);   /* consume the edge */
+
+    advance(699);
     Button_Update();
     CHECK(Button_WasLongPressed() == 0);
 
-    /* Cross the threshold while still held: long-press fires */
     advance(1);
+    Button_Update();
+    CHECK(Button_WasLongPressed() == 1);   /* fires while still held */
+    CHECK(Button_WasLongPressed() == 0);   /* once per engage */
+
+    /* Hold longer: no repeat */
+    advance(2000);
+    Button_Update();
+    CHECK(Button_WasLongPressed() == 0);
+
+    center_stick();
+
+    /* A new engage re-arms it */
+    flick_up();
+    advance(701);
     Button_Update();
     CHECK(Button_WasLongPressed() == 1);
 
-    /* Released after long-press: no short-press fire */
-    release_pin();
-    advance(1);
-    Button_Update();
-    CHECK(Button_WasPressed() == 0);
-    CHECK(Button_IsReleased() == 1);
+    center_stick();
 }
 
-TEST(test_second_press_bounce_retrigger_blocked)
+TEST(test_button_a_aliases_page_next)
 {
-    /* Press, release, then the EXTI fires again BEFORE Button_Update got to
-     * confirm the release (bounce in the bounce window): the debounced state
-     * is still PRESSED, so the edge must be rejected entirely."""
-     */
-    Button_Init();
-    advance(100);
+    reset_all();
 
-    press_edge();
-    advance(100);
-    release_pin();
-    /* Pin momentarily low again within the release-debounce window: falling
-     * edge fires before Update could confirm the release. */
-    fake_pin10 = GPIO_PIN_RESET;
-    exti_pending |= BUTTON_PIN;
-    EXTI15_10_IRQHandler();
-    fake_pin10 = GPIO_PIN_SET;
-
-    advance(1);
+    fake_held[JOGPAD_BTN_A] = 1;
     Button_Update();
-    CHECK(Button_WasPressed() == 1);       /* one press only */
+    CHECK(Button_WasPressed() == 1);
     CHECK(Button_WasPressed() == 0);
+
+    /* Held A does not auto-repeat */
+    advance(500);
+    Button_Update();
+    CHECK(Button_WasPressed() == 0);
+
+    /* Release + press again fires again */
+    fake_held[JOGPAD_BTN_A] = 0;
+    Button_Update();
+    advance(300);
+    fake_held[JOGPAD_BTN_A] = 1;
+    Button_Update();
+    CHECK(Button_WasPressed() == 1);
+
+    fake_held[JOGPAD_BTN_A] = 0;
+    Button_Update();
+}
+
+TEST(test_z_click_and_b_fire_context)
+{
+    reset_all();
+
+    /* Joystick click = context/home */
+    fake_held[JOGPAD_BTN_Z] = 1;
+    Button_Update();
+    CHECK(Button2_WasPressed() == 1);
+    CHECK(Button2_WasPressed() == 0);
+    CHECK(Button2_IsHeld() == 1);      /* still held -> held state */
+    CHECK(Button2_RawLevel() == 1);
+
+    fake_held[JOGPAD_BTN_Z] = 0;
+    Button_Update();
+    CHECK(Button2_IsHeld() == 0);
+    CHECK(Button2_RawLevel() == 0);
+
+    /* Button B aliases the same action */
+    fake_held[JOGPAD_BTN_B] = 1;
+    Button_Update();
+    CHECK(Button2_WasPressed() == 1);
+    fake_held[JOGPAD_BTN_B] = 0;
+    Button_Update();
+
+    /* C and D are free for future use - they must not fire either event */
+    fake_held[JOGPAD_BTN_C] = 1;
+    fake_held[JOGPAD_BTN_D] = 1;
+    Button_Update();
+    CHECK(Button_WasPressed() == 0);
+    CHECK(Button2_WasPressed() == 0);
+    Button_Update();
+    fake_held[JOGPAD_BTN_C] = 0;
+    fake_held[JOGPAD_BTN_D] = 0;
+    Button_Update();
+}
+
+TEST(test_pad_absent_means_neutral)
+{
+    reset_all();
+    Button_Init();  /* fakes report present, fine either way */
+
+    fake_y = 128;
+    advance(10);
+    Button_Update();
+
+    /* No stick motion: nothing fires */
+    CHECK(Button_WasPressed() == 0);
+    CHECK(Button2_WasPressed() == 0);
 }
 
 /* ------------------------------------------------------------------ */
 
 int main(void)
 {
-    Test_SetTick(now_ms);
-
-    run_test_init_and_raw_state();
-    run_test_short_press_fires_at_release();
-    run_test_long_press_fires_while_held();
-    run_test_press_bounce_rejected_by_time_gate();
-    run_test_release_bounce_rejected_by_state_guard();
-    run_test_glitched_press_within_debounce_window_voided();
-    run_test_real_short_press_still_confirmable_after_hold();
-    run_test_exti_for_other_line_ignored();
-    run_test_button2_fires_on_confirmed_press();
-    run_test_button2_glitch_edge_voided();
-    run_test_button2_stuck_pressed_blocks_retrigger();
-    run_test_rapid_press_sequence();
-    run_test_press_bounce_beyond_time_gate_caught_by_state_guard();
-    run_test_long_press_boundary();
-    run_test_second_press_bounce_retrigger_blocked();
+    run_test_init_centered_is_released();
+    run_test_flick_up_fires_once_on_edge();
+    run_test_flick_down_also_pages_forward();
+    run_test_hysteresis_rejects_small_deflections();
+    run_test_re_engage_after_release_fires_again();
+    run_test_long_press_fires_while_held_once();
+    run_test_button_a_aliases_page_next();
+    run_test_z_click_and_b_fire_context();
+    run_test_pad_absent_means_neutral();
 
     return TEST_SUMMARY();
 }

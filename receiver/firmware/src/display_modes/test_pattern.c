@@ -18,12 +18,12 @@
  */
 void Display_ShowTestPattern(void)
 {
-  /* Draw corner + centre markers to diagnose orientation issues.
-   * Display is 128x64 with a 6x8 font => 21 cols x 8 rows, so the corners
-   * are rows 0/7 and cols 0/19 (2-char labels occupy cols 19-20). */
-  Display_DrawTextRowCol(0, 0,  "TL");     /* Top-left */
-  Display_DrawTextRowCol(7, 0,  "BL");     /* Bottom-left */
-  Display_DrawTextRowCol(0, 19, "TR");     /* Top-right */
-  Display_DrawTextRowCol(7, 19, "BR");     /* Bottom-right */
-  Display_DrawTextRowCol(3, 7,  "CENTER"); /* Centre (6 chars, cols 7-12) */
+  /* Draw corner + centre markers to diagnose orientation issues. v2.0: the
+   * SHARP panel is 168x144 with the 6x8 font => 28 cols x 18 rows; corners
+   * are rows 0/17, and a 2-char label on the right edge starts at col 26. */
+  Display_DrawTextRowCol(0, 0,  "TL");      /* Top-left */
+  Display_DrawTextRowCol(17, 0, "BL");      /* Bottom-left */
+  Display_DrawTextRowCol(0, 26, "TR");      /* Top-right */
+  Display_DrawTextRowCol(17, 26, "BR");     /* Bottom-right */
+  Display_DrawTextRowCol(8, 11, "CENTER");  /* Centre (6 chars, cols 11-16) */
 }

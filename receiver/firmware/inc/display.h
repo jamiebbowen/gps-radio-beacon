@@ -1,6 +1,12 @@
 /**
  * @file display.h
- * @brief Display driver header for SSD1309 OLED
+ * @brief Display driver header - SHARP Memory LCD (Adafruit 3502, v2.0 hw)
+ *
+ * The v2.0 receiver replaced the SSD1309 I2C OLED with a SHARP 168x144
+ * memory LCD on SPI1 (see docs/hardware-receiver.md). The drawing API below
+ * is unchanged so all display_modes code keeps working; only the physical
+ * size constants changed. SPI1 is a shared bus - the driver re-prescaler
+ * switches per use and never assumes the bus is idle at its speed.
  */
 
 #ifndef __DISPLAY_H
@@ -18,39 +24,11 @@ extern "C" {
 #define DISPLAY_ERROR   1
 #define DISPLAY_TIMEOUT 2
 
-/* Display dimensions */
-/* Hardware is configured as 128x64, but physically mounted as 64x128 */
-#define DISPLAY_HW_WIDTH   128  /* Hardware width */
-#define DISPLAY_HW_HEIGHT  64   /* Hardware height */
-#define DISPLAY_WIDTH      128  /* Logical width (physical) */
-#define DISPLAY_HEIGHT     64   /* Logical height (physical) */
-
-/* Display commands */
-#define SSD1309_SETCONTRAST         0x81
-#define SSD1309_DISPLAYALLON_RESUME 0xA4
-#define SSD1309_DISPLAYALLON        0xA5
-#define SSD1309_NORMALDISPLAY       0xA6
-#define SSD1309_INVERTDISPLAY       0xA7
-#define SSD1309_DISPLAYOFF          0xAE
-#define SSD1309_DISPLAYON           0xAF
-#define SSD1309_SETDISPLAYOFFSET    0xD3
-#define SSD1309_SETCOMPINS          0xDA
-#define SSD1309_SETVCOMDETECT       0xDB
-#define SSD1309_SETDISPLAYCLOCKDIV  0xD5
-#define SSD1309_SETPRECHARGE        0xD9
-#define SSD1309_SETMULTIPLEX        0xA8
-#define SSD1309_SETLOWCOLUMN        0x00
-#define SSD1309_SETHIGHCOLUMN       0x10
-#define SSD1309_SETSTARTLINE        0x40
-#define SSD1309_MEMORYMODE          0x20
-#define SSD1309_COLUMNADDR          0x21
-#define SSD1309_PAGEADDR            0x22
-#define SSD1309_COMSCANINC          0xC0
-#define SSD1309_COMSCANDEC          0xC8
-#define SSD1309_SEGREMAP            0xA0
-#define SSD1309_CHARGEPUMP          0x8D
-#define SSD1309_EXTERNALVCC         0x01
-#define SSD1309_SWITCHCAPVCC        0x02
+/* Display dimensions - SHARP Memory LCD (LS013B7DH06-family, 3502 breakout) */
+#define DISPLAY_HW_WIDTH   168  /* Hardware width */
+#define DISPLAY_HW_HEIGHT  144  /* Hardware height */
+#define DISPLAY_WIDTH      168  /* Logical width (physical) */
+#define DISPLAY_HEIGHT     144  /* Logical height (physical) */
 
 /* Display is fixed in 90 degree orientation */
 
@@ -69,6 +47,7 @@ void Display_DrawText(uint8_t x, uint8_t y, const char *text);
 void Display_DrawTextRowCol(uint8_t row, uint8_t col, const char *text);
 void Display_DrawDirectionIndicator(uint8_t x, uint8_t y, float angle);
 void Display_ShowBootScreen(void);
+uint32_t Display_GetErrorCount(void);  /* SPI failure counter (bring-up aid) */
 
 #ifdef __cplusplus
 }

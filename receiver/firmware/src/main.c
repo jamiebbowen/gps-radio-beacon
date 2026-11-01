@@ -47,7 +47,9 @@
 #include "gps.h"
 #include "compass.h"
 #include "globals.h"
+#include "i2c_bus.h"
 #include "display.h"
+#include "eink.h"
 #include "rf_receiver.h"
 #include "display_modes.h"
 #include "math_utils.h"
@@ -205,11 +207,15 @@ static void LogPendingCrashRecord(void);
   * @brief  The application entry point.
   * @retval int
   */
-/* Measure supply voltage via ADC1/VREFINT (no pins needed - fully internal).
- * The handheld runs on whatever battery pack is handy; a sagging pack is a
- * classic hidden root cause for "the radio/GPS got flaky mid-walk". The
- * RFSTATS breadcrumb carries it every minute. */
-static uint16_t sys_vdd_mv = 0;
+/* Measure the raw battery pack voltage via ADC1_IN0 (PA0) and the external
+ * 100k/330k divider (v2.0 hardware). The v1.x VREFINT approach only read the
+ * regulated 3.3V rail, which is constant until the regulator browns out -
+ * useless for gauging the pack. The divider midpoint: V_pa0 = V_batt * 330/430,
+ * so V_batt = V_pa0 * 43/33, full-scale 4.30V -> 4095 counts. The 100nF
+ * midpoint cap holds the ~77k source steady across the 480-cycle sample.
+ * A sagging pack is a classic hidden root cause for "the radio/GPS got flaky
+ * mid-walk". The RFSTATS breadcrumb carries it every minute. */
+static uint16_t sys_vdd_mv = 0;   /* v2.0: actually the PACK voltage in mV */
 static void Sys_MeasureVdd(void)
 {
   ADC_HandleTypeDef hadc = {0};
@@ -228,25 +234,94 @@ static void Sys_MeasureVdd(void)
   hadc.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
   if (HAL_ADC_Init(&hadc) != HAL_OK) return;
 
-  ADC1_COMMON->CCR |= ADC_CCR_TSVREFE;   /* VREFINT on */
-  HAL_Delay(1);
-
   ADC_ChannelConfTypeDef cfg = {0};
-  cfg.Channel = ADC_CHANNEL_VREFINT;
+  cfg.Channel = BATTERY_ADC_CHANNEL;
   cfg.Rank = 1;
-  cfg.SamplingTime = ADC_SAMPLETIME_480CYCLES;
+  cfg.SamplingTime = ADC_SAMPLETIME_480CYCLES;   /* required: ~77k divider source */
   if (HAL_ADC_ConfigChannel(&hadc, &cfg) != HAL_OK) return;
-  HAL_ADC_Start(&hadc);
-  if (HAL_ADC_PollForConversion(&hadc, 50) == HAL_OK) {
-    uint32_t raw = HAL_ADC_GetValue(&hadc);
-    if (raw > 0) {
-      uint16_t vref_cal = *VREFINT_CAL_ADDR;   /* 3.3 V factory point */
-      sys_vdd_mv = (uint16_t)(3300u * vref_cal / raw);
+
+  /* Average 8 conversions: a lone 12-bit read of a high-impedance node is
+   * noisier than the divider's actual uncertainty - averaging costs ~200us. */
+  uint32_t acc = 0;
+  uint8_t n = 0;
+  for (uint8_t i = 0; i < 8; i++) {
+    HAL_ADC_Start(&hadc);
+    if (HAL_ADC_PollForConversion(&hadc, 5) == HAL_OK) {
+      acc += HAL_ADC_GetValue(&hadc);
+      n++;
     }
   }
   HAL_ADC_Stop(&hadc);
   HAL_ADC_DeInit(&hadc);
   __HAL_RCC_ADC1_CLK_DISABLE();
+
+  if (n > 0) {
+    uint32_t raw = acc / n;
+    /* V_batt = raw/4095 * 3.3V * 4300/1000 mV... keeping integer math:
+       mV = raw * 3300(mV full-scale) * 43 / (4095 * 33). */
+    sys_vdd_mv = (uint16_t)((raw * 3300u * 43u) / (4095u * 33u));
+  }
+}
+
+/* eInk persistent summary page (the screen that survives power-off). A
+ * physical tri-color refresh takes ~15-25 s and the panel is meant for
+ * "what happened" data, not live readout - cadence is 60 s, first refresh
+ * at boot+10 s so a power-on proves the panel works. The SPI transfer
+ * (~30 ms) happens inline here; the long BUSY wait is polled in
+ * Eink_Service() so the RF path is never held. */
+static void Eink_MaybeRefreshSummary(uint32_t now_ms)
+{
+  static uint32_t next_refresh_ms = 10000;
+  if (now_ms < next_refresh_ms) return;
+  if (Eink_IsBusy()) return;
+  next_refresh_ms = now_ms + 60000;
+
+  char buf[48];
+
+  uint8_t ch = RF_Receiver_GetChannel();
+  int16_t rssi = 0;
+  int8_t snr = 0;
+  RF_Receiver_GetSignalQuality(&rssi, &snr);
+  uint32_t age_s = (last_rf_packet_time > 0)
+                   ? (now_ms - last_rf_packet_time) / 1000 : 0;
+  uint8_t link_lost = (last_rf_packet_time == 0) || (age_s > 180);
+
+  Eink_Clear();
+  Eink_DrawText(4, 2, 2, "GPS BEACON RX", EINK_BLACK);
+  Eink_FillRect(0, 30, EINK_WIDTH, 3, EINK_RED);
+
+  snprintf(buf, sizeof(buf), "CH%u %.2fMHz  rssi %ddBm",
+           (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)rssi);
+  Eink_DrawText(4, 38, 1, buf, EINK_BLACK);
+  snprintf(buf, sizeof(buf), "age %lus  pkts %lu",
+           (unsigned long)age_s, (unsigned long)rf_packet_count);
+  Eink_DrawText(4, 50, 1, buf, EINK_BLACK);
+
+  if (has_valid_remote_gps || has_last_good_remote_gps) {
+    snprintf(buf, sizeof(buf), "lat %.5f",
+             (double)last_good_remote_gps.latitude);
+    Eink_DrawText(4, 62, 1, buf, EINK_BLACK);
+    snprintf(buf, sizeof(buf), "lon %.5f",
+             (double)last_good_remote_gps.longitude);
+    Eink_DrawText(4, 74, 1, buf, EINK_BLACK);
+    if (distance_to_tx >= 0.0f) {
+      snprintf(buf, sizeof(buf), "alt %.0fm  dist %.2fkm",
+               (double)last_good_remote_gps.altitude, (double)distance_to_tx);
+      Eink_DrawText(4, 86, 1, buf, EINK_BLACK);
+    }
+  } else {
+    Eink_DrawText(4, 66, 2, "NO BEACON YET", EINK_BLACK);
+  }
+
+  if (link_lost) {
+    Eink_DrawText(4, 100, 2, "LINK LOST", EINK_RED);
+  } else {
+    snprintf(buf, sizeof(buf), "BAT %.2fV  up %lus",
+             sys_vdd_mv / 1000.0, (unsigned long)(now_ms / 1000));
+    Eink_DrawText(4, 104, 1, buf, EINK_BLACK);
+  }
+
+  Eink_RequestRefresh();
 }
 
 int main(void)
@@ -276,9 +351,18 @@ int main(void)
   MX_GPIO_Init();
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
-  
-  /* Initialize display */
+
+  /* Shared I2C1 bus (BNO055 + jogpad) - must come up before anything that
+   * talks I2C. All sensors keep running degraded if it fails. */
+  I2CBus_Init();
+
+  /* Initialize display (SHARP memory LCD on SPI1) */
   Display_Init();
+
+  /* Initialize eInk (SSD1680 FeatherWing on SPI1): reset + init + deep sleep.
+   * The first summary page lands on it a few seconds into the session via
+   * the periodic refresh below. */
+  Eink_Init();
 
   /* Arm the independent watchdog FIRST (LSI/256, full reload: ~32 s).
    * It used to be armed only after all one-time init, so a boot-time
@@ -1791,15 +1875,21 @@ int main(void)
     last_calibration_time = current_time;
   }
   
-  /* Throttle display updates to prevent I2C blocking during packet reception.
-   * A button-triggered mode change bypasses the throttle so the new screen
-   * appears immediately. */
+  /* Throttle display updates (SHARP full-frame SPI push is ~20 ms; the RF
+   * RX path gets priority). A button-triggered mode change bypasses the
+   * throttle so the new screen appears immediately. The 4 Hz frame cadence
+   * also guarantees the panel's required ~1 Hz VCOM toggling, which happens
+   * once per frame in Display_Update. */
   static uint32_t last_display_update = 0;
   if (force_display_update || current_time - last_display_update >= 250) {
     Display_Update();
     last_display_update = current_time;
     force_display_update = 0;
   }
+
+  /* eInk: poll refresh completion + the 60 s persistent summary push. */
+  Eink_Service();
+  Eink_MaybeRefreshSummary(current_time);
   SEG_TOC(disp);
   
   /* No delay - check packets continuously with zero blocking */
@@ -1897,6 +1987,41 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(SD_DETECT_GPIO_PORT, &GPIO_InitStruct);
+
+  /* --- v2.0: SHARP memory LCD + SSD1680 eInk + battery divider ---------- */
+
+  /* Set CS idle states BEFORE enabling the pins as outputs, so the first
+   * driven level is the released one (no glitch-frames into a shared bus):
+   *   SHARP CS idles LOW (active-HIGH select - inverted vs everything else)
+   *   eInk ECS / SRAM CS idle HIGH (active-low selects) */
+  HAL_GPIO_WritePin(SHARP_CS_GPIO_PORT, SHARP_CS_PIN, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(SHARP_DISP_GPIO_PORT, SHARP_DISP_PIN, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(EINK_CS_GPIO_PORT, EINK_CS_PIN, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(EINK_SRCS_GPIO_PORT, EINK_SRCS_PIN, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(EINK_RST_GPIO_PORT, EINK_RST_PIN, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(EINK_DC_GPIO_PORT, EINK_DC_PIN, GPIO_PIN_RESET);
+
+  GPIO_InitStruct.Pin = SHARP_CS_PIN | SHARP_DISP_PIN |
+                        EINK_CS_PIN | EINK_SRCS_PIN |
+                        EINK_RST_PIN | EINK_DC_PIN;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* eInk BUSY: module-driven, idle LOW - pull-down keeps a disconnected
+   * (unsoldered pad) line reading "not busy" instead of hanging refreshes */
+  GPIO_InitStruct.Pin = EINK_BUSY_PIN;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(EINK_BUSY_GPIO_PORT, &GPIO_InitStruct);
+
+  /* Battery divider midpoint: pure analog (no Schmitt input load) */
+  GPIO_InitStruct.Pin = BATTERY_ADC_PIN;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(BATTERY_ADC_GPIO_PORT, &GPIO_InitStruct);
 }
 
 /**

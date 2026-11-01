@@ -60,6 +60,38 @@ void Error_Handler(void);
 #define SD_SPI_MOSI_PIN             GPIO_PIN_7
 #define SD_SPI_MOSI_GPIO_PORT       GPIOA
 
+/* --------------------------------------------------------------------------
+ * Receiver v2.0 hardware (see docs/hardware-receiver.md v2.0)
+ * SPI1 is a shared bus: SD card + SHARP memory LCD + SSD1680 eInk (+ SRAM).
+ * NOTE mixed CS polarity: SHARP CS is ACTIVE HIGH, everything else LOW.
+ * ------------------------------------------------------------------------- */
+
+/* SHARP Memory LCD (Adafruit 3502, 168x144) on SPI1 */
+#define SHARP_CS_PIN                GPIO_PIN_10  /* PB10 - CS, ACTIVE HIGH */
+#define SHARP_CS_GPIO_PORT          GPIOB
+#define SHARP_DISP_PIN              GPIO_PIN_8   /* PB8 - display on/off */
+#define SHARP_DISP_GPIO_PORT        GPIOB
+
+/* SSD1680 2.9" tri-color eInk FeatherWing (Adafruit 4778) on SPI1 */
+#define EINK_CS_PIN                 GPIO_PIN_11  /* PB11 - ECS, active low */
+#define EINK_CS_GPIO_PORT           GPIOB
+#define EINK_DC_PIN                 GPIO_PIN_3   /* PB3 - Data/Command */
+#define EINK_DC_GPIO_PORT           GPIOB
+#define EINK_RST_PIN                GPIO_PIN_4   /* PB4 - eInk reset */
+#define EINK_RST_GPIO_PORT          GPIOB
+#define EINK_BUSY_PIN               GPIO_PIN_1   /* PA1 - busy, HIGH = busy */
+#define EINK_BUSY_GPIO_PORT         GPIOA
+#define EINK_SRCS_PIN               GPIO_PIN_5   /* PB5 - SRAM CS (wired, unused:
+                                                    framebuffer lives in MCU RAM) */
+#define EINK_SRCS_GPIO_PORT         GPIOB
+
+/* Battery voltage divider: 100k over 330k, midpoint -> PA0 (ADC1_IN0).
+ * Full-scale 4.30V -> 3.3V; 100nF to GND at the midpoint steadies the
+ * ~77k source resistance (requires 480-cycle sampling). */
+#define BATTERY_ADC_PIN             GPIO_PIN_0
+#define BATTERY_ADC_GPIO_PORT       GPIOA
+#define BATTERY_ADC_CHANNEL         ADC_CHANNEL_0
+
 #ifdef __cplusplus
 }
 #endif
