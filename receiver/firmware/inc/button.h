@@ -14,12 +14,11 @@
 /* v2.0+ hardware: no physical buttons on the MCU at all. This API is a shim
  * over the I2C jogpad (see jogpad.h); the shim lives in button.c.
  *
- * Pin note for the schematic (hardware-receiver.md v2.6): PB2 is the BOOT1
- * strap - a 100k pull-down to GND only, no button, no peripheral. DFU entry
- * happens via the module's onboard BOOT0/NRST buttons. This driver must
- * NEVER touch PB2: asserting it at the wrong moment redirects boot into
- * SRAM instead of DFU. (The v1.x Select/Home button that used to live here
- * is now the jogpad's Z click / B button.) */
+ * Pin note for the schematic (hardware-receiver.md v2.7): PB2 is a FREE GPIO -
+ * the board wires nothing to it and the Black Pill straps BOOT1 low itself,
+ * so boot/DFU behavior can't be affected by anything this board drives on it.
+ * (The v1.x Select/Home button that used to live here is now the jogpad's
+ * Z click / B button.) */
 
 /* Button states */
 typedef enum {

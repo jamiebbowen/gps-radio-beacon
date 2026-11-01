@@ -266,12 +266,13 @@ BATT+ ──[100kΩ R1]──┬── PA0 (ADC1_IN0)
 
 ---
 
-### 9. Boot Mode (v2.6)
+### 9. Boot Mode (v2.7)
 
-**No external boot/DFU buttons are fitted.** DFU entry and reset use the Black
-Pill's onboard BOOT0 + NRST buttons directly (hold BOOT0, tap NRST, release
-BOOT0 - then `make flash` sees the module over USB as a DFU device). Plan the
-enclosure/harness so the onboard buttons stay physically reachable.
+**Boot handling is 100% on-module; nothing on our board touches a boot pin.**
+DFU entry and reset use the Black Pill's onboard BOOT0 + NRST buttons directly
+(hold BOOT0, tap NRST, release BOOT0 - then `make flash` sees the module over
+USB as a DFU device). Plan the enclosure/harness so the onboard buttons stay
+physically reachable.
 
 **Boot source truth table (STM32F4, sampled at reset), for reference:**
 
@@ -285,10 +286,10 @@ enclosure/harness so the onboard buttons stay physically reachable.
 |--------|------------|-------|
 | **BOOT0** | No external connection | Handled entirely by the module |
 | **NRST** | No external connection | Handled entirely by the module |
-| **PB2 / BOOT1** | **100kΩ pull-down to GND only** - NO button | BOOT1 must be LOW for DFU. Wiring anything to PB2 that can assert it high is an anti-feature: pressed at the wrong moment it hijacks boot into SRAM instead of DFU |
+| **PB2 / BOOT1** | **Not connected** | BOOT1 is strapped LOW by the Black Pill itself (onboard pull-down), so the module boots flash/DFU correctly with PB2 unwired. PB2 is a free GPIO on our board - usable in firmware like any other pin, no boot-time constraint |
 
-(The external-button design tried in v2.4/v2.5 was reverted: fewer wires,
-fewer failure modes, and the onboard buttons carry the job.)
+(The external-button and BOOT1-strap designs from v2.3-v2.6 were reverted:
+the module covers boot selection itself, so the board carries nothing.)
 
 ---
 
@@ -332,7 +333,7 @@ fewer failure modes, and the onboard buttons carry the job.)
 |-----|----------|--------------|
 | PB0 | GPIO_IN | LoRa BUSY |
 | PB1 | GPIO_INT | LoRa DIO1 |
-| PB2 | BOOT1 strap (100k pull-down only) | NO button - must be LOW for DFU |
+| PB2 | Free GPIO | Not connected on our board (module straps BOOT1 low itself) |
 | PB3 | GPIO_OUT | eInk D/C |
 | PB4 | GPIO_OUT | eInk RST |
 | PB5 | GPIO_OUT | eInk SRAM CS |
@@ -377,10 +378,10 @@ fewer failure modes, and the onboard buttons carry the job.)
 1. **Buttons are gone** - PB10 and PB2 freed by the I2C jogpad. PB10 is now the
    SHARP CS (the old button/LoRa-CS PB12 conflict is fully retired).
 
-2. **PB2 / BOOT1** - strap-only (100kΩ pull-down, never a button, never a
-   peripheral): DFU is entered via BOOT0 (the module's onboard button), and
-   BOOT1 must be LOW for that to work. (BOOT1-button and external-DFU-button
-   experiments in v2.3-v2.5 were reverted in v2.6.) See the Boot Mode section.
+2. **PB2 / BOOT1** - fully free again in v2.7: the Black Pill straps BOOT1 low
+   onboard, so DFU works with PB2 unwired and it is a normal usable GPIO on
+   our board. (v2.3-v2.6's button/strap experiments were all reverted once the
+   module-side strap was confirmed.) See the Boot Mode section.
 
 3. **SD Card / LoRa Conflict** - RESOLVED (carried from v1.x)
    - LoRa BUSY on **PB0**, LoRa DIO1 on **PB1**
@@ -512,10 +513,8 @@ Things worth adding while the schematic is open anyway:
    charge the pack from USB, boost it to 5V. A cheap 5V power bank is the
    zero-effort equivalent. JST-PH 2-pin battery connector is standard.
 3. **Buzzer** - 2N7000-switched passive buzzer for packet-received beeps and
-   the low-battery alarm. PA10 is now LoRa TXEN and PB2 is reserved as the
-   BOOT1 strap (v2.4), so the remaining candidates are PC14/PC15 (32.768kHz
-   osc pins - usable as GPIO for slow signals, ~2mA drive is plenty through
-   a FET) or skipping the buzzer.
+   the low-battery alarm. **PB2 is a free GPIO again** (v2.7: no BOOT1 strap
+   needed - the module handles it), so that is the natural candidate.
 4. **SMA or u.FL antenna connector** for 433MHz, near the E22 ANT pad, with a
    copper keep-out and ground pour around it.
 5. **4-pin SWD header** (3V3, GND, PA13, PA14). USB-DFU flashing gets annoying
@@ -523,9 +522,9 @@ Things worth adding while the schematic is open anyway:
 6. **GPS backup battery** - CR1220 to the NEO-6M V_BCKP pin for warm starts
    (fix in seconds instead of 30-60s at the pad).
 7. ~~DFU / Reset buttons~~ - externally-wired boot buttons were specified in
-   v2.4/v2.5 and **reverted in v2.6**: the board uses the Black Pill's onboard
-   BOOT0/NRST buttons. PB2 stays a BOOT1 strap pad (pull-down only) - keep it
-   labeled and uncommitted.
+   v2.4/v2.5 and **removed in v2.6/2.7**: the board uses the Black Pill's
+   onboard BOOT0/NRST buttons, and PB2 is not connected at all (module straps
+   BOOT1 low itself).
 8. **Debug jumpers/test points** on SPI1 SCK/MISO/MOSI and each CS - you'll
    want a scope on them the first time four SPI devices share a bus.
 
@@ -698,7 +697,7 @@ st-flash write bin/gps_radio_beacon_receiver.bin 0x8000000
 
 ---
 
-**Document Version:** 2.6  
+**Document Version:** 2.7  
 **Last Updated:** 2026-11-01  
-**Target Hardware:** Receiver v2.6 (v2.2 + onboard BOOT0/NRST buttons retained; BOOT1 strap-only; external boot buttons removed)  
-**Firmware Status:** `receiver/firmware` matches this doc (boot buttons need no firmware)
+**Target Hardware:** Receiver v2.7 (v2.2 + onboard boot buttons retained; PB2/BOOT1 fully unused - free GPIO)  
+**Firmware Status:** `receiver/firmware` matches this doc
