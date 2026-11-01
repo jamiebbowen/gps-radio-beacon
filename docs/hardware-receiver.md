@@ -266,15 +266,14 @@ BATT+ ──[100kΩ R1]──┬── PA0 (ADC1_IN0)
 
 ---
 
-### 9. DFU / Reset Buttons - Robust External Replacement (v2.4)
+### 9. Boot Mode (v2.6)
 
-**Why:** the Black Pill's tiny SMD BOOT0/NRST buttons are fragile and break
-under repeated bring-up/reflash cycles. The boot-support circuitry
-(BOOT0 pull-down, NRST pull-up) lives on the module, but the *buttons*
-themselves are replaced with robust panel-mount momentaries (12mm tactile or
-sealed panel pushbutton rated for field abuse).
+**No external boot/DFU buttons are fitted.** DFU entry and reset use the Black
+Pill's onboard BOOT0 + NRST buttons directly (hold BOOT0, tap NRST, release
+BOOT0 - then `make flash` sees the module over USB as a DFU device). Plan the
+enclosure/harness so the onboard buttons stay physically reachable.
 
-**Boot source truth table (STM32F4, sampled at reset):**
+**Boot source truth table (STM32F4, sampled at reset), for reference:**
 
 | BOOT0 | BOOT1 (PB2) | Boot source |
 |-------|-------------|-------------|
@@ -282,22 +281,14 @@ sealed panel pushbutton rated for field abuse).
 | 1 | **0** | System memory = **USB DFU bootloader** |
 | 1 | **1** | Embedded **SRAM** boot |
 
-| Signal | Robust button wiring | Notes |
-|--------|----------------------|-------|
-| **BOOT0** ("DFU") | Panel-mount momentary, one side to the BOOT0 net, other side to 3.3V | Tap point = onboard BOOT0 button's signal-side pad (option A: desolder fragile button outright, connect across its pads). Board's BOOT0 pull-down stays in circuit |
-| **NRST** ("Reset") | Panel-mount momentary, one side to the NRST net, other side to GND | Same tap/replace options at the onboard NRST button. NRST pull-up stays onboard |
+| Signal | Connection | Notes |
+|--------|------------|-------|
+| **BOOT0** | No external connection | Handled entirely by the module |
+| **NRST** | No external connection | Handled entirely by the module |
 | **PB2 / BOOT1** | **100kΩ pull-down to GND only** - NO button | BOOT1 must be LOW for DFU. Wiring anything to PB2 that can assert it high is an anti-feature: pressed at the wrong moment it hijacks boot into SRAM instead of DFU |
 
-**Wiring notes:**
-- Keep the button leads short and twisted with their return (3.3V or GND) -
-  long flying leads on NRST pick up noise and cause phantom resets.
-- Add strain relief where the leads enter the enclosure.
-- If migrating to a **bare-F4 design** later (no Black Pill module), you must
-  provide: 10kΩ BOOT0 pull-down, 10kΩ NRST pull-up + 100nF to GND, and this
-  same pair of button nets.
-
-**DFU entry gesture (either button set):** hold DFU, tap Reset, release DFU -
-then `make flash` sees the MCU over USB as a DFU device.
+(The external-button design tried in v2.4/v2.5 was reverted: fewer wires,
+fewer failure modes, and the onboard buttons carry the job.)
 
 ---
 
@@ -341,7 +332,7 @@ then `make flash` sees the MCU over USB as a DFU device.
 |-----|----------|--------------|
 | PB0 | GPIO_IN | LoRa BUSY |
 | PB1 | GPIO_INT | LoRa DIO1 |
-| PB2 | BOOT1 strap (100k pull-down only) | NO button - must be LOW for DFU (v2.4) |
+| PB2 | BOOT1 strap (100k pull-down only) | NO button - must be LOW for DFU |
 | PB3 | GPIO_OUT | eInk D/C |
 | PB4 | GPIO_OUT | eInk RST |
 | PB5 | GPIO_OUT | eInk SRAM CS |
@@ -387,10 +378,9 @@ then `make flash` sees the MCU over USB as a DFU device.
    SHARP CS (the old button/LoRa-CS PB12 conflict is fully retired).
 
 2. **PB2 / BOOT1** - strap-only (100kΩ pull-down, never a button, never a
-   peripheral): DFU is entered via BOOT0, and BOOT1 must be LOW for that to
-   work. (A brief v2.3 experiment with a BOOT1 button was reverted in v2.4 -
-   it admitted SRAM boot but made DFU fragile, which is backwards: DFU is
-   the everyday gesture.) See the DFU/Reset buttons section.
+   peripheral): DFU is entered via BOOT0 (the module's onboard button), and
+   BOOT1 must be LOW for that to work. (BOOT1-button and external-DFU-button
+   experiments in v2.3-v2.5 were reverted in v2.6.) See the Boot Mode section.
 
 3. **SD Card / LoRa Conflict** - RESOLVED (carried from v1.x)
    - LoRa BUSY on **PB0**, LoRa DIO1 on **PB1**
@@ -532,10 +522,10 @@ Things worth adding while the schematic is open anyway:
    fast during bring-up; SWD is single-click.
 6. **GPS backup battery** - CR1220 to the NEO-6M V_BCKP pin for warm starts
    (fix in seconds instead of 30-60s at the pad).
-7. ~~Enclosure-accessible DFU + Reset buttons~~ - **done in v2.4**, upgraded
-   to a full replacement of the fragile onboard SMD buttons with panel-mount
-   momentaries across the BOOT0/NRST nets. PB2 stays a BOOT1 strap pad
-   (pull-down only) - keep it labeled and uncommitted.
+7. ~~DFU / Reset buttons~~ - externally-wired boot buttons were specified in
+   v2.4/v2.5 and **reverted in v2.6**: the board uses the Black Pill's onboard
+   BOOT0/NRST buttons. PB2 stays a BOOT1 strap pad (pull-down only) - keep it
+   labeled and uncommitted.
 8. **Debug jumpers/test points** on SPI1 SCK/MISO/MOSI and each CS - you'll
    want a scope on them the first time four SPI devices share a bus.
 
@@ -693,7 +683,6 @@ st-flash write bin/gps_radio_beacon_receiver.bin 0x8000000
 
 ### Recommended Parts
 - **STM32F401 Black Pill:** ~$4-6 on AliExpress/Amazon
-- **Panel-mount momentary buttons ×2** (DFU + Reset, 12mm tactile or sealed): ~$2-5
 - **E22-400M33S:** ~$8-12 on AliExpress (ensure 433MHz version)
 - **NEO-6M GPS:** ~$6-10 with antenna
 - **BNO055:** ~$15-25 (Adafruit breakout recommended)
@@ -709,7 +698,7 @@ st-flash write bin/gps_radio_beacon_receiver.bin 0x8000000
 
 ---
 
-**Document Version:** 2.5  
+**Document Version:** 2.6  
 **Last Updated:** 2026-11-01  
-**Target Hardware:** Receiver v2.5 (v2.2 + panel-mount DFU/Reset buttons replacing the fragile onboard ones; BOOT1 strap-only)  
+**Target Hardware:** Receiver v2.6 (v2.2 + onboard BOOT0/NRST buttons retained; BOOT1 strap-only; external boot buttons removed)  
 **Firmware Status:** `receiver/firmware` matches this doc (boot buttons need no firmware)
