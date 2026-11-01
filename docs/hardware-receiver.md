@@ -266,7 +266,13 @@ BATT+ ──[100kΩ R1]──┬── PA0 (ADC1_IN0)
 
 ---
 
-### 9. DFU / Reset Buttons (v2.4)
+### 9. DFU / Reset Buttons - Robust External Replacement (v2.4)
+
+**Why:** the Black Pill's tiny SMD BOOT0/NRST buttons are fragile and break
+under repeated bring-up/reflash cycles. The boot-support circuitry
+(BOOT0 pull-down, NRST pull-up) lives on the module, but the *buttons*
+themselves are replaced with robust panel-mount momentaries (12mm tactile or
+sealed panel pushbutton rated for field abuse).
 
 **Boot source truth table (STM32F4, sampled at reset):**
 
@@ -276,18 +282,22 @@ BATT+ ──[100kΩ R1]──┬── PA0 (ADC1_IN0)
 | 1 | **0** | System memory = **USB DFU bootloader** |
 | 1 | **1** | Embedded **SRAM** boot |
 
-**Enter DFU = BOOT0 high at reset with BOOT1 low.** The Black Pill has
-onboard BOOT0 and NRST buttons that do this; the additions below duplicate
-them with enclosure-accessible buttons:
-
-| Signal | Connection | Notes |
-|--------|------------|-------|
-| **BOOT0** | Momentary button → 3.3V ("DFU") | Parallels the onboard BOOT0 button; the Black Pill's BOOT0 pull-down is already onboard. If migrating to a bare-F4 design, add your own 10kΩ pull-down |
-| **NRST** | Momentary button → GND ("Reset") | Optional; the onboard NRST button also works. Pull-up already onboard |
+| Signal | Robust button wiring | Notes |
+|--------|----------------------|-------|
+| **BOOT0** ("DFU") | Panel-mount momentary, one side to the BOOT0 net, other side to 3.3V | Tap point = onboard BOOT0 button's signal-side pad (option A: desolder fragile button outright, connect across its pads). Board's BOOT0 pull-down stays in circuit |
+| **NRST** ("Reset") | Panel-mount momentary, one side to the NRST net, other side to GND | Same tap/replace options at the onboard NRST button. NRST pull-up stays onboard |
 | **PB2 / BOOT1** | **100kΩ pull-down to GND only** - NO button | BOOT1 must be LOW for DFU. Wiring anything to PB2 that can assert it high is an anti-feature: pressed at the wrong moment it hijacks boot into SRAM instead of DFU |
 
+**Wiring notes:**
+- Keep the button leads short and twisted with their return (3.3V or GND) -
+  long flying leads on NRST pick up noise and cause phantom resets.
+- Add strain relief where the leads enter the enclosure.
+- If migrating to a **bare-F4 design** later (no Black Pill module), you must
+  provide: 10kΩ BOOT0 pull-down, 10kΩ NRST pull-up + 100nF to GND, and this
+  same pair of button nets.
+
 **DFU entry gesture (either button set):** hold DFU, tap Reset, release DFU -
-then `make flash` sees the Black Pill over USB as a DFU device.
+then `make flash` sees the MCU over USB as a DFU device.
 
 ---
 
@@ -522,9 +532,10 @@ Things worth adding while the schematic is open anyway:
    fast during bring-up; SWD is single-click.
 6. **GPS backup battery** - CR1220 to the NEO-6M V_BCKP pin for warm starts
    (fix in seconds instead of 30-60s at the pad).
-7. **Enclosure-accessible DFU + Reset buttons** (v2.4): BOOT0 → 3.3V and
-   NRST → GND momentaries, paralleling the onboard ones. PB2 stays a
-   BOOT1 strap pad (pull-down only) - keep it labeled and uncommitted.
+7. ~~Enclosure-accessible DFU + Reset buttons~~ - **done in v2.4**, upgraded
+   to a full replacement of the fragile onboard SMD buttons with panel-mount
+   momentaries across the BOOT0/NRST nets. PB2 stays a BOOT1 strap pad
+   (pull-down only) - keep it labeled and uncommitted.
 8. **Debug jumpers/test points** on SPI1 SCK/MISO/MOSI and each CS - you'll
    want a scope on them the first time four SPI devices share a bus.
 
@@ -682,6 +693,7 @@ st-flash write bin/gps_radio_beacon_receiver.bin 0x8000000
 
 ### Recommended Parts
 - **STM32F401 Black Pill:** ~$4-6 on AliExpress/Amazon
+- **Panel-mount momentary buttons ×2** (DFU + Reset, 12mm tactile or sealed): ~$2-5
 - **E22-400M33S:** ~$8-12 on AliExpress (ensure 433MHz version)
 - **NEO-6M GPS:** ~$6-10 with antenna
 - **BNO055:** ~$15-25 (Adafruit breakout recommended)
@@ -697,7 +709,7 @@ st-flash write bin/gps_radio_beacon_receiver.bin 0x8000000
 
 ---
 
-**Document Version:** 2.4  
+**Document Version:** 2.5  
 **Last Updated:** 2026-11-01  
-**Target Hardware:** Receiver v2.4 (v2.2 + enclosure-accessible DFU/Reset buttons; BOOT1 strap-only)  
+**Target Hardware:** Receiver v2.5 (v2.2 + panel-mount DFU/Reset buttons replacing the fragile onboard ones; BOOT1 strap-only)  
 **Firmware Status:** `receiver/firmware` matches this doc (boot buttons need no firmware)
