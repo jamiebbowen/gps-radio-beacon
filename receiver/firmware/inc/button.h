@@ -14,11 +14,12 @@
 /* v2.0+ hardware: no physical buttons on the MCU at all. This API is a shim
  * over the I2C jogpad (see jogpad.h); the shim lives in button.c.
  *
- * Pin note for the schematic (hardware-receiver.md v2.3): PB2 is wired to
- * the BOOT1 boot-mode button (button to 3.3V, 100k pull-down). This driver
- * must NEVER touch PB2 - it is boot-strap hardware, not application GPIO.
- * (The v1.x Select/Home button that used to live here is now the jogpad's
- * Z click / B button.) */
+ * Pin note for the schematic (hardware-receiver.md v2.4): PB2 is the BOOT1
+ * strap - a 100k pull-down to GND only, no button, no peripheral. DFU entry
+ * happens via BOOT0. This driver must NEVER touch PB2: asserting it at the
+ * wrong moment redirects boot into SRAM instead of DFU. (The v1.x
+ * Select/Home button that used to live here is now the jogpad's Z click /
+ * B button.) */
 
 /* Button states */
 typedef enum {
