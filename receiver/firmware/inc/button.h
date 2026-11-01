@@ -11,19 +11,14 @@
 #include "stm32f4xx_hal.h"
 #include <stdint.h>
 
-/* Button configuration */
-#define BUTTON_PIN GPIO_PIN_10  /* PB10 - Mode button (next page) */
-#define BUTTON_GPIO_PORT GPIOB
-
-/* Second button: context action (select channel on Rocket Select page,
- * jump home to Navigation elsewhere). Wired between PB2 and 3V3:
- * ACTIVE HIGH, internal pull-down. PB2 sits next to PB10 on the Black Pill
- * header, and the board's BOOT1 pulldown doesn't fight us (firmware sets
- * pull-down too). NOTE: PB2 is BOOT1 - ignored on normal boots (BOOT0=0),
- * but it must read LOW when entering the DFU bootloader; if DFU entry ever
- * acts up, tap reset with the button untouched (PB2 low at reset). */
-#define BUTTON2_PIN GPIO_PIN_2  /* PB2 - Select/home button */
-#define BUTTON2_GPIO_PORT GPIOB
+/* v2.0+ hardware: no physical buttons on the MCU at all. This API is a shim
+ * over the I2C jogpad (see jogpad.h); the shim lives in button.c.
+ *
+ * Pin note for the schematic (hardware-receiver.md v2.3): PB2 is wired to
+ * the BOOT1 boot-mode button (button to 3.3V, 100k pull-down). This driver
+ * must NEVER touch PB2 - it is boot-strap hardware, not application GPIO.
+ * (The v1.x Select/Home button that used to live here is now the jogpad's
+ * Z click / B button.) */
 
 /* Button states */
 typedef enum {

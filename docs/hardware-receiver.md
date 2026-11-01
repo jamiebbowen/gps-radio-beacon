@@ -266,7 +266,40 @@ BATT+ ──[100kΩ R1]──┬── PA0 (ADC1_IN0)
 
 ---
 
-### 9. Status LED
+### 9. BOOT1 Boot-Mode Button (v2.3)
+
+**GPIO input, button to 3.3V, pull-down**
+
+| STM32F4 Pin | Function | Connection |
+|-------------|----------|------------|
+| **PB2** | BOOT1 / GPIO_IN | Button → 3.3V (press = BOOT1 high) |
+| - | - | **100kΩ pull-down to GND on PB2** (button released = LOW) |
+
+**Boot source truth table (STM32F4, sampled at reset):**
+
+| BOOT0 | BOOT1 (PB2) | Boot source |
+|-------|-------------|-------------|
+| 0 | (don't care) | Normal flash boot |
+| 1 | **0** | System memory = **USB DFU bootloader** |
+| 1 | **1** | Embedded **SRAM** boot |
+
+**How it's actually used on this board:**
+- **DFU programming:** hold the Black Pill's onboard BOOT0 button, tap NRST,
+  release BOOT0. PB2 stays LOW because this button is untouched and the
+  pulldown holds it. (DFU was the only real-world use case.)
+- **SRAM boot:** BOOT0 high + this button pressed at reset - rare, but now
+  available for bench debugging without desoldering anything.
+
+⚠️ **Constraints:**
+- Never wire any peripheral or output to PB2 - it must be a button+pull-down
+  ONLY. Any signal driving PB2 high can hijack boot mode selection or,
+  worse, fight the button.
+- **Unpressed = safe for DFU.** If entering DFU ever misbehaves, tap NRST
+  with the button untouched.
+
+---
+
+### 10. Status LED
 
 **GPIO Output**
 
@@ -306,7 +339,7 @@ BATT+ ──[100kΩ R1]──┬── PA0 (ADC1_IN0)
 |-----|----------|--------------|
 | PB0 | GPIO_IN | LoRa BUSY |
 | PB1 | GPIO_INT | LoRa DIO1 |
-| PB2 | Spare | **BOOT1!** Leave as an uncommitted pad (see conflicts section) |
+| PB2 | GPIO_IN (100k pull-down) | BOOT1 boot-mode button → 3.3V (v2.3) |
 | PB3 | GPIO_OUT | eInk D/C |
 | PB4 | GPIO_OUT | eInk RST |
 | PB5 | GPIO_OUT | eInk SRAM CS |
@@ -351,10 +384,11 @@ BATT+ ──[100kΩ R1]──┬── PA0 (ADC1_IN0)
 1. **Buttons are gone** - PB10 and PB2 freed by the I2C jogpad. PB10 is now the
    SHARP CS (the old button/LoRa-CS PB12 conflict is fully retired).
 
-2. **PB2 / BOOT1** - now a *spare*. Route it to a test pad with a 100kΩ
-   pull-down but do **not** commit it to a peripheral that can drive it high:
-   PB2 must read LOW at reset when entering the DFU bootloader (only matters
-   when BOOT0 is held high; ignored on normal boots).
+2. **PB2 / BOOT1** - committed in v2.3 to the **BOOT1 button** (to 3.3V, with
+   a 100kΩ pull-down to GND). Safe because it's input-only by construction:
+   nothing else drives the pin, the button unpressed = LOW = DFU-compatible,
+   and at *any* reset with BOOT0 low it is ignored entirely (normal boots).
+   See the boot-mode section for the BOOT0/BOOT1 truth table.
 
 3. **SD Card / LoRa Conflict** - RESOLVED (carried from v1.x)
    - LoRa BUSY on **PB0**, LoRa DIO1 on **PB1**
@@ -486,16 +520,18 @@ Things worth adding while the schematic is open anyway:
    charge the pack from USB, boost it to 5V. A cheap 5V power bank is the
    zero-effort equivalent. JST-PH 2-pin battery connector is standard.
 3. **Buzzer** - 2N7000-switched passive buzzer for packet-received beeps and
-   the low-battery alarm. PA10 is now LoRa TXEN, so the only candidates are
-   the PB2 spare pad (consumes the BOOT1 test point) or skipping the buzzer.
+   the low-battery alarm. PA10 is now LoRa TXEN and PB2 is the BOOT1 button
+   (v2.3), so the remaining candidates are PC14/PC15 (32.768kHz osc pins -
+   usable as GPIO for slow signals, ~2mA drive is plenty through a FET) or
+   skipping the buzzer.
 4. **SMA or u.FL antenna connector** for 433MHz, near the E22 ANT pad, with a
    copper keep-out and ground pour around it.
 5. **4-pin SWD header** (3V3, GND, PA13, PA14). USB-DFU flashing gets annoying
    fast during bring-up; SWD is single-click.
 6. **GPS backup battery** - CR1220 to the NEO-6M V_BCKP pin for warm starts
    (fix in seconds instead of 30-60s at the pad).
-7. **Keep PB2 on a labeled test pad** (BOOT1) with a solder jumper - future
-   spare GPIO without sacrificing DFU.
+7. ~~PB2 test pad~~ - **done in v2.3**: PB2 is now the BOOT1 boot-mode button
+   (button to 3.3V + 100kΩ pull-down). Nothing else may use the pin.
 8. **Debug jumpers/test points** on SPI1 SCK/MISO/MOSI and each CS - you'll
    want a scope on them the first time four SPI devices share a bus.
 
@@ -668,7 +704,7 @@ st-flash write bin/gps_radio_beacon_receiver.bin 0x8000000
 
 ---
 
-**Document Version:** 2.2  
+**Document Version:** 2.3  
 **Last Updated:** 2026-11-01  
-**Target Hardware:** Receiver v2.2 (v2.1 + dual 5V/3.3V power rails; E22, GPS, BNO055, SHARP, SD on 5V)  
-**Firmware Status:** `receiver/firmware` matches this doc (power changes need no firmware)
+**Target Hardware:** Receiver v2.3 (v2.2 + BOOT1 boot-mode button on PB2)  
+**Firmware Status:** `receiver/firmware` matches this doc (BOOT1 button needs no firmware)
