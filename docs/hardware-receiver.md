@@ -2,12 +2,32 @@
 
 ## STM32F401 Black Pill Pin Assignments
 
-### Power
-| Pin | Connection | Notes |
-|-----|------------|-------|
-| 3.3V | Power rail | Connect to all 3.3V devices |
-| GND | Ground rail | Common ground for all components |
-| 5V | USB power input | Optional - can power from USB or external |
+### Power (v2.2: two-rail architecture)
+
+The receiver runs on **two power rails**. This is about VCC wiring only:
+**all logic signals are 3.3V** (the STM32 is a 3.3V MCU) - every module
+powered at 5V does so because it has an onboard regulator/level shifting,
+so its I/O stays at 3.3V levels regardless.
+
+| Rail | Fed by | Powers |
+|------|--------|--------|
+| **5V** | USB, or battery → boost converter (MT3608-style from 1S LiPo) | E22 LoRa VCC, Black Pill "5V" pin, SHARP VIN, NEO-6M breakout VCC, BNO055 breakout VIN, SD module VCC |
+| **3.3V** | Black Pill onboard LDO (from its 5V pin), or an external 3.3V buck from the 5V rail | eInk FeatherWing 3V, jogpad VCC, all logic-level domains |
+| **GND** | Common ground for everything | |
+
+**Why the split:**
+- The E22's PA only reaches its rated 2W/+33dBm at 5V; at 3.3V the module
+  under-drives it. The RX's command/ACK path gets real headroom.
+- Feeding 5V-tolerant peripherals from the 5V rail unloads the Black Pill's
+  small onboard LDO (which would otherwise supply ~180mA average + bursts).
+- USB powering stays trivial: any 5V USB source *is* the 5V rail.
+
+**Off the 5V rail (keep at 3.3V):**
+- **eInk FeatherWing 4778** - wing PCB has no regulator; its 3V pin expects
+  a regulated 3.3V (Feather-style rail).
+- **Jogpad** - technically 3-5V rated, but its I2C pull-up destination at 5V
+  is undocumented; it draws ~10mA so there is no benefit to 5V. Keep it on
+  3.3V where bus levels are guaranteed.
 
 ### v2.0 Changes vs v1.x
 - **Replaced** SSD1309 I2C OLED with **two SPI displays**: SHARP Memory LCD
@@ -35,7 +55,7 @@ PB1  → DIO1
 PA9  → RXEN (RF switch RX enable)
 PA10 → TXEN (RF switch TX enable)
 PA15 ← DIO2 (input-only spare, NEVER an output)
-3.3V → VCC
+5V   → VCC (3.3-5.5V rated - use the 5V rail)
 GND  → GND
      → ANT (433MHz antenna - REQUIRED!)
 
@@ -51,7 +71,7 @@ GND  → GND
 | **PA9** | GPIO_OUT | RXEN | RF switch RX enable (active high) |
 | **PA10** | GPIO_OUT | TXEN | RF switch TX enable (active high) |
 | **PA15** | GPIO_IN | DIO2 | Input-only spare - **never configure as output** |
-| **3.3V** | Power | VCC | Power supply (3.3V only!) |
+| **5V** | Power | VCC | Power supply **3.3-5.5V** - use the 5V rail (v2.2) |
 | **GND** | Ground | GND | Ground |
 | - | - | **ANT** | **433MHz antenna (REQUIRED)** |
 
@@ -68,7 +88,10 @@ drives out when the SX1268 maps a signal to it; an MCU output on PA15 would
 fight the pin driver.
 
 ⚠️ **IMPORTANT:**
-- E22-400M33S operates at **3.3V only** - do NOT use 5V!
+- VCC is **3.3-5.5V** (datasheet) - v2.2 powers the module from the **5V
+  rail**, where the onboard PA reaches its full +33dBm. Its SPI/control
+  logic is still 3.3V-level - feed signals from the STM32 as before. Never
+  exceed 5.5V on VCC.
 - **Antenna is mandatory** - transmitting without antenna will damage the module
 - Use a 433MHz antenna (wire length ~17.3cm for 1/4 wave)
 
@@ -82,7 +105,7 @@ fight the pin driver.
 |-------------|----------|---------|-------------|
 | **PA2** | USART2_TX | RX | GPS receives data (not used) |
 | **PA3** | USART2_RX | TX | GPS transmits NMEA sentences |
-| **3.3V** | Power | VCC | Power supply |
+| **5V** | Power | VCC | 5V rail if using a **regulated breakout** (GY-NEO6MV2 etc.; most are 3.3-5V); a bare NEO-6M module is 1.8-3.6V and must use 3.3V |
 | **GND** | Ground | GND | Ground |
 
 **Settings:**
@@ -100,7 +123,7 @@ fight the pin driver.
 |-------------|----------|------------|-------------|
 | **PB6** | I2C1_SCL | SCL | I2C Clock |
 | **PB7** | I2C1_SDA | SDA | I2C Data |
-| **3.3V** | Power | VIN/VCC | Power supply |
+| **5V** | Power | VIN/VCC | 5V rail if using the **Adafruit/regulated breakout**; the bare BNO055 chip is 2.4-3.6V and must use 3.3V |
 | **GND** | Ground | GND | Ground |
 
 **I2C Address:** 0x28 (default, ADR pin low)  
@@ -118,8 +141,8 @@ fight the pin driver.
 | **PA7** | SPI1_MOSI | DI | Data in (display is write-only - **no MISO**) |
 | **PB10** | GPIO_OUT | CS | Chip select (**active HIGH** - inverted vs most SPI) |
 | **PB8** | GPIO_OUT | DISP | Display on/off (default: drive high) |
-| **VIN** | Power | VIN | 3.3-5V (board has regulator + level shifters) |
-| **3.3V/GND** | Power | 3V3, GND | Or use 3Vo... power from 3.3V rail |
+| **5V** | Power | VIN | **Use the 5V rail**: board has regulator + level shifters (VIN 3-5V) |
+| **GND** | Ground | GND | Ground |
 
 **Notes:**
 - 168x144 monochrome, daylight-readable (e-reader style), **no backlight**
@@ -154,7 +177,7 @@ used here**), and 3 onboard buttons (**not used - jogpad replaces them**).
 | - | - | SDCS | **Not connected** (existing PA4 SD module is used) |
 | - | - | EN | **Not connected** (internal pull-up keeps regulator on) |
 | - | - | A / B / C buttons | **Not connected** (jogpad covers all input) |
-| **3.3V** | Power | 3V | Power supply |
+| **3.3V** | Power | 3V | **Always 3.3V** - the wing has no onboard regulator; never feed it the 5V rail |
 | **GND** | Ground | GND | Ground |
 
 **Notes:**
@@ -179,7 +202,7 @@ used here**), and 3 onboard buttons (**not used - jogpad replaces them**).
 | **PA7** | SPI1_MOSI | MOSI/DI | SPI Data In |
 | **PA4** | GPIO_OUT | CS | Chip Select |
 | **PB9** | GPIO_IN | CD/DETECT | Card detect (optional) |
-| **3.3V** | Power | VCC | Power supply |
+| **5V** | Power | VCC | 5V rail if using a **regulated SD module** (most have level shifters + LDO); the card itself is always 3.3V |
 | **GND** | Ground | GND | Ground |
 
 **Note:** Most SD card modules have onboard level shifters and regulators  
@@ -196,7 +219,7 @@ everything else shared. All CS idle HIGH at boot.
 |-------------|----------|----------------------|-------------|
 | **PB6** | I2C1_SCL | SCL | I2C Clock |
 | **PB7** | I2C1_SDA | SDA | I2C Data |
-| **3.3V** | Power | VCC | 3-5V capable; power from 3.3V to keep bus levels safe |
+| **3.3V** | Power | VCC | Keep on the **3.3V rail**: it is 3-5V rated, but I2C pull-up level behavior at 5V is undocumented and it only draws ~10mA - no benefit to 5V |
 | **GND** | Ground | GND | Ground |
 
 **I2C Address:** 0x5A  
@@ -355,10 +378,11 @@ BATT+ ──[100kΩ R1]──┬── PA0 (ADC1_IN0)
 
 ```
 ┌────────────────────────────────────────────┐
-│  Power Rails                                │
-│  ● 3.3V ════════════════════════════════   │
+│  Power Rails (v2.2)                         │
+│  ● 5V   ════════════════════════════════   │  (USB or LiPo->boost)
+│  ● 3.3V ════════════════════════════════   │  (Black Pill LDO / ext. buck)
 │  ● GND  ════════════════════════════════   │
-│  ● BATT+ (divider, before regulator)       │
+│  ● BATT+ (divider, before boost/regulator) │
 └────────────────────────────────────────────┘
 
 ┌─────────────────┐  ┌──────────────┐
@@ -380,7 +404,7 @@ BATT+ ──[100kΩ R1]──┬── PA0 (ADC1_IN0)
 │  PA9  ────────────► RXEN         │
 │  PA10 ────────────► TXEN         │
 │  PA15 ◄──────────── DIO2 (in)    │
-│  3.3V ────────────► VCC          │
+│  5V   ────────────► VCC          │
 │                 │  │ ANT ─── 🏁   │ (Antenna!)
 └─────────────────┘  └──────────────┘
 
@@ -416,26 +440,37 @@ BATT+ ──[100kΩ]──┬──► PA0
 
 ---
 
-## Power Consumption Estimate
+## Power Consumption Estimate (v2.2, per rail)
 
+**5V rail** (USB or LiPo→boost):
 | Component | Current Draw | Notes |
 |-----------|--------------|-------|
-| STM32F401 | ~30-50mA | Active mode @ 84MHz |
+| STM32F401 + onboard LDO | ~35-55mA | Includes 3.3V loads below |
 | GPS Module | ~40-60mA | Acquiring/tracking |
 | LoRa (RX) | ~12-15mA | Receive mode |
-| LoRa (TX) | ~120mA | During transmission (transmitter only) |
+| LoRa (TX) | ~150-200mA bursts | Command/ACK TX at 5V-rated PA (receiver commands only) |
 | BNO055 | ~12mA | Normal operation |
-| Jogpad | ~10-15mA | Onboard MCU + joystick |
-| SHARP Memory LCD | <0.1mA avg | 4µA @ 1Hz refresh, no backlight |
-| eInk FeatherWing | ~0mA hold / ~40-50mA refresh | Image persists with power off |
 | SD Card | ~50-100mA | During write operations |
-| **Total (typical)** | **~110-155mA** | Major saving vs v1.x (no OLED) |
-| **Total (max)** | **~260-300mA** | SD write + eInk refresh together |
+| SHARP Memory LCD | <0.1mA avg | 4µA @ 1Hz refresh, no backlight |
+| **5V typical** | **~160-250mA** | Without SD writes |
+| **5V max** | **~400mA** | SD write + eInk refresh + LoRa TX together |
+| **Loss in LDO/boost** | ~10-20% | Budget it |
+
+**3.3V rail** (from Black Pill LDO or external buck):
+| Component | Current Draw | Notes |
+|-----------|--------------|-------|
+| eInk FeatherWing | ~0mA hold / ~40-50mA refresh | Image persists with power off |
+| Jogpad | ~10-15mA | Onboard MCU + joystick |
+| **3.3V typical** | **~15mA** | Between eInk refreshes |
+| **3.3V max** | **~65mA** | |
 
 **Recommended Battery:**
-- 3.7V LiPo, 1000-2000mAh for 4-8 hours operation
-- Use voltage regulator for stable 3.3V
-- **Battery monitoring:** external 100k/330k divider into PA0 (see section 8)
+- 3.7V 1S LiPo, 1000-2000mAh for 4-8 hours operation
+- **Boost converter to 5V** (MT3608-style module) between battery and 5V rail;
+  or use a 5V power bank directly (they are themselves a LiPo + boost)
+- **Battery monitoring:** external 100k/330k divider into PA0 (see section 8);
+  connect the divider to the raw battery, NOT the 5V rail, and place it after
+  the power switch
 
 ---
 
@@ -446,9 +481,10 @@ Things worth adding while the schematic is open anyway:
 1. **Power input protection + switch** - P-channel MOSFET reverse-polarity
    protection (or a Schottky, cost: 0.3V drop) and a slide switch between
    battery and everything (including the divider - it draws 10µA otherwise).
-2. **LiPo charge management** - TP4056/MCP73831 module on the 5V USB input, or
-   a combined charge/boost board, so the pack recharges without removal.
-   JST-PH 2-pin battery connector is standard for LiPos.
+2. **LiPo charge + boost management** - since v2.2 runs a 5V rail, a combined
+   TP4056 charge + MT3608 boost board (or TP5100 for 2S configs) covers both:
+   charge the pack from USB, boost it to 5V. A cheap 5V power bank is the
+   zero-effort equivalent. JST-PH 2-pin battery connector is standard.
 3. **Buzzer** - 2N7000-switched passive buzzer for packet-received beeps and
    the low-battery alarm. PA10 is now LoRa TXEN, so the only candidates are
    the PB2 spare pad (consumes the BOOT1 test point) or skipping the buzzer.
@@ -486,8 +522,8 @@ The schematic above assumes the following firmware changes; the current
 ## Testing Procedure
 
 ### 1. Power-On Test
-- [ ] Connect 3.3V and GND first
-- [ ] Verify voltage on power rails with multimeter
+- [ ] Connect the 5V rail, 3.3V rail, and GND first
+- [ ] Verify BOTH rails with a multimeter (5V at the E22 VCC pin, 3.3V at the eInk 3V)
 - [ ] Check LED lights on PC13
 
 ### 2. SHARP Display Test
@@ -572,7 +608,10 @@ The schematic above assumes the following firmware changes; the current
 ## Safety Notes
 
 ⚡ **Electrical Safety**
-- Never exceed 3.3V on any STM32 pin (battery divider limits PA0 to 3.22V max)
+- Never exceed 3.3V on any STM32 **signal** pin (battery divider limits PA0 to
+  3.22V max) - the 5V rail is for VCC lines only, never for logic traces
+- Never feed the 5V rail into the eInk FeatherWing 3V pin or the jogpad VCC
+- E22 VCC must stay within 3.3-5.5V
 - Double-check polarity before connecting power
 - Use proper decoupling capacitors (0.1µF near each IC)
 
@@ -629,7 +668,7 @@ st-flash write bin/gps_radio_beacon_receiver.bin 0x8000000
 
 ---
 
-**Document Version:** 2.1  
+**Document Version:** 2.2  
 **Last Updated:** 2026-11-01  
-**Target Hardware:** Receiver v2.1 (v2.0 + LoRa TXEN on PA10, DIO2 observed on PA15)  
-**Firmware Status:** `receiver/firmware` matches this doc (n/a to v1.x builds)
+**Target Hardware:** Receiver v2.2 (v2.1 + dual 5V/3.3V power rails; E22, GPS, BNO055, SHARP, SD on 5V)  
+**Firmware Status:** `receiver/firmware` matches this doc (power changes need no firmware)
