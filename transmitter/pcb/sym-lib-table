@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "5vPWR")(type "KiCad")(uri "${KIPRJMOD}/Teyleten_Power.kicad_sym")(options "")(descr ""))
+)

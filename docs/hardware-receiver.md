@@ -11,7 +11,7 @@ so its I/O stays at 3.3V levels regardless.
 
 | Rail | Fed by | Powers |
 |------|--------|--------|
-| **5V** | USB, or battery → boost converter (MT3608-style from 1S LiPo) | E22 LoRa VCC, Black Pill "5V" pin, SHARP VIN, NEO-6M breakout VCC, BNO055 breakout VIN, SD module VCC |
+| **5V** | USB, or battery → boost converter (MT3608-style from 1S LiPo) | E22 LoRa VCC, Black Pill "5V" pin, SHARP VIN, NEO-6M breakout VCC, BNO085 breakout VIN, SD module VCC |
 | **3.3V** | Black Pill onboard LDO (from its 5V pin), or an external 3.3V buck from the 5V rail | eInk FeatherWing 3V, jogpad VCC, all logic-level domains |
 | **GND** | Common ground for everything | |
 
@@ -34,7 +34,7 @@ so its I/O stays at 3.3V levels regardless.
   (Adafruit 3502) + 2.9" tri-color eInk FeatherWing (Adafruit 4778, SSD1680)
 - **Replaced** both pushbuttons with a **NULLLAB Mini I2C Jogpad** (0x5A)
 - **Added** external battery voltage divider on PA0 (ADC1_IN0)
-- Everything else (LoRa, GPS, BNO055, SD card, LED) is unchanged
+- Everything else (LoRa, GPS, BNO085 IMU, SD card, LED) is unchanged
 
 ---
 
@@ -49,11 +49,11 @@ PB13 → SCK
 PB14 → MISO
 PB15 → MOSI
 PB12 → CS
-PA8  → RESET
-PB0  → BUSY
-PB1  → DIO1
-PA9  → RXEN (RF switch RX enable)
-PA10 → TXEN (RF switch TX enable)
+PA8  → DIO1
+PA9  → BUSY
+PA10 → RESET
+PA11 → RXEN (RF switch RX enable)
+PA12 → TXEN (RF switch TX enable)
 PA15 ← DIO2 (input-only spare, NEVER an output)
 5V   → VCC (3.3-5.5V rated - use the 5V rail)
 GND  → GND
@@ -65,11 +65,11 @@ GND  → GND
 | **PB14** | SPI2_MISO | MISO | SPI Master In Slave Out |
 | **PB15** | SPI2_MOSI | MOSI | SPI Master Out Slave In |
 | **PB12** | GPIO_OUT | NSS/CS | Chip Select (active low) |
-| **PA8** | GPIO_OUT | NRST | Reset (active low) |
-| **PB0** | GPIO_IN | BUSY | Busy status indicator |
-| **PB1** | GPIO_INT | DIO1 | Interrupt (RX/TX done) |
-| **PA9** | GPIO_OUT | RXEN | RF switch RX enable (active high) |
-| **PA10** | GPIO_OUT | TXEN | RF switch TX enable (active high) |
+| **PA8** | GPIO_INT | DIO1 | Interrupt (RX/TX done) - EXTI9_5 vector (v2.9: was PA10) |
+| **PA9** | GPIO_IN | BUSY | Busy status indicator (v2.8: was PB0) |
+| **PA10** | GPIO_OUT | NRST | Reset (active low) (v2.9: was PA8) |
+| **PA11** | GPIO_OUT | RXEN | RF switch RX enable (active high) (v2.8: was PA9) |
+| **PA12** | GPIO_OUT | TXEN | RF switch TX enable (active high) (v2.8: was PA10) |
 | **PA15** | GPIO_IN | DIO2 | Input-only spare - **never configure as output** |
 | **5V** | Power | VCC | Power supply **3.3-5.5V** - use the 5V rail (v2.2) |
 | **GND** | Ground | GND | Ground |
@@ -86,6 +86,13 @@ firmware always drops the old side before raising the new one.
 ⚠️ **DIO2 contention warning:** PA15 must stay `GPIO_MODE_INPUT` forever. DIO2
 drives out when the SX1268 maps a signal to it; an MCU output on PA15 would
 fight the pin driver.
+
+⚠️ **USB pins note (v2.8):** RXEN/TXEN now live on PA11/PA12 = USB D-/D+.
+At runtime this is fine (firmware does not run a USB device stack). During
+DFU flashing the ROM bootloader owns those pins and USB traffic randomly
+toggles both switch enables - harmless: the SX1268 PA only powers in
+commanded TX mode, which no ROM code path can reach. Keep the antenna habit
+anyway: don't bench-flash with TX configured and a live load path.
 
 ⚠️ **IMPORTANT:**
 - VCC is **3.3-5.5V** (datasheet) - v2.2 powers the module from the **5V
@@ -115,19 +122,28 @@ fight the pin driver.
 
 ---
 
-### 3. BNO055 Compass/IMU Module
+### 3. BNO085 Compass/IMU Module (Adafruit 4754 breakout)
 
 **I2C1 Interface (Shared with Jogpad)**
 
-| STM32F4 Pin | Function | BNO055 Pin | Description |
-|-------------|----------|------------|-------------|
+| STM32F4 Pin | Function | BNO085 Pin (4754) | Description |
+|-------------|----------|-------------------|-------------|
 | **PB6** | I2C1_SCL | SCL | I2C Clock |
 | **PB7** | I2C1_SDA | SDA | I2C Data |
-| **5V** | Power | VIN/VCC | 5V rail if using the **Adafruit/regulated breakout**; the bare BNO055 chip is 2.4-3.6V and must use 3.3V |
+| **5V** | Power | VIN | 5V rail - breakout has regulator + level shifters |
 | **GND** | Ground | GND | Ground |
+| - | - | RST / INT / BT / P0 / P1 / 3VO | **Not connected.** P0/P1 are strapped low on the breakout -> I2C mode by default; firmware polls over I2C so INT is unneeded; the driver soft-resets over the bus so RST is unneeded. |
 
 **I2C Address:** 0x28 (default, ADR pin low)  
 **Alternative Address:** 0x29 (if ADR pin high)
+
+**Protocol note (v2.8):** the BNO085 speaks SH-2 over SHTP framing - there is
+no BNO055-style register map. Firmware talks to it via `bno085.c`
+(rotation-vector quaternion at 50 Hz + raw accel/gyro/mag at 10 Hz);
+`compass.c` keeps the same public API as the old BNO055 driver. Calibration
+is dynamic in-sensor: there are no host-loadable offset blobs, so the SD
+`COMPCAL` save/restore path is skipped (a stale BNO055-era `QLOCK.BIN` /
+cal file on the card should be deleted once after the upgrade).
 
 ---
 
@@ -169,7 +185,7 @@ used here**), and 3 onboard buttons (**not used - jogpad replaces them**).
 | **PA5** | SPI1_SCK | SCK | SPI Clock (Feather SPI pads) |
 | **PA6** | SPI1_MISO | MISO | Used by SRAM chip (eInk itself is write-only) |
 | **PA7** | SPI1_MOSI | MOSI | Data out |
-| **PB11** | GPIO_OUT | ECS | eInk chip select |
+| **PC15** | GPIO_OUT | ECS | eInk chip select (**moved from PB11 in v2.8**: PB11 exists on the F401 die but is NOT broken out on the BlackPill 2x20 header, so it could never be driven) |
 | **PB3** | GPIO_OUT | D/C | eInk Data/Command |
 | **PB5** | GPIO_OUT | SRCS | SRAM chip select |
 | **PB4** | GPIO_OUT | RST | eInk reset |
@@ -213,7 +229,7 @@ everything else shared. All CS idle HIGH at boot.
 
 ### 7. NULLLAB Mini I2C Jogpad (Amazon B0GT4SBBL1)
 
-**I2C1 Interface (shared with BNO055) - replaces both v1.x buttons**
+**I2C1 Interface (shared with BNO085) - replaces both v1.x buttons**
 
 | STM32F4 Pin | Function | Jogpad Pin (PH2.0-4) | Description |
 |-------------|----------|----------------------|-------------|
@@ -319,11 +335,11 @@ the module covers boot selection itself, so the board carries nothing.)
 | PA5 | SPI1_SCK | SD + SHARP + eInk/SRAM SCK |
 | PA6 | SPI1_MISO | SD + SRAM MISO |
 | PA7 | SPI1_MOSI | SD + SHARP + eInk/SRAM MOSI |
-| PA8 | GPIO_OUT | LoRa RESET |
-| PA9 | GPIO_OUT | LoRa RXEN |
-| PA10 | GPIO_OUT | LoRa TXEN |
-| PA11 | USB D- | (USB if used) |
-| PA12 | USB D+ | (USB if used) |
+| PA8 | GPIO_INT | LoRa DIO1 (EXTI9_5) |
+| PA9 | GPIO_IN | LoRa BUSY |
+| PA10 | GPIO_OUT | LoRa RESET |
+| PA11 | GPIO_OUT | LoRa RXEN (shared with USB D- during DFU only) |
+| PA12 | GPIO_OUT | LoRa TXEN (shared with USB D+ during DFU only) |
 | PA13 | SWDIO | Debug/Programming |
 | PA14 | SWCLK | Debug/Programming |
 | PA15 | GPIO_IN | LoRa DIO2 (input-only spare) |
@@ -331,18 +347,18 @@ the module covers boot selection itself, so the board carries nothing.)
 ### Port B (GPIOB)
 | Pin | Function | Connected To |
 |-----|----------|--------------|
-| PB0 | GPIO_IN | LoRa BUSY |
-| PB1 | GPIO_INT | LoRa DIO1 |
+| PB0 | Free GPIO | freed in v2.8 (LoRa BUSY moved to PA9) |
+| PB1 | Free GPIO | freed in v2.8 (LoRa DIO1 moved to PA10) |
 | PB2 | Free GPIO | Not connected on our board (module straps BOOT1 low itself) |
 | PB3 | GPIO_OUT | eInk D/C |
 | PB4 | GPIO_OUT | eInk RST |
 | PB5 | GPIO_OUT | eInk SRAM CS |
-| PB6 | I2C1_SCL | BNO055 + Jogpad SCL |
-| PB7 | I2C1_SDA | BNO055 + Jogpad SDA |
+| PB6 | I2C1_SCL | BNO085 + Jogpad SCL |
+| PB7 | I2C1_SDA | BNO085 + Jogpad SDA |
 | PB8 | GPIO_OUT | SHARP DISP |
 | PB9 | GPIO_IN | SD Card Detect |
 | PB10 | GPIO_OUT | SHARP CS (was Mode Button in v1.x) |
-| PB11 | GPIO_OUT | eInk ECS |
+| PB11 | — | **Not available** (not on the BlackPill 2x20 header; eInk ECS moved to PC15 in v2.8) |
 | PB12 | GPIO_OUT | LoRa CS |
 | PB13 | SPI2_SCK | LoRa SCK |
 | PB14 | SPI2_MISO | LoRa MISO |
@@ -353,12 +369,12 @@ the module covers boot selection itself, so the board carries nothing.)
 |-----|----------|--------------|
 | PC13 | GPIO_OUT | Status LED |
 | PC14 | Available | - |
-| PC15 | Available | - |
+| PC15 | GPIO_OUT | eInk ECS (v2.8; free because no RTC/LSE used) |
 
 ### I2C1 Bus Map (PB6/PB7, external 4.7kΩ pull-ups)
 | Address | Device |
 |---------|--------|
-| 0x28 (alt 0x29) | BNO055 compass/IMU |
+| 0x28 (alt 0x29) | BNO085 compass/IMU (SH-2) |
 | 0x5A | NULLLAB jogpad |
 | ~~0x3C~~ | ~~SSD1309 OLED~~ - removed in v2.0 |
 
@@ -367,7 +383,7 @@ the module covers boot selection itself, so the board carries nothing.)
 |--------|--------|-----------|----------------|
 | PA4 | SD card | yes | ~82kHz init → up to 10.5MHz run |
 | PB10 | SHARP memory LCD | no (write-only) | ≤2MHz, CS active **HIGH** |
-| PB11 | eInk SSD1680 | no | refresh is command-driven, low rate |
+| PC15 | eInk SSD1680 | no | refresh is command-driven, low rate |
 | PB5 | eInk SRAM buffer | yes | up to 10MHz fine |
 
 ---
@@ -383,12 +399,13 @@ the module covers boot selection itself, so the board carries nothing.)
    our board. (v2.3-v2.6's button/strap experiments were all reverted once the
    module-side strap was confirmed.) See the Boot Mode section.
 
-3. **SD Card / LoRa Conflict** - RESOLVED (carried from v1.x)
-   - LoRa BUSY on **PB0**, LoRa DIO1 on **PB1**
+3. **SD Card / LoRa Conflict** - RESOLVED (carried from v1.x; v2.8 moved the
+   LoRa side again for routing, conflict still clear)
+   - LoRa BUSY on **PA9**, LoRa DIO1 on **PA8**
    - SD Card MISO on **PA6**, MOSI on **PA7**
 
 4. **SD Card Detect / LoRa Reset Conflict** - RESOLVED (carried from v1.x)
-   - SD detect on **PB9**, LoRa RESET on **PA8**
+   - SD detect on **PB9**, LoRa RESET on **PA10**
 
 ### v2.0 layout cautions
 - **SHARP CS is active HIGH** - opposite polarity from everything else on SPI1.
@@ -425,11 +442,11 @@ the module covers boot selection itself, so the board carries nothing.)
 │  PB14 ◄──────────── MISO         │
 │  PB15 ────────────► MOSI         │
 │  PB12 ────────────► CS/NSS       │
-│  PA8  ────────────► NRST         │
-│  PB0  ◄──────────── BUSY         │
-│  PB1  ◄──────────── DIO1         │
-│  PA9  ────────────► RXEN         │
-│  PA10 ────────────► TXEN         │
+│  PA8  ◄──────────── DIO1         │
+│  PA9  ◄──────────── BUSY         │
+│  PA10 ────────────► NRST         │
+│  PA11 ────────────► RXEN         │
+│  PA12 ────────────► TXEN         │
 │  PA15 ◄──────────── DIO2 (in)    │
 │  5V   ────────────► VCC          │
 │                 │  │ ANT ─── 🏁   │ (Antenna!)
@@ -437,7 +454,7 @@ the module covers boot selection itself, so the board carries nothing.)
 
 I2C1 bus (PB6/PB7):
 ┌─────────────────┐   ┌──────────────┐   ┌──────────────────┐
-│  PB6 ══════════════► SCL BNO055   │   │ NULLLAB Jogpad   │
+│  PB6 ══════════════► SCL BNO085   │   │ NULLLAB Jogpad   │
 │  PB7 ══════════════► SDA          │   │  PH2.0-4         │
 │        └══════════════════════════════► SCL  (0x5A)      │
 │        └══════════════════════════════► SDA              │
@@ -449,7 +466,7 @@ SPI1 bus (PA5 SCK / PA6 MISO / PA7 MOSI shared):
 │  PA4  ────────────► CS           │  │              │  │               │
 │  PB10 ────────────────┐          │  │ CS ◄── PB10  │  │               │
 │  PB8  ────────────────┴────────────► DISP          │  │               │
-│  PB11 ───────────────────────────────┐             │  │ ECS ◄── PB11  │
+│  PC15 ───────────────────────────────┐             │  │ ECS ◄── PC15  │
 │  PB3  ──► D/C ───────────────────────┼─────────────┼──► D/C           │
 │  PB4  ──► RST ───────────────────────┼─────────────┼──► RST           │
 │  PB5  ──► SRCS ──────────────────────┼─────────────┼──► SRCS          │
@@ -476,7 +493,7 @@ BATT+ ──[100kΩ]──┬──► PA0
 | GPS Module | ~40-60mA | Acquiring/tracking |
 | LoRa (RX) | ~12-15mA | Receive mode |
 | LoRa (TX) | ~150-200mA bursts | Command/ACK TX at 5V-rated PA (receiver commands only) |
-| BNO055 | ~12mA | Normal operation |
+| BNO085 | ~12mA | Normal operation |
 | SD Card | ~50-100mA | During write operations |
 | SHARP Memory LCD | <0.1mA avg | 4µA @ 1Hz refresh, no backlight |
 | **5V typical** | **~160-250mA** | Without SD writes |
@@ -570,7 +587,7 @@ The schematic above assumes the following firmware changes; the current
 - [ ] Display should show GPS data within 30-60s
 
 ### 5. Compass Test
-- [ ] BNO055 should calibrate automatically
+- [ ] BNO085 calibrates dynamically (mag accuracy gate on the compass page)
 - [ ] Rotate receiver and verify heading changes
 
 ### 6. LoRa Test
@@ -623,8 +640,8 @@ The schematic above assumes the following firmware changes; the current
 - Ensure transmitter is powered and configured
 
 ### Compass Not Responding
-- Check I2C shared bus (jogpad and BNO055 must have different addresses: 0x5A vs 0x28)
-- Verify BNO055 address (0x28 or 0x29)
+- Check I2C shared bus (jogpad and BNO085 must have different addresses: 0x5A vs 0x28)
+- Verify BNO085 address (0x28 or 0x29)
 - May need calibration (wave figure-8 motion)
 
 ### SD Card Not Detected
@@ -684,7 +701,7 @@ st-flash write bin/gps_radio_beacon_receiver.bin 0x8000000
 - **STM32F401 Black Pill:** ~$4-6 on AliExpress/Amazon
 - **E22-400M33S:** ~$8-12 on AliExpress (ensure 433MHz version)
 - **NEO-6M GPS:** ~$6-10 with antenna
-- **BNO055:** ~$15-25 (Adafruit breakout recommended)
+- **BNO085 (Adafruit 4754):** ~$20-25
 - **Adafruit 3502 SHARP Memory LCD:** ~$25
 - **Adafruit 4778 2.9" tri-color eInk FeatherWing:** ~$25
 - **NULLLAB I2C jogpad (B0GT4SBBL1):** ~$9

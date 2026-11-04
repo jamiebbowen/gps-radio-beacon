@@ -1,6 +1,10 @@
 /**
  * @file compass.h
- * @brief Compass module driver header for Adafruit BNO055 IMU
+ * @brief Compass driver header - Adafruit 4754 breakout (BNO085, SH-2/SHTP
+ *        over I2C). The board carries the BNO085, not the BNO055 named by
+ *        some legacy field/comment strings; the public API below is
+ *        unchanged from the BNO055 build so the display modes and SD
+ *        persistence call sites are untouched.
  */
 
 #ifndef __COMPASS_H
@@ -30,10 +34,10 @@ extern "C" {
 #define COMPASS_ERROR_WRITE_REG   4
 #define COMPASS_ERROR_READ_DATA   5
 
-/* BNO055 specific defines */
-#define BNO055_I2C_ADDR         0x28  /* 7-bit I2C address for BNO055 (default) */
-#define BNO055_I2C_ADDR_ALT     0x29  /* 7-bit I2C address for BNO055 (alternate) */
-#define BNO055_CHIP_ID_VALUE    0xA0  /* BNO055 CHIP_ID value */
+/* BNO085 I2C addresses are defined in bno085.h (0x28 default / 0x29 alt,
+ * same straps as the BNO055 - the jogpad at 0x5A shares the bus). There is
+ * no CHIP_ID: the BNO085 has no register map, identification is the SHTP
+ * handshake + fusion-data arrival in the driver's init. */
 
 /* Compass data structure */
 typedef struct {
@@ -90,21 +94,27 @@ uint8_t Compass_UpdateLocation(float lat_deg, float lon_deg);
 /** Table lookup only (no side effect); exported for tests. */
 float Compass_DeclinationFromLocation(float lat_deg, float lon_deg);
 
-/* Quaternion->heading convention lock. 0 = not locked yet; 1-8 = locked
- * convention. Once it locks (which needs a simultaneously level+mag-OK
- * moment, rare in hand), the quaternion path drives the arrow and pitch
- * swings stop mattering. The convention is a property of the hardware,
- * so it is persisted on SD (see SD_Card_SaveQuatLock): without that, a
- * reset drops the unit back to the Euler path which glitches when the
- * board pitches steeply - the "arrow swings wildly" behavior. */
+/* Quaternion->heading convention lock. 1-8 = fixed convention from the
+ * candidate table (compass.c). On the BNO085 the SH-2 rotation vector is
+ * ENU-frame so the default is conv 5; the SD-persisted value can override
+ * it for field tuning. NOTE: a QUATLOCK file written by the BNO055 build
+ * is hardware-local to that sensor/mount - delete it on first BNO085
+ * boot or the arrow may be rotated. */
 uint8_t Compass_GetQuatLockConv(void);
 uint8_t Compass_SetQuatLockConv(uint8_t conv);
 
-/* Calibration persistence */
-#define BNO055_CAL_DATA_LEN  22  /* ACC(6) + MAG(6) + GYR(6) + radii(4) bytes */
+/* Calibration persistence: the BNO085 does not expose host-managed
+ * offsets (dynamic in-sensor calibration; DCD is unimplemented), so
+ * Compass_Get/SetCalibrationData always return COMPASS_ERROR and
+ * main.c skips the SD save/restore via Compass_HasHostCalOffsets(). */
+#define BNO055_CAL_DATA_LEN  22  /* legacy buffer size kept for SD file compat */
 uint8_t Compass_GetCalibrationData(uint8_t *data, uint8_t len);
 uint8_t Compass_SetCalibrationData(const uint8_t *data, uint8_t len);
 uint8_t Compass_WasCalRestored(void);
+/** 1 if the sensor supports host offset save/restore (BNO085: 0). */
+uint8_t Compass_HasHostCalOffsets(void);
+/** Rotation-vector samples received since init (bring-up diagnostics). */
+uint32_t Compass_GetRvSampleCount(void);
 
 /* Error reporting functions */
 uint8_t Compass_GetLastErrorCode(void);

@@ -46,10 +46,12 @@ uint8_t SD_FastSpeedEnabled(void);
 #define COMPCAL_DATA_LEN    22
 #define COMPCAL_FILE_LEN    25
 
-/* BNO055 quaternion-heading convention lock (compass.c). Hardware-shaped,
- * not session-shaped: losing it every boot means the arrow falls back to
- * the Euler path until the next level+calibrated moment, and that is the
- * "arrow swings when I pitch the antenna" complaint. */
+/* Quaternion-heading convention lock (compass.c). Hardware-shaped, not
+ * session-shaped: persisted so later boots reuse the field-verified
+ * quaternion->heading convention. NOTE: on BNO085 hardware the valid
+ * values are those of the compass.c candidate table seeded with conv 5;
+ * a QLOCK.BIN written by the BNO055-era build can rotate the arrow -
+ * delete it once when migrating the SD card to the BNO085 build. */
 #define QLOCK_FILENAME      "QLOCK.BIN"
 #define QLOCK_MAGIC_0       0x51  /* 'Q' */
 #define QLOCK_MAGIC_1       0x4C  /* 'L' */

@@ -5,8 +5,8 @@
  * Ported from the old SSD1309 display.c: proven error streaks drop the bus
  * from 400 kHz to 100 kHz; a sustained clean window at the slow rung re-tests
  * fast (one shot); going offline is a last resort with a 10 s probe loop.
- * Recovery probing targets the jogpad (0x5A), falling back to the BNO055
- * (0x28/0x29) - any ACK means the bus is healthy again.
+ * Recovery probing targets the jogpad (0x5A), falling back to the BNO085
+ * (0x28/0x29 strap) - any ACK means the bus is healthy again.
  */
 
 #include "i2c_bus.h"
@@ -27,10 +27,10 @@ static uint32_t bus_last_probe_ms = 0;
 #define I2C_BUS_STREAK_LIMIT    32
 #define I2C_BUS_PROBE_MS        10000
 
-/* Probe addresses: jogpad then BNO055 (both ADR strap values) */
+/* Probe addresses: jogpad then BNO085 (both ADR strap values) */
 #define JOGPAD_ADDR_7BIT        0x5A
-#define BNO055_ADDR_7BIT        0x28
-#define BNO055_ADDR_ALT_7BIT    0x29
+#define BNO085_ADDR_7BIT        0x28
+#define BNO085_ADDR_ALT_7BIT    0x29
 
 I2C_HandleTypeDef hi2c_display; /* legacy global name - shared with compass */
 
@@ -50,9 +50,9 @@ static uint8_t bus_probe_ok(void)
 {
   if (HAL_I2C_IsDeviceReady(&hi2c_display, JOGPAD_ADDR_7BIT << 1, 1, 50) == HAL_OK)
     return 1;
-  if (HAL_I2C_IsDeviceReady(&hi2c_display, BNO055_ADDR_7BIT << 1, 1, 50) == HAL_OK)
+  if (HAL_I2C_IsDeviceReady(&hi2c_display, BNO085_ADDR_7BIT << 1, 1, 50) == HAL_OK)
     return 1;
-  if (HAL_I2C_IsDeviceReady(&hi2c_display, BNO055_ADDR_ALT_7BIT << 1, 1, 50) == HAL_OK)
+  if (HAL_I2C_IsDeviceReady(&hi2c_display, BNO085_ADDR_ALT_7BIT << 1, 1, 50) == HAL_OK)
     return 1;
   return 0;
 }

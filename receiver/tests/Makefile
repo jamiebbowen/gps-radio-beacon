@@ -53,6 +53,14 @@ $(BUILD)/test_gps: test_gps.c $(SRC_DIR)/gps.c \
                    $(SRC_DIR)/gps_parser.c test_harness.h | $(BUILD)
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< $(SRC_DIR)/gps_parser.c $(LDFLAGS)
 
+# compass.c speaks SH-2/SHTP through bno085.c; the I2C wire itself is
+# faked inside test_compass.c (HAL master tx/rx), so link the real
+# transport driver too. (Explicit rule shadows the generic test_% pattern
+# for this module.)
+$(BUILD)/test_compass: test_compass.c $(SRC_DIR)/compass.c $(SRC_DIR)/bno085.c \
+                       $(HEADERS) | $(BUILD)
+	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< $(SRC_DIR)/bno085.c $(LDFLAGS)
+
 # sd_card.c runs on the REAL LittleFS over a RAM block device in the test
 #
 # Note on LFS_NO_ERROR: several suites intentionally mount blank/corrupted

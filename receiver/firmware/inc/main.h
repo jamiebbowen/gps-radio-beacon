@@ -73,8 +73,10 @@ void Error_Handler(void);
 #define SHARP_DISP_GPIO_PORT        GPIOB
 
 /* SSD1680 2.9" tri-color eInk FeatherWing (Adafruit 4778) on SPI1 */
-#define EINK_CS_PIN                 GPIO_PIN_11  /* PB11 - ECS, active low */
-#define EINK_CS_GPIO_PORT           GPIOB
+#define EINK_CS_PIN                 GPIO_PIN_15  /* PC15 - ECS, active low (was PB11, which
+                                                    the BlackPill 2x20 header doesn't expose;
+                                                    PC15 is free - no RTC/LSE in this build) */
+#define EINK_CS_GPIO_PORT           GPIOC
 #define EINK_DC_PIN                 GPIO_PIN_3   /* PB3 - Data/Command */
 #define EINK_DC_GPIO_PORT           GPIOB
 #define EINK_RST_PIN                GPIO_PIN_4   /* PB4 - eInk reset */

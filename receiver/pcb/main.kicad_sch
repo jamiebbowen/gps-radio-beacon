@@ -1,0 +1,284 @@
+(kicad_sch
+	(version 20260306)
+	(generator "eeschema")
+	(generator_version "10.0")
+	(uuid "9692b8b2-84a1-4acd-bdf2-948653ad0276")
+	(paper "A4")
+	(lib_symbols)
+	(sheet
+		(at 156.21 107.95)
+		(size 12.7 6.35)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "3f2ab6d0-0e24-4eae-9e06-27a3af7c7add")
+		(property "Sheetname" "IMU"
+			(at 156.21 107.2384 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "IMU.kicad_sch"
+			(at 156.21 114.8846 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "pcb"
+				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/0568d7ae-b55a-445a-afb4-44ffcf356588"
+					(page "14")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 134.62 100.33)
+		(size 17.78 6.35)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "42b15b7a-e66f-4421-9d1b-22daea9fb3b1")
+		(property "Sheetname" "Power"
+			(at 134.62 99.6184 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "power.kicad_sch"
+			(at 134.62 107.2646 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "pcb"
+				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/0568d7ae-b55a-445a-afb4-44ffcf356588"
+					(page "13")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 111.76 120.65)
+		(size 12.7 3.81)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "93811f37-363c-4dd6-9e41-cfa8973bccea")
+		(property "Sheetname" "Front Panel Connector"
+			(at 111.76 119.9384 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "fp_conn.kicad_sch"
+			(at 111.76 125.0446 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "pcb"
+				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/0568d7ae-b55a-445a-afb4-44ffcf356588"
+					(page "5")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 134.62 86.36)
+		(size 19.05 3.81)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "e11d2881-d3de-4751-9ae7-dc8365973d63")
+		(property "Sheetname" "MCU"
+			(at 134.62 85.6484 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "mcu.kicad_sch"
+			(at 134.62 90.7546 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "pcb"
+				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/0568d7ae-b55a-445a-afb4-44ffcf356588"
+					(page "12")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 125.73 77.47)
+		(size 12.7 3.81)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "e4d2b49d-2b2d-464d-9dbd-5a1c6a41f81c")
+		(property "Sheetname" "GPS"
+			(at 125.73 76.7584 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "gps.kicad_sch"
+			(at 125.73 81.8646 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "pcb"
+				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/0568d7ae-b55a-445a-afb4-44ffcf356588"
+					(page "11")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 88.9 93.98)
+		(size 12.7 3.81)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "ed554969-a13f-4de5-8094-162144088090")
+		(property "Sheetname" "Radio"
+			(at 88.9 93.2684 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "radio.kicad_sch"
+			(at 88.9 98.3746 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "pcb"
+				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/0568d7ae-b55a-445a-afb4-44ffcf356588"
+					(page "10")
+				)
+			)
+		)
+	)
+)

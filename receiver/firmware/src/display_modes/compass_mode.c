@@ -36,7 +36,7 @@ static bool UpdateCompassData(Compass_Data *compass_data, float *compass_heading
     return true;
   } else {
     /* Display error if compass update failed */
-    Display_DrawTextRowCol(1, 0, "BNO055 ERROR");
+    Display_DrawTextRowCol(1, 0, "BNO085 ERROR");
     /* Max 21 cols (128px / 6px font) - longer strings clip silently */
     Display_DrawTextRowCol(3, 0, "Compass no response");
     Display_DrawTextRowCol(5, 0, "Check connections");
@@ -141,9 +141,8 @@ void DisplayMode_CompassVisual(Compass_Data *compass_data, float *compass_headin
            sys_cal & 0x3u, gyro_cal & 0x3u, accel_cal & 0x3u, mag_cal & 0x3u);
   Display_DrawText(66, 32, buffer);
 
-  int8_t temp;
-  Compass_GetTemperature(&temp);
-  snprintf(buffer, sizeof(buffer), "Tmp:%dC", temp);
+  /* BNO085 has no temperature register - show fusion sample count instead */
+  snprintf(buffer, sizeof(buffer), "RV#%lu", (unsigned long)Compass_GetRvSampleCount());
   Display_DrawText(66, 44, buffer);
 }
 
@@ -161,7 +160,7 @@ void DisplayMode_CompassHeading(Compass_Data *compass_data, float *compass_headi
   if (!UpdateCompassData(compass_data, compass_heading)) return;
 
   /* Row 0: heading; trailing * = value predates a comm failure (stale) */
-  sprintf(buffer, "BNO055 Hdg:%3.0fd%s", compass_data->heading,
+  sprintf(buffer, "BNO085 Hdg:%3.0fd%s", compass_data->heading,
           compass_data->heading_stale ? "*" : "");
   Display_DrawTextRowCol(0, 0, buffer);
 
@@ -193,17 +192,13 @@ void DisplayMode_CompassHeading(Compass_Data *compass_data, float *compass_headi
           compass_data->mag_x, compass_data->mag_y, compass_data->mag_z);
   Display_DrawTextRowCol(5, 0, buffer);
 
-  /* Row 6: system status */
+  /* Row 6: fused-stream state and last latched error code */
   uint8_t sys_stat, self_test, sys_err;
   Compass_GetSystemStatus(&sys_stat, &self_test, &sys_err);
   sprintf(buffer, "St:%02X Re:%02X Er:%02X", sys_stat, self_test, sys_err);
   Display_DrawTextRowCol(6, 0, buffer);
 
-  /* Row 7: operation mode and temperature */
-  uint8_t op_mode;
-  int8_t temp;
-  Compass_GetOperationMode(&op_mode);
-  Compass_GetTemperature(&temp);
-  sprintf(buffer, "Op:%02X  Tmp:%dC", op_mode, temp);
+  /* Row 7: SH-2 fusion sample count (no op-mode/temp registers exist) */
+  sprintf(buffer, "RV#%lu", (unsigned long)Compass_GetRvSampleCount());
   Display_DrawTextRowCol(7, 0, buffer);
 }

@@ -221,9 +221,9 @@ HAL_StatusTypeDef HAL_SPI_Receive(SPI_HandleTypeDef *h, uint8_t *data,
             if (irq_during_read) {
                 /* A new packet's DIO1 edge lands mid-read: the ISR bumps
                  * the sequence number after LoRa_ReadPacket's snapshot. */
-                extern void EXTI1_IRQHandler(void);
+                extern void LORA_DIO1_IRQHandler(void);
                 exti_pending |= LORA_DIO1_PIN;
-                EXTI1_IRQHandler();
+                LORA_DIO1_IRQHandler();
             }
             break;
         case SX1268_CMD_GET_PACKETSTATUS:
@@ -274,10 +274,11 @@ void HAL_NVIC_SetPriority(IRQn_Type irq, uint32_t p, uint32_t s)
 {
     (void)irq; (void)p; (void)s;
 }
-static uint8_t nvic_exti1_enabled = 0;
+static uint8_t nvic_exti1_enabled = 0;   /* name kept: tracks the DIO1 IRQ line */
 void HAL_NVIC_EnableIRQ(IRQn_Type irq)
 {
-    if (irq == EXTI1_IRQn) nvic_exti1_enabled = 1;
+    /* DIO1 lives on PA8 (v2.9 swap with NRESET) -> EXTI9_5 shared vector */
+    if (irq == EXTI9_5_IRQn) nvic_exti1_enabled = 1;
 }
 void HAL_NVIC_DisableIRQ(IRQn_Type irq) { (void)irq; }
 void HAL_Delay(uint32_t ms) { tick_advance(ms); }
@@ -309,7 +310,7 @@ static void deliver_packet(const uint8_t *data, uint8_t len)
     chip_payload_len = len;
     chip_irq |= SX1268_IRQ_RX_DONE;
     exti_pending |= LORA_DIO1_PIN;
-    EXTI1_IRQHandler();
+    LORA_DIO1_IRQHandler();
 }
 
 /* ------------------------------------------------------------------ */
@@ -480,7 +481,7 @@ TEST(test_crc_error_and_no_data)
     /* CRC error IRQ */
     chip_irq |= SX1268_IRQ_CRC_ERROR;
     exti_pending |= LORA_DIO1_PIN;
-    EXTI1_IRQHandler();
+    LORA_DIO1_IRQHandler();
     LoRa_Packet_t p;
     memset(&p, 0, sizeof(p));
     CHECK(LoRa_ReadPacket(&p) == LORA_CRC_ERROR);
@@ -524,7 +525,7 @@ TEST(test_exti_handler_gating)
     /* No pending bit: handler must do nothing */
     exti_pending = 0;
     uint32_t before = LoRa_GetIRQCount();
-    EXTI1_IRQHandler();
+    LORA_DIO1_IRQHandler();
     CHECK(LoRa_GetIRQCount() == before);
     CHECK(LoRa_PacketAvailable() == 0);
 }

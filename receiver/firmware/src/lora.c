@@ -89,11 +89,11 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
     GPIO_InitStruct.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(LORA_DIO1_PORT, &GPIO_InitStruct);
-    HAL_NVIC_SetPriority(EXTI1_IRQn, 0, 0);
+    HAL_NVIC_SetPriority(LORA_DIO1_EXTI_IRQn, 0, 0);
     /* NVIC enabled after successful RX entry at the end of LoRa_Init */
     
     /* Configure RF switch control pins (v2.0: BOTH manually driven).
-     * RXEN (PA9) and TXEN (PA10) both start LOW = antenna isolated. DIO2
+     * RXEN (PA11) and TXEN (PA12) both start LOW = antenna isolated. DIO2
      * (PA15) is input-only and never driven - it merely observes the SX1268
      * DIO2 line for possible future use as a second IRQ source. */
     GPIO_InitStruct.Pin = LORA_RXEN_PIN | LORA_TXEN_PIN;
@@ -307,7 +307,7 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     /* DIO2 mode: 0x00 = DIO2 available as plain IRQ line; the RF switch is
      * NOT driven via DIO2. (The old comment here claimed "automatic mode" but
      * the parameter for that is 0x01 - the code never actually enabled it.
-     * With TXEN now wired to PA10 and driven manually, 0x00 is the correct
+     * With TXEN now wired to PA12 and driven manually, 0x00 is the correct
      * and contention-free choice; EByte documents TXEN as MCU-or-DIO2, never
      * both at once.) */
     uint8_t dio2_params[1] = {0x00};  // DIO2 = IRQ configuration (switch NOT auto-driven)
@@ -365,7 +365,7 @@ uint8_t LoRa_Init(SPI_HandleTypeDef *hspi) {
     __HAL_GPIO_EXTI_CLEAR_IT(LORA_DIO1_PIN);
     lora_packet_ready = 0;
     lora_irq_count = 0;
-    HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+    HAL_NVIC_EnableIRQ(LORA_DIO1_EXTI_IRQn);
     
     /* BYPASS mode check - just return OK and see if it actually receives */
     /* The mode reporting might be incorrect but the module could still work */
@@ -1010,10 +1010,11 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi)
 }
 
 /**
- * @brief EXTI1 interrupt handler for DIO1 (packet ready interrupt)
- * @note Called by hardware when LoRa module signals packet ready via DIO1
+ * @brief DIO1 packet-ready interrupt handler (EXTI9_5 vector; DIO1 is on
+ *        PA8 since v2.9)
+ * @note Called by hardware when the LoRa module signals packet ready via DIO1
  */
-void EXTI1_IRQHandler(void)
+void LORA_DIO1_IRQHandler(void)
 {
     /* Check if interrupt is from DIO1 pin */
     if (__HAL_GPIO_EXTI_GET_IT(LORA_DIO1_PIN) != RESET) {

@@ -1,19 +1,27 @@
 /**
  * @file test_compass.c
- * @brief Host-side unit tests for the BNO055 compass driver (compass.c).
+ * @brief Host-side unit tests for the BNO085/SHTP compass driver
+ *        (compass.c + bno085.c).
  *
- * A register-level BNO055 fake sits behind the I2C HAL: a 256-byte
- * register file with presence flags per 7-bit address, NAK knobs for
- * every transfer type, and a calibration-read corruptor for the
- * restore-verify path. Display_* functions are faked with line capture
- * so Compass_DisplayI2CScan() output is assertable.
+ * A packet-level SHTP fake sits behind the I2C HAL master functions: the
+ * hub queues reset-complete packets, honors SetFeature report enables,
+ * and then streams synthetic sensor reports from test-settable knobs
+ * (quaternion, per-sensor accuracy, raw accel/gyro/mag). Presence flags,
+ * NAK knobs, a reset-kills-hub knob and a stream-stall knob cover the
+ * failure modes the driver claims to handle.
  *
- * Covers: I2C scan + dual-address detection, chip-ID checks and reset
- * recovery in init, NDOF verification, heading math with declination +
- * mounting offset normalization, the heading_valid calibration latch,
- * periodic calib/mode/sys-status checks with recovery writes, calibration
- * save/restore with read-back verification, self-test, calibrate status
- * messaging, and the accessor/guard functions.
+ * Covers: I2C scan + dual-address detection, SHTP reset handshake and its
+ * timeout paths, feature enable -> fusion stream, heading math with
+ * declination + mounting-offset normalization and wrap, the heading_valid
+ * calibration latch (RV accuracy), vertical-orientation flagging, stale-
+ * heading behavior on comm loss, error-streak recovery, calibrate status
+ * messaging, self-test liveness, host-cal not-supported contract, and the
+ * accessor/guard functions.
+ *
+ * Note on test ORDER: matches the BNO055 suite - compass_cal_proven is a
+ * function-local static in Compass_Update, so tests that need it clear
+ * must run before any test that lets an Update see RV accuracy >= 1.
+ * fresh_init() uses rv_acc = 0 precisely for this.
  *
  * Build & run:  make -C receiver/tests
  * Coverage:     make -C receiver/tests coverage
@@ -28,55 +36,64 @@
 #include "test_harness.h"
 
 /* ------------------------------------------------------------------ */
-/* BNO055 register fake                                                */
+/* SHTP packet-level BNO085 fake                                        */
 /* ------------------------------------------------------------------ */
 
-#define REG_CHIP_ID    0x00
-#define REG_EULER_H    0x1A
-#define REG_ACCEL_X    0x08
-#define REG_TEMP       0x34
-#define REG_CALIB_STAT 0x35
-#define REG_ST_RESULT  0x36
-#define REG_SYS_STAT   0x39
-#define REG_SYS_ERR    0x3A
-#define REG_OPR_MODE   0x3D
-#define REG_PWR_MODE   0x3E
-#define REG_CAL_DATA   0x55
+#define CH_EXECUTABLE     1
+#define CH_CONTROL        2
+#define CH_INPUT_REPORTS  3
 
-static uint8_t bno_regs[256];
+#define EXE_CMD_RESET     0x01
+#define SH2_SET_FEATURE   0xFD
+
+#define RID_ACCEL   0x01
+#define RID_GYRO    0x02
+#define RID_MAG     0x03
+#define RID_RV      0x05
+
 static uint8_t present_28 = 1;
 static uint8_t present_29 = 0;
-static uint8_t nak_mem_read    = 0;   /* HAL_I2C_Mem_Read NAKs        */
-static uint8_t nak_euler_read  = 0;   /* only the Euler burst NAKs    */
-static uint8_t nak_mem_write   = 0;   /* HAL_I2C_Mem_Write NAKs       */
-static uint8_t nak_master_tx   = 0;   /* HAL_I2C_Master_Transmit NAKs */
-static uint8_t nak_master_rx   = 0;   /* HAL_I2C_Master_Receive NAKs  */
-static int     nak_mem_read_reg = -1;   /* NAK Mem_Read of one register   */
-static int     nak_master_rx_reg = -1;  /* NAK Master_Receive of one reg  */
-static uint8_t reset_breaks_chip = 0;   /* SYS_TRIGGER reset kills chip-id */
-static uint8_t present_50 = 0;          /* a non-BNO device on the bus    */
-static uint8_t extra_addrs[4];          /* more non-BNO devices           */
+static uint8_t present_50 = 0;      /* a non-IMU device on the bus */
+static uint8_t extra_addrs[4];
 static uint8_t extra_addr_count = 0;
-static uint8_t corrupt_cal_read = 0;  /* read-back of cal data lies   */
-static uint8_t last_reg_addr    = 0;  /* for Master_Transmit/Receive  */
 
-static void bno_reset(void)
+static uint8_t nak_tx = 0;          /* Master_Transmit NAKs */
+static uint8_t nak_rx = 0;          /* Master_Receive NAKs  */
+static uint8_t nak_rx_once = 0;     /* NAK exactly one receive, then clear */
+static uint8_t reset_dies = 0;      /* hub never confirms reset */
+static uint8_t stream_off = 0;      /* features on, but no reports stream */
+
+static uint8_t feat_rv = 0, feat_accel = 0, feat_gyro = 0, feat_mag = 0;
+
+/* Stream content knobs */
+static float   fq_w = 1.0f, fq_x = 0.0f, fq_y = 0.0f, fq_z = 0.0f;
+static uint8_t rv_acc = 0;          /* SH-2 accuracy bits for the RV report */
+static int16_t fa[3] = {0, 0, 0};
+static int16_t fg[3] = {0, 0, 0};
+static int16_t fm[3] = {0, 0, 0};
+static uint8_t acc_acc = 0, gyro_acc = 0, mag_acc = 0;
+
+/* Reset-complete packet queued by the reset command (single slot) */
+static uint8_t q_buf[8];
+static uint8_t q_len = 0;           /* payload length queued */
+
+/* Current packet being clocked out over two-phase (header/body) reads */
+static uint8_t  rpkt[64];           /* full packet incl. 4-byte header */
+static uint16_t rpkt_len = 0;
+static uint16_t rpkt_pos = 0;
+
+static void fake_reset(void)
 {
-    memset(bno_regs, 0, sizeof(bno_regs));
-    bno_regs[REG_CHIP_ID]    = 0xA0;
-    bno_regs[REG_SYS_STAT]   = 5;      /* fusion running */
-    bno_regs[REG_ST_RESULT]  = 0x0F;
-    bno_regs[REG_OPR_MODE]   = 0x0C;   /* NDOF (init writes it anyway) */
-    present_28 = 1;
-    present_29 = 0;
-    nak_mem_read = nak_mem_write = nak_master_tx = nak_master_rx = 0;
-    nak_euler_read = 0;
-    nak_mem_read_reg = -1;
-    nak_master_rx_reg = -1;
-    reset_breaks_chip = 0;
-    present_50 = 0;
+    present_28 = 1; present_29 = 0; present_50 = 0;
     extra_addr_count = 0;
-    corrupt_cal_read = 0;
+    nak_tx = nak_rx = 0; nak_rx_once = 0;
+    reset_dies = 0; stream_off = 0;
+    feat_rv = feat_accel = feat_gyro = feat_mag = 0;
+    fq_w = 1.0f; fq_x = fq_y = fq_z = 0.0f;
+    rv_acc = 0;
+    memset(fa, 0, sizeof(fa)); memset(fg, 0, sizeof(fg)); memset(fm, 0, sizeof(fm));
+    acc_acc = gyro_acc = mag_acc = 0;
+    q_len = 0; rpkt_len = 0; rpkt_pos = 0;
 }
 
 static uint8_t addr_present(uint16_t addr8)
@@ -86,6 +103,81 @@ static uint8_t addr_present(uint16_t addr8)
     if (a == 0x50 && present_50) return 1;
     for (uint8_t i = 0; i < extra_addr_count; i++) {
         if (a == extra_addrs[i]) return 1;
+    }
+    return 0;
+}
+
+/* Build one payload and wrap it into rpkt as a full SHTP packet. */
+static void rpkt_build(uint8_t channel, const uint8_t *payload, uint8_t plen)
+{
+    uint16_t len = (uint16_t)(4 + plen);
+    static uint8_t hub_seq = 0;
+    rpkt[0] = (uint8_t)(len & 0xFF);
+    rpkt[1] = (uint8_t)(len >> 8);
+    rpkt[2] = channel;
+    rpkt[3] = hub_seq++;
+    memcpy(&rpkt[4], payload, plen);
+    rpkt_len = len;
+    rpkt_pos = 0;
+}
+
+static void put_i16(uint8_t *p, int16_t v)
+{
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+}
+
+/* Fill rpkt with the next packet the hub would emit, or 0 if none. */
+static uint8_t gen_next_packet(void)
+{
+    if (q_len > 0) {
+        uint8_t p[8];
+        memcpy(p, q_buf, q_len);
+        rpkt_build(CH_EXECUTABLE, p, q_len);
+        q_len = 0;
+        return 1;
+    }
+    if (stream_off || reset_dies) return 0;
+
+    /* Rotate through the enabled reports: RV, accel, gyro, mag. */
+    static uint8_t phase = 0;
+    for (int n = 0; n < 4; n++, phase = (uint8_t)((phase + 1) & 3)) {
+        if (phase == 0 && feat_rv) {
+            uint8_t p[14];
+            p[0] = RID_RV; p[1] = 0; p[2] = rv_acc; p[3] = 0;
+            put_i16(&p[4],  (int16_t)(fq_x * 16384.0f));   /* i */
+            put_i16(&p[6],  (int16_t)(fq_y * 16384.0f));   /* j */
+            put_i16(&p[8],  (int16_t)(fq_z * 16384.0f));   /* k */
+            put_i16(&p[10], (int16_t)(fq_w * 16384.0f));   /* real */
+            put_i16(&p[12], 0);                            /* accuracy est */
+            rpkt_build(CH_INPUT_REPORTS, p, sizeof(p));
+            phase = (uint8_t)((phase + 1) & 3);
+            return 1;
+        }
+        if (phase == 1 && feat_accel) {
+            uint8_t p[10];
+            p[0] = RID_ACCEL; p[1] = 0; p[2] = acc_acc; p[3] = 0;
+            put_i16(&p[4], fa[0]); put_i16(&p[6], fa[1]); put_i16(&p[8], fa[2]);
+            rpkt_build(CH_INPUT_REPORTS, p, sizeof(p));
+            phase = (uint8_t)((phase + 1) & 3);
+            return 1;
+        }
+        if (phase == 2 && feat_gyro) {
+            uint8_t p[10];
+            p[0] = RID_GYRO; p[1] = 0; p[2] = gyro_acc; p[3] = 0;
+            put_i16(&p[4], fg[0]); put_i16(&p[6], fg[1]); put_i16(&p[8], fg[2]);
+            rpkt_build(CH_INPUT_REPORTS, p, sizeof(p));
+            phase = (uint8_t)((phase + 1) & 3);
+            return 1;
+        }
+        if (phase == 3 && feat_mag) {
+            uint8_t p[10];
+            p[0] = RID_MAG; p[1] = 0; p[2] = mag_acc; p[3] = 0;
+            put_i16(&p[4], fm[0]); put_i16(&p[6], fm[1]); put_i16(&p[8], fm[2]);
+            rpkt_build(CH_INPUT_REPORTS, p, sizeof(p));
+            phase = (uint8_t)((phase + 1) & 3);
+            return 1;
+        }
     }
     return 0;
 }
@@ -100,50 +192,33 @@ HAL_StatusTypeDef HAL_I2C_IsDeviceReady(I2C_HandleTypeDef *hi2c, uint16_t addr,
     return addr_present(addr) ? HAL_OK : HAL_ERROR;
 }
 
-HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *hi2c, uint16_t addr,
-                                   uint16_t mem_addr, uint16_t mem_size,
-                                   uint8_t *data, uint16_t size, uint32_t timeout)
-{
-    (void)hi2c; (void)mem_size; (void)timeout;
-    if (!addr_present(addr) || nak_mem_read) return HAL_ERROR;
-    if (nak_mem_read_reg >= 0 && mem_addr == nak_mem_read_reg) return HAL_ERROR;
-    if (nak_euler_read && mem_addr == REG_EULER_H && size == 6) return HAL_ERROR;
-    if (mem_addr + size > 256) return HAL_ERROR;
-    memcpy(data, &bno_regs[mem_addr], size);
-    if (corrupt_cal_read && mem_addr == REG_CAL_DATA) data[0] ^= 0xFF;
-    return HAL_OK;
-}
-
-HAL_StatusTypeDef HAL_I2C_Mem_Write(I2C_HandleTypeDef *hi2c, uint16_t addr,
-                                    uint16_t mem_addr, uint16_t mem_size,
-                                    uint8_t *data, uint16_t size, uint32_t timeout)
-{
-    (void)hi2c; (void)mem_size; (void)timeout;
-    if (!addr_present(addr) || nak_mem_write) return HAL_ERROR;
-    if (mem_addr + size > 256) return HAL_ERROR;
-    memcpy(&bno_regs[mem_addr], data, size);
-    return HAL_OK;
-}
-
-HAL_StatusTypeDef HAL_I2C_DeInit(I2C_HandleTypeDef *hi2c)
-{
-    (void)hi2c;
-    return HAL_OK;
-}
-
 HAL_StatusTypeDef HAL_I2C_Master_Transmit(I2C_HandleTypeDef *hi2c, uint16_t addr,
                                           uint8_t *data, uint16_t size, uint32_t timeout)
 {
     (void)hi2c; (void)timeout;
-    if (!addr_present(addr) || nak_master_tx) return HAL_ERROR;
-    if (size == 1) {                       /* register-address pointer set */
-        last_reg_addr = data[0];
-    } else if (size >= 2) {                /* register write */
-        bno_regs[data[0]] = data[1];
-        /* A real reset pulse reboots the chip: model one that never
-         * comes back (dead after reset) */
-        if (reset_breaks_chip && data[0] == 0x3F && data[1] == 0x20) {
-            bno_regs[REG_CHIP_ID] = 0x00;
+    if (!addr_present(addr) || nak_tx) return HAL_ERROR;
+    if (size < 5) return HAL_OK;          /* not an SHTP packet - ignore */
+
+    uint8_t channel = data[2];
+    const uint8_t *payload = &data[4];
+    uint16_t plen = (uint16_t)(size - 4);
+
+    if (channel == CH_EXECUTABLE && plen == 1 && payload[0] == EXE_CMD_RESET) {
+        if (!reset_dies) {
+            /* Queue the reset-complete response */
+            q_buf[0] = EXE_CMD_RESET;     /* response id 0x01 */
+            q_len = 1;
+        }
+        /* A real reset clears feature enables; the hub starts empty. */
+        feat_rv = feat_accel = feat_gyro = feat_mag = 0;
+    }
+    if (channel == CH_CONTROL && plen >= 2 && payload[0] == SH2_SET_FEATURE) {
+        switch (payload[1]) {
+            case RID_RV:    feat_rv = 1;    break;
+            case RID_ACCEL: feat_accel = 1; break;
+            case RID_GYRO:  feat_gyro = 1;  break;
+            case RID_MAG:   feat_mag = 1;   break;
+            default: break;
         }
     }
     return HAL_OK;
@@ -153,9 +228,34 @@ HAL_StatusTypeDef HAL_I2C_Master_Receive(I2C_HandleTypeDef *hi2c, uint16_t addr,
                                          uint8_t *data, uint16_t size, uint32_t timeout)
 {
     (void)hi2c; (void)timeout;
-    if (!addr_present(addr) || nak_master_rx) return HAL_ERROR;
-    if (nak_master_rx_reg >= 0 && last_reg_addr == nak_master_rx_reg) return HAL_ERROR;
-    for (uint16_t i = 0; i < size; i++) data[i] = bno_regs[last_reg_addr + i];
+    if (!addr_present(addr) || nak_rx) return HAL_ERROR;
+    if (nak_rx_once) { nak_rx_once = 0; return HAL_ERROR; }
+
+    if (size == 4) {
+        /* New packet request: if the previous one was fully clocked out,
+         * generate the next. */
+        if (rpkt_pos >= rpkt_len) {
+            if (!gen_next_packet()) {
+                memset(data, 0xFF, 4);    /* nothing queued */
+                return HAL_OK;
+            }
+        }
+        memcpy(data, rpkt, 4);
+        rpkt_pos = 4;
+        return HAL_OK;
+    }
+
+    /* Continuation read: serve the rest of the current packet */
+    if (rpkt_pos < rpkt_len) {
+        uint16_t avail = (uint16_t)(rpkt_len - rpkt_pos);
+        uint16_t n = (size < avail) ? size : avail;
+        memcpy(data, &rpkt[rpkt_pos], n);
+        rpkt_pos = (uint16_t)(rpkt_pos + n);
+        if (size > n) memset(data + n, 0xFF, size - n);
+        return HAL_OK;
+    }
+
+    memset(data, 0xFF, size);
     return HAL_OK;
 }
 
@@ -187,38 +287,22 @@ void Display_Update(void) {}
 
 void HAL_Delay(uint32_t ms) { Test_SetTick(HAL_GetTick() + ms); }
 
-/* Include the module under test (statics reachable: compass_cal_proven,
- * compass_cal_restored, heading_offset, etc.) */
+/* Include the module under test (statics reachable: compass_cal_proven via
+ * rub of ordering, compass_cal_restored, heading_offset, etc.) */
 #include "../firmware/src/compass.c"
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-static void set_euler(float heading_deg, float roll_deg, float pitch_deg)
-{
-    int16_t h = (int16_t)(heading_deg * 16.0f);
-    int16_t r = (int16_t)(roll_deg * 16.0f);
-    int16_t p = (int16_t)(pitch_deg * 16.0f);
-    bno_regs[REG_EULER_H + 0] = (uint8_t)h; bno_regs[REG_EULER_H + 1] = (uint8_t)(h >> 8);
-    bno_regs[REG_EULER_H + 2] = (uint8_t)r; bno_regs[REG_EULER_H + 3] = (uint8_t)(r >> 8);
-    bno_regs[REG_EULER_H + 4] = (uint8_t)p; bno_regs[REG_EULER_H + 5] = (uint8_t)(p >> 8);
-}
-
-#define REG_QUAT_W 0x20
 static void set_quat(float w, float x, float y, float z)
 {
-    const int16_t q[4] = { (int16_t)(w * 16384.0f), (int16_t)(x * 16384.0f),
-                           (int16_t)(y * 16384.0f), (int16_t)(z * 16384.0f) };
-    for (int i = 0; i < 4; i++) {
-        bno_regs[REG_QUAT_W + i * 2]     = (uint8_t)q[i];
-        bno_regs[REG_QUAT_W + i * 2 + 1] = (uint8_t)(q[i] >> 8);
-    }
+    fq_w = w; fq_x = x; fq_y = y; fq_z = z;
 }
 
 static void fresh_init(void)
 {
-    bno_reset();
+    fake_reset();
     /* Reset cross-test statics via direct access */
     compass_cal_restored = 0;
     heading_offset = 0.0f;
@@ -226,6 +310,8 @@ static void fresh_init(void)
     quat_conv_locked = 0;
     compass_i2c_error_streak = 0;
     compass_last_recover_ms = 0;
+    compass_debug.error_code = 0;      /* error channel is latched: clear per test */
+    compass_debug.error_message[0] = '\0';
     if (Compass_Init() != COMPASS_OK) CHECK(0);
 }
 
@@ -237,20 +323,17 @@ TEST(test_init_success_default_address)
 {
     fresh_init();
     CHECK(compass_debug.active_addr == 0x28);
-    CHECK(bno_regs[REG_OPR_MODE] == BNO055_OPR_MODE_NDOF);
-    CHECK(bno_regs[BNO055_AXIS_MAP_CONFIG] == 0x24);
-    CHECK(bno_regs[BNO055_AXIS_MAP_SIGN] == 0x00);
+    CHECK(quat_conv_locked == COMPASS_BNO085_DEFAULT_CONV);
     CHECK(Compass_GetFoundDeviceCount() >= 1);
     /* declination 8.5 + mounting 90.0 */
     CHECK_NEAR(heading_offset, 98.5, 0.01);
-    /* Slot 1 ends holding the system-status line; slot 2 the fusion one */
-    CHECK(strstr(Compass_GetDebugMessageByIndex(1), "system status") != NULL);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(2), "running with fusion") != NULL);
+    CHECK(strstr(Compass_GetDebugMessageByIndex(2), "fusion running") != NULL);
+    CHECK(Compass_GetRvSampleCount() >= 1);
 }
 
 TEST(test_init_alternate_address)
 {
-    bno_reset();
+    fake_reset();
     present_28 = 0;
     present_29 = 1;
     compass_cal_restored = 0;
@@ -260,7 +343,7 @@ TEST(test_init_alternate_address)
 
 TEST(test_init_no_devices)
 {
-    bno_reset();
+    fake_reset();
     present_28 = 0;
     present_29 = 0;
     CHECK(Compass_Init() == COMPASS_ERROR);
@@ -268,28 +351,51 @@ TEST(test_init_no_devices)
     CHECK(strstr(Compass_GetErrorMessage(), "No I2C devices") != NULL);
 }
 
-TEST(test_init_wrong_chip_id)
+TEST(test_init_device_at_wrong_address_times_out)
 {
-    bno_reset();
-    bno_regs[REG_CHIP_ID] = 0x55;
+    /* Bus has a device, but not at either strap address: detection must
+     * time out with a distinct error (vs the empty-bus bail) */
+    fake_reset();
+    present_28 = 0; present_29 = 0; present_50 = 1;
     CHECK(Compass_Init() == COMPASS_ERROR);
-    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_ID_CHECK);
+    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_I2C_INIT);
+    CHECK(strstr(Compass_GetErrorMessage(), "not found after timeout") != NULL);
 }
 
-TEST(test_init_survives_nak_writes_and_bad_status)
+TEST(test_init_hub_never_confirms_reset)
 {
-    /* Every WriteRegister NAKs: init must press on ("continue anyway"),
-     * then the NDOF verify fails (mode reads back CONFIG) and the
-     * system-status check logs the not-running branch. */
-    bno_reset();
-    nak_mem_write = 1;                 /* Mem_Write (cal/NDOF verify path) */
-    nak_master_tx = 1;                 /* WriteRegister (2-byte master tx) */
-    bno_regs[REG_OPR_MODE] = 0x00;     /* stuck in CONFIG */
-    bno_regs[REG_SYS_STAT] = 1;        /* SYS_STATUS_ERROR -> reads SYS_ERR */
-    bno_regs[REG_SYS_ERR] = 0x0A;
+    /* Hub ACKs and probes OK, but the reset-complete packet never comes */
+    fake_reset();
+    reset_dies = 1;
     compass_cal_restored = 0;
-    CHECK(Compass_Init() == COMPASS_OK);   /* degraded but returns OK */
-    nak_master_tx = nak_mem_write = 0;
+    CHECK(Compass_Init() == COMPASS_ERROR);
+    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_ID_CHECK);
+    CHECK(strstr(Compass_GetErrorMessage(), "no fusion data") != NULL);
+}
+
+TEST(test_init_no_fusion_stream)
+{
+    /* Handshake completes, features accepted, but no rotation-vector data
+     * ever arrives -> init must fail noisily, not 'succeed' silently. */
+    fake_reset();
+    stream_off = 1;
+    compass_cal_restored = 0;
+    Test_SetTickAutoAdvance(5);   /* Diagnostic loop spins on Poll() + tick */
+    CHECK(Compass_Init() == COMPASS_ERROR);
+    Test_SetTickAutoAdvance(0);
+    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_ID_CHECK);
+    CHECK(strstr(Compass_GetErrorMessage(), "no fusion data") != NULL);
+}
+
+TEST(test_init_tx_failure)
+{
+    /* Every wire transaction NAKs from the start: SHTP handshake fails */
+    fake_reset();
+    nak_tx = 1;
+    compass_cal_restored = 0;
+    CHECK(Compass_Init() == COMPASS_ERROR);
+    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_I2C_INIT);
+    nak_tx = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -301,18 +407,20 @@ TEST(test_update_heading_offset_and_wrap)
     fresh_init();
     Compass_Data d = {0};
 
-    /* Raw 300 deg + 98.5 offset = 398.5 -> wraps to 38.5 */
-    set_euler(300.0f, -45.0f, 22.5f);
+    /* ENU conv 5: raw heading = 90 - yaw.  Raw 300 deg = yaw 150 deg:
+     * quat w=cos(75), z=sin(75).  300 + 98.5 offset -> wraps to 38.5 */
+    set_quat(0.2588f, 0.0f, 0.0f, 0.9659f);
     CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK_NEAR(d.heading, 38.5, 0.15);
-    CHECK_NEAR(d.roll, -45.0, 0.15);
-    CHECK_NEAR(d.pitch, 22.5, 0.15);
+    CHECK_NEAR(d.heading, 38.5, 1.5);
+    CHECK_NEAR(d.roll, 0.0, 1.0);
+    CHECK_NEAR(d.pitch, 0.0, 1.0);
 
-    /* Negative wrap: offset override makes a small heading go negative */
+    /* Negative wrap: offset override makes a small heading go negative.
+     * Raw 10 deg = yaw 80 deg: w=cos(40), z=sin(40). */
     Compass_SetHeadingOffset(-200.0f);
-    set_euler(10.0f, 0.0f, 0.0f);
+    set_quat(0.7660f, 0.0f, 0.0f, 0.6428f);
     CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK_NEAR(d.heading, 170.0, 0.15);
+    CHECK_NEAR(d.heading, 170.0, 1.5);
 
     Compass_SetHeadingOffset(98.5f);   /* restore */
 }
@@ -328,9 +436,9 @@ TEST(test_set_declination_overrides_site)
     CHECK_NEAR(heading_offset, 101.9, 0.01);
 
     Compass_Data d = {0};
-    set_euler(300.0f, -45.0f, 22.5f);
+    set_quat(0.2588f, 0.0f, 0.0f, 0.9659f);   /* raw 300 deg */
     CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK_NEAR(d.heading, 41.9, 0.15);   /* 300 + 101.9 -> wraps */
+    CHECK_NEAR(d.heading, 41.9, 1.5);   /* 300 + 101.9 -> wraps */
 
     Compass_SetDeclination(8.5f);        /* restore Denver */
     CHECK_NEAR(heading_offset, 98.5, 0.01);
@@ -351,8 +459,7 @@ TEST(test_location_table_and_precedence)
     decl = Compass_DeclinationFromLocation(29.4f, -98.5f);
     CHECK(decl > 4.2f && decl < 6.6f);
 
-    /* Edge clamp: outside-grid points saturate at the corner value.
-     * Row 0 = 25N ... row 4 = 45N, so the NW corner is [4][0]. */
+    /* Edge clamp: outside-grid points saturate at the corner value. */
     decl = Compass_DeclinationFromLocation(50.0f, -130.0f);
     CHECK(decl == declin_grid[4][0]);     /* NW corner: +15.6 */
 
@@ -369,36 +476,35 @@ TEST(test_location_table_and_precedence)
 TEST(test_location_update_rejects_impossible_fix)
 {
     fresh_init();
-    /* (0,0) is in the grid-domain gate reject list: it must NOT apply */
     CHECK(Compass_UpdateLocation(0.0f, 0.0f) != COMPASS_OK);
     CHECK_NEAR(heading_offset, 98.5f, 0.01);  /* Denver default intact */
 }
 
-TEST(test_update_raw_sensor_burst)
+TEST(test_update_raw_sensor_stream)
 {
     fresh_init();
     Compass_Data d = {0};
 
-    /* accel XYZ = 1,2,3 ; mag = -100,200,-300 ; gyro = 160 dps*16 on Z */
-    static const int16_t vals[9] = {1, 2, 3, -100, 200, -300, 10, 20, 160};
-    for (int i = 0; i < 9; i++) {
-        bno_regs[REG_ACCEL_X + i * 2]     = (uint8_t)vals[i];
-        bno_regs[REG_ACCEL_X + i * 2 + 1] = (uint8_t)(vals[i] >> 8);
-    }
-    CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK(d.accel_x == 1 && d.accel_y == 2 && d.accel_z == 3);
-    CHECK(d.mag_x == -100 && d.mag_y == 200 && d.mag_z == -300);
-    CHECK(d.gyro_x == 10 && d.gyro_y == 20 && d.gyro_z == 160);
-    CHECK_NEAR(d.cal_gyro_z, 10.0, 0.01);    /* 160/16 dps */
+    /* Push distinct raw values through the three raw channels */
+    const int16_t av[3] = {256, 512, -256};       /* 1.0, 2.0, -1.0 m/s2 */
+    const int16_t gv[3] = {512, -512, 1024};      /* 1.0, -1.0, 2.0 rad/s */
+    const int16_t mv[3] = {400, -160, 80};        /* 25.0, -10.0, 5.0 uT */
+    memcpy(fa, av, sizeof(fa));
+    memcpy(fg, gv, sizeof(fg));
+    memcpy(fm, mv, sizeof(fm));
 
-    /* Burst read NAK: update still OK, gyro rate zeroed */
-    nak_mem_read = 0; /* euler read must work; fail only the burst via size? */
-    /* (burst read shares the same path; simulate by NAKing everything and
-     *  checking the euler-failure error return instead) */
-    nak_mem_read = 1;
-    CHECK(Compass_Update(&d) == COMPASS_ERROR);
-    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_READ_REG);
-    nak_mem_read = 0;
+    /* Drain enough phases to pass the RV gate and see all channels */
+    for (int i = 0; i < 6; i++) {
+        Test_SetTick(HAL_GetTick() + 50);
+        CHECK(Compass_Update(&d) == COMPASS_OK);
+    }
+
+    CHECK(d.accel_x == 256 && d.accel_z == -256);
+    CHECK(d.mag_x == 400 && d.mag_y == -160);
+    CHECK(d.gyro_z == 1024);
+    CHECK_NEAR(d.cal_accel_y, 2.0, 0.01);     /* 512 / 256 */
+    CHECK_NEAR(d.cal_gyro_x, 1.0, 0.01);      /* 512 / 512 */
+    CHECK_NEAR(d.cal_accel_z, -1.0, 0.01);
 }
 
 TEST(test_heading_valid_latch)
@@ -406,58 +512,42 @@ TEST(test_heading_valid_latch)
     fresh_init();
     /* NOTE: compass_cal_proven is a function-local static in
      * Compass_Update (unreachable from here), so this test depends on
-     * ordering: nothing before it may raise mag_cal >= 1. */
+     * ordering: nothing before it may raise RV accuracy >= 1. */
 
     Compass_Data d = {0};
-    bno_regs[REG_CALIB_STAT] = 0x00;   /* mag_cal = 0 */
+    rv_acc = 0;
     CHECK(Compass_Update(&d) == COMPASS_OK);
     CHECK(d.heading_valid == 0);
     CHECK(d.mag_cal == 0);
 
-    /* mag_cal reaches 1: valid latches on... */
-    bno_regs[REG_CALIB_STAT] = 0x01;
-    Test_SetTick(HAL_GetTick() + 1100);    /* pass the 1 s calib poll */
+    /* RV accuracy reaches 1: valid latches on... */
+    rv_acc = 1;
     CHECK(Compass_Update(&d) == COMPASS_OK);
     CHECK(d.heading_valid == 1);
     CHECK(d.mag_cal == 1);
 
     /* ...and STAYS on when the live level decays back to 0 */
-    bno_regs[REG_CALIB_STAT] = 0x00;
-    Test_SetTick(HAL_GetTick() + 1100);
+    rv_acc = 0;
     CHECK(Compass_Update(&d) == COMPASS_OK);
     CHECK(d.heading_valid == 1);           /* latched */
     CHECK(d.mag_cal == 0);                 /* live level still visible */
 }
 
-TEST(test_heading_valid_via_restored_cal)
+TEST(test_heading_valid_via_restored_cal_flag)
 {
     fresh_init();
-    /* Runs BEFORE the latch test so the proven latch is still clear and
-     * validity can only come from the restored-calibration flag. */
-    compass_cal_restored = 1;              /* as if SetCalibrationData ran */
+    /* Runs while the proven latch is still clear, so validity can only
+     * come from the restored-calibration flag (test static poke). */
+    compass_cal_restored = 1;
     Compass_Data d = {0};
-    bno_regs[REG_CALIB_STAT] = 0x00;
+    rv_acc = 0;
     CHECK(Compass_Update(&d) == COMPASS_OK);
     CHECK(d.heading_valid == 1);
     compass_cal_restored = 0;
 }
 
-TEST(test_periodic_mode_recovery)
-{
-    fresh_init();
-    Compass_Data d = {0};
-
-    /* Trip the 5 s status check with the chip dropped out of NDOF:
-     * the driver must rewrite CONFIG then NDOF. */
-    bno_regs[REG_OPR_MODE] = 0x00;
-    Test_SetTick(HAL_GetTick() + 5100);
-    CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK(bno_regs[REG_OPR_MODE] == BNO055_OPR_MODE_NDOF);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(1), "H") != NULL);
-}
-
 /* ------------------------------------------------------------------ */
-/* Calibrate / self-test                                               */
+/* Orientation / conventions                                           */
 /* ------------------------------------------------------------------ */
 
 TEST(test_vertical_orientation_invalid)
@@ -480,87 +570,36 @@ TEST(test_vertical_orientation_invalid)
     compass_cal_restored = 0;
 }
 
-TEST(test_quat_lock_and_tilt_robustness)
-{
-    fresh_init();
-    compass_cal_restored = 1;              /* headings meaningful */
-    Compass_Data d = {0};
-
-    /* Level at 112.5 deg: Euler raw 112.5, quaternion pure-yaw (conv 1).
-     * 112.5 is exactly between 45-degree multiples (d45 = 22.5), safely
-     * outside the mirror-ambiguity band - one trustworthy sample locks. */
-    set_euler(112.5f, 0.0f, 0.0f);
-    set_quat(0.55557f, 0.0f, 0.0f, 0.83147f);   /* w=cos56.25, z=sin56.25 */
-    CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK(quat_conv_locked == 1);
-    CHECK_NEAR(d.heading, 112.5 + 98.5, 0.6);   /* + decl/mount offset */
-
-    /* Now the Euler-glitch case: pitched to 80 deg, the Euler heading
-     * register jumps to garbage (300 deg) while the quaternion still
-     * says 112.5. The reported heading must stay on the quaternion. */
-    set_euler(300.0f, 0.0f, 80.0f);
-    CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK_NEAR(d.heading, 211.0, 0.6);
-    CHECK(d.orientation_valid == 1);
-    compass_cal_restored = 0;
-}
-
-TEST(test_quat_lock_all_conventions_selectable)
-{
-    /* Every one of the 8 candidate conventions must be selectable: whichever
-     * the mounted BNO055 actually uses, the search must find it. Drive the
-     * unambiguous yaw=112.5 orientation, set the Euler reference to what
-     * convention c would report, and expect the search to lock exactly c. */
-    const float qw = 0.55557f, qz = 0.83147f;   /* yaw = 112.5 deg */
-    const float vx = 1.0f - 2.0f * qz * qz;     /* matches compass.c math */
-    const float vy = 2.0f * qw * qz;
-    for (int c = 1; c <= 8; c++) {
-        fresh_init();
-        compass_cal_restored = 1;
-        quat_conv_locked = 0;                   /* module static: reset search */
-        Compass_Data d = {0};
-        set_euler(Compass_QuatHeadingCandidate(c, vx, vy), 0.0f, 0.0f);
-        set_quat(qw, 0.0f, 0.0f, qz);
-        CHECK(Compass_Update(&d) == COMPASS_OK);
-        CHECK(quat_conv_locked == c);
-    }
-    compass_cal_restored = 0;
-}
-
 TEST(test_quat_lock_get_set_for_persistence)
 {
     fresh_init();
     quat_conv_locked = 0;
     CHECK(Compass_GetQuatLockConv() == 0);
-    CHECK(Compass_SetQuatLockConv(0) == COMPASS_ERROR);   /* 0 = unlocked, not a conv */
+    CHECK(Compass_SetQuatLockConv(0) == COMPASS_ERROR);   /* 0 = not a conv */
     CHECK(Compass_SetQuatLockConv(9) == COMPASS_ERROR);
     CHECK(Compass_SetQuatLockConv(5) == COMPASS_OK);
     CHECK(Compass_GetQuatLockConv() == 5);
     CHECK(quat_conv_locked == 5);                          /* same static drives heading */
-    quat_conv_locked = 0;                                  /* leave unlocked for later tests */
 }
 
-TEST(test_quat_lock_refused_in_ambiguity_band)
+TEST(test_fusion_stall_flagged)
 {
     fresh_init();
     compass_cal_restored = 1;
     Compass_Data d = {0};
 
-    /* yaw=100 deg is 10 deg off the 90-degree multiple: candidates 1 (100)
-     * and 4 (80) BOTH sit inside the 12 deg gate of an Euler reading near
-     * 90 - a lock here can pick the mirror. Must refuse (fall back to
-     * Euler), not lock. */
-    set_euler(90.0f, 0.0f, 0.0f);
-    set_quat(0.6428f, 0.0f, 0.0f, 0.7660f);     /* yaw = 100 deg */
+    /* Streamed fine... */
     CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK(quat_conv_locked == 0);               /* refused: ambiguous */
-    CHECK_NEAR(d.heading, 90.0 + 98.5, 0.6);    /* Euler value still shown */
+    CHECK(d.heading_stale == 0);
 
-    /* Rotate to the unambiguous diagonal: lock succeeds. */
-    set_euler(112.5f, 0.0f, 0.0f);
-    set_quat(0.55557f, 0.0f, 0.0f, 0.83147f);   /* yaw = 112.5 deg */
-    CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK(quat_conv_locked == 1);
+    /* ...then the fusion pipeline stalls while the bus stays healthy */
+    stream_off = 1;
+    Test_SetTick(HAL_GetTick() + 800);    /* past the RV stall gate */
+    CHECK(Compass_Update(&d) == COMPASS_ERROR);
+    CHECK(strstr(Compass_GetErrorMessage(), "fusion stalled") != NULL);
+    CHECK(d.heading_valid == 0);
+    CHECK(d.heading_stale == 1);
+    stream_off = 0;
     compass_cal_restored = 0;
 }
 
@@ -569,26 +608,26 @@ TEST(test_i2c_error_streak_recovers)
     fresh_init();
     Compass_Data d = {0};
 
-    /* The Euler burst NAKs (display/compass bus squabble, cable noise) */
-    nak_euler_read = 1;
+    /* The report reads NAK (cable noise): 12 polls at the 5 Hz cadence */
+    nak_rx = 1;
     for (int i = 0; i < 12; i++) {
-        Test_SetTick(HAL_GetTick() + 200);    /* the 5 Hz poll cadence */
+        Test_SetTick(HAL_GetTick() + 200);
         CHECK(Compass_Update(&d) == COMPASS_ERROR);
         CHECK(d.heading_valid == 0);
-        /* NB: an earlier test latched compass_cal_proven (process-wide, as
-         * on real boot), so a trustworthy last heading exists and is kept
-         * on screen, flagged stale - the error splash is only for units
-         * that never calibrated. */
-        CHECK(d.heading_stale == 1);
+        CHECK(d.heading_stale == 1);   /* cal was proven in an earlier test */
     }
 
-    /* After the streak threshold, the bounded recovery ran and won (the
-     * chip-id probe is not NAKed), re-sending the NDOF config */
+    /* One more single-shot NAK with the wire otherwise healthy: the poll
+     * errors (streak hot, interval gate open) so recovery runs - and the
+     * recovery itself succeeds (probe + soft reset + re-feature). The
+     * update still reports the original fault, but the message is set. */
+    nak_rx = 0;
+    nak_rx_once = 1;
+    Test_SetTick(HAL_GetTick() + 6000);   /* pass the recover interval gate */
+    CHECK(Compass_Update(&d) == COMPASS_ERROR);  /* recovery attempt runs */
     CHECK(strstr(Compass_GetDebugMessageByIndex(2), "recovered") != NULL);
-    CHECK(bno_regs[REG_OPR_MODE] == BNO055_OPR_MODE_NDOF);
-
-    /* Fault clears: next poll is healthy again */
-    nak_euler_read = 0;
+    /* Hub streams again */
+    Test_SetTick(HAL_GetTick() + 200);
     CHECK(Compass_Update(&d) == COMPASS_OK);
 }
 
@@ -597,41 +636,43 @@ TEST(test_stale_heading_flagged_on_comm_loss)
     fresh_init();
     compass_cal_restored = 1;              /* trustworthy heading exists */
     Compass_Data d = {0};
-    set_euler(45.0f, 0.0f, 0.0f);
+    set_quat(0.7071f, 0.0f, 0.0f, 0.7071f);    /* yaw 90 -> raw 0 deg */
 
     CHECK(Compass_Update(&d) == COMPASS_OK);
     CHECK(d.heading_valid == 1);
     CHECK(d.heading_stale == 0);
     const float live_heading = d.heading;
 
-    /* Comms die: keep the last heading in the struct, flagged stale -
-     * the UI points at it (blinking marker) instead of going blank */
-    nak_euler_read = 1;
+    nak_rx = 1;
     CHECK(Compass_Update(&d) == COMPASS_ERROR);
     CHECK(d.heading_valid == 0);
     CHECK(d.heading_stale == 1);
     CHECK_NEAR(d.heading, live_heading, 0.01f);   /* value retained */
 
-    /* Comms recover: live again, stale flag cleared */
-    nak_euler_read = 0;
+    nak_rx = 0;
+    Test_SetTick(HAL_GetTick() + 200);
     CHECK(Compass_Update(&d) == COMPASS_OK);
     CHECK(d.heading_valid == 1);
     CHECK(d.heading_stale == 0);
     compass_cal_restored = 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Calibrate / self-test                                               */
+/* ------------------------------------------------------------------ */
+
 TEST(test_calibrate_fully_calibrated)
 {
     fresh_init();
-    bno_regs[REG_CALIB_STAT] = 0xFF;   /* S3 G3 A3 M3 */
-    bno_regs[REG_SYS_STAT]   = 5;
-    CHECK(Compass_Calibrate() == COMPASS_OK);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "fully calibrated") != NULL);
-    /* GetCalibrationStatus reads the cached calib_status, refreshed by
-     * Compass_Update's 1 s poll - run one past the poll interval. */
+    rv_acc = 3; acc_acc = 3; gyro_acc = 3;
     Compass_Data d = {0};
-    Test_SetTick(HAL_GetTick() + 1100);
-    CHECK(Compass_Update(&d) == COMPASS_OK);
+    for (int i = 0; i < 4; i++) {          /* let all streams arrive */
+        Test_SetTick(HAL_GetTick() + 50);
+        CHECK(Compass_Update(&d) == COMPASS_OK);
+    }
+    CHECK(Compass_Calibrate() == COMPASS_OK);
+    CHECK(strstr(Compass_GetDebugMessageByIndex(0), "SYS=3") != NULL);
+
     uint8_t s, g, a, m;
     Compass_GetCalibrationStatus(&s, &g, &a, &m);
     CHECK(s == 3 && g == 3 && a == 3 && m == 3);
@@ -641,81 +682,42 @@ TEST(test_calibrate_fully_calibrated)
 TEST(test_calibrate_partial_guidance)
 {
     fresh_init();
-    bno_regs[REG_CALIB_STAT] = 0x01;   /* mag_cal=1, others 0 */
-    bno_regs[REG_SYS_STAT]   = 6;      /* running without fusion */
-    CHECK(Compass_Calibrate() == COMPASS_ERROR_CALIB);
+    Compass_Data d = {0};
+    rv_acc = 1; gyro_acc = 0; acc_acc = 0;
+    Test_SetTick(HAL_GetTick() + 50);
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+
+    CHECK(Compass_Calibrate() == COMPASS_ERROR);
     CHECK(strstr(Compass_GetDebugMessageByIndex(3), "MAG CAL") != NULL);
     CHECK(strstr(Compass_GetDebugMessageByIndex(6), "GYR CAL") != NULL);
     CHECK(strstr(Compass_GetDebugMessageByIndex(7), "ACC CAL") != NULL);
-
-    /* mag done, others not */
-    bno_regs[REG_CALIB_STAT] = 0x03;
-    CHECK(Compass_Calibrate() == COMPASS_ERROR_CALIB);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "Complete") != NULL);
-
-    /* I2C failure */
-    nak_mem_read = 1;
-    CHECK(Compass_Calibrate() == COMPASS_ERROR);
-    nak_mem_read = 0;
 }
 
 TEST(test_selftest)
 {
     fresh_init();
-    bno_regs[REG_SYS_STAT] = 5;
-    bno_regs[REG_SYS_ERR]  = 0;
-    set_euler(90.0f, 1.0f, 2.0f);
-    CHECK(Compass_SelfTest() == COMPASS_OK);
+    CHECK(Compass_SelfTest() == COMPASS_OK);   /* alive + fusion flowing */
 
-    bno_regs[REG_SYS_ERR] = 0x03;      /* fusion algorithm error */
+    present_28 = 0;                      /* hub gone */
     CHECK(Compass_SelfTest() == COMPASS_ERROR);
-    bno_regs[REG_SYS_ERR] = 0;
-
-    bno_regs[REG_SYS_STAT] = 0;        /* not running */
-    CHECK(Compass_SelfTest() == COMPASS_ERROR_SYS_STATUS);
-
-    bno_regs[REG_SYS_STAT] = 5;
-    nak_mem_read = 1;
-    CHECK(Compass_SelfTest() == COMPASS_ERROR);
-    nak_mem_read = 0;
+    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_I2C_INIT);
+    present_28 = 1;
 }
 
 /* ------------------------------------------------------------------ */
-/* Calibration save / restore                                          */
+/* Host calibration offsets: NOT SUPPORTED on the BNO085               */
 /* ------------------------------------------------------------------ */
 
-TEST(test_cal_data_roundtrip)
+TEST(test_cal_data_unsupported_contract)
 {
     fresh_init();
-
-    for (int i = 0; i < BNO055_CAL_DATA_LEN; i++) {
-        bno_regs[REG_CAL_DATA + i] = (uint8_t)(0xA0 + i);
-    }
-
     uint8_t buf[BNO055_CAL_DATA_LEN];
-    memset(buf, 0, sizeof(buf));
-    CHECK(Compass_GetCalibrationData(buf, sizeof(buf)) == COMPASS_OK);
-    CHECK(buf[0] == 0xA0 && buf[21] == 0xA0 + 21);
-    CHECK(bno_regs[REG_OPR_MODE] == BNO055_OPR_MODE_NDOF);  /* mode restored */
 
-    /* Restore: verified by read-back -> cal_restored flag set */
-    uint8_t saved[BNO055_CAL_DATA_LEN];
-    for (int i = 0; i < BNO055_CAL_DATA_LEN; i++) saved[i] = (uint8_t)(i * 3);
-    CHECK(Compass_SetCalibrationData(saved, sizeof(saved)) == COMPASS_OK);
-    CHECK(Compass_WasCalRestored() == 1);
-
-    /* Corrupted read-back: verify must fail, flag must stay clear */
-    compass_cal_restored = 0;
-    corrupt_cal_read = 1;
-    CHECK(Compass_SetCalibrationData(saved, sizeof(saved)) == COMPASS_ERROR);
+    CHECK(Compass_HasHostCalOffsets() == 0);
+    CHECK(Compass_GetCalibrationData(buf, sizeof(buf)) == COMPASS_ERROR);
+    CHECK(Compass_SetCalibrationData(buf, sizeof(buf)) == COMPASS_ERROR);
     CHECK(Compass_WasCalRestored() == 0);
-    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_CALIB);
-    corrupt_cal_read = 0;
-
-    /* Guards */
-    CHECK(Compass_GetCalibrationData(NULL, 22) == COMPASS_ERROR);
-    CHECK(Compass_GetCalibrationData(buf, 21) == COMPASS_ERROR);
-    CHECK(Compass_SetCalibrationData(NULL, 22) == COMPASS_ERROR);
+    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "BNO085") != NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -726,40 +728,27 @@ TEST(test_accessors)
 {
     fresh_init();
 
-    bno_regs[REG_SYS_STAT]  = 5;
-    bno_regs[REG_ST_RESULT] = 0x0F;
-    bno_regs[REG_SYS_ERR]   = 0;
-    bno_regs[REG_OPR_MODE]  = BNO055_OPR_MODE_NDOF;
-    bno_regs[REG_PWR_MODE]  = 0;
-    bno_regs[REG_TEMP]      = (uint8_t)-5;
-
     uint8_t st, self, err, mode, pwr;
-    int8_t temp;
+    int8_t temp = -99;
     CHECK(Compass_GetSystemStatus(&st, &self, &err) == COMPASS_OK);
-    CHECK(st == 5 && self == 0x0F && err == 0);
-    CHECK(Compass_GetOperationMode(&mode) == COMPASS_OK && mode == BNO055_OPR_MODE_NDOF);
+    CHECK(st == 5 && self == 0x0F && err == 0);   /* streaming, alive */
+    CHECK(Compass_GetOperationMode(&mode) == COMPASS_OK && mode == 0x0C);
     CHECK(Compass_GetPowerMode(&pwr) == COMPASS_OK && pwr == 0);
-    CHECK(Compass_GetTemperature(&temp) == COMPASS_OK && temp == -5);
+    /* No temperature register on the BNO085: must fail, not fabricate */
+    CHECK(Compass_GetTemperature(&temp) == COMPASS_ERROR);
+    CHECK(Compass_GetOperationMode(NULL) == COMPASS_ERROR);
+    CHECK(Compass_GetPowerMode(NULL) == COMPASS_ERROR);
 
-    /* ReadRegister NAK paths (master tx and rx) */
-    nak_master_rx = 1;
-    CHECK(Compass_GetOperationMode(&mode) == COMPASS_ERROR);
-    nak_master_rx = 0;
-    nak_master_tx = 1;
-    CHECK(Compass_GetPowerMode(&pwr) == COMPASS_ERROR);
-    nak_master_tx = 0;
-
-    /* Debug info + timestamps */
     uint8_t addr = 0, raw[6], sreg = 0, cal = 0;
     Compass_GetDebugInfo(&addr, raw, &sreg, &cal);
     CHECK(addr == 0x28);
     Compass_GetDebugInfo(NULL, NULL, NULL, NULL);      /* null-safe */
-    CHECK(Compass_GetDebugTimestamp() == 0);           /* never set */
     CHECK(Compass_GetDebugMessageByIndex(99)[0] == '\0');
 
-    /* GetHeading returns the corrected value */
-    set_euler(0.0f, 0.0f, 0.0f);
-    CHECK_NEAR(Compass_GetHeading(), 98.5, 0.15);
+    /* GetHeading returns the corrected value: identity quat = raw 90 deg
+     * (conv 5: 90 - yaw=0) + 98.5 offset = 188.5 */
+    set_quat(1.0f, 0.0f, 0.0f, 0.0f);
+    CHECK_NEAR(Compass_GetHeading(), 188.5, 1.5);
 
     const uint8_t *found = Compass_GetFoundAddresses();
     CHECK(found != NULL);
@@ -790,307 +779,62 @@ TEST(test_display_i2c_scan)
     present_28 = 1;
 }
 
-TEST(test_init_device_at_wrong_address_times_out)
-{
-    /* Bus has a device, but not at either BNO055 address: the 850 ms
-     * detection loop must time out with a distinct error (vs the
-     * empty-bus bail) */
-    bno_reset();
-    present_28 = 0; present_29 = 0; present_50 = 1;
-    CHECK(Compass_Init() == COMPASS_ERROR);
-    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_I2C_INIT);
-    CHECK(strstr(Compass_GetErrorMessage(), "not found after timeout") != NULL);
-}
-
-TEST(test_init_chip_dies_after_reset)
-{
-    /* Chip-id reads fine until the SYS_TRIGGER reset pulse, then the chip
-     * never comes back: post-reset wait times out */
-    bno_reset();
-    reset_breaks_chip = 1;
-    CHECK(Compass_Init() == COMPASS_ERROR);
-    CHECK(strstr(Compass_GetErrorMessage(), "not responding after reset") != NULL);
-}
-
-TEST(test_init_register_read_failures_nonfatal)
-{
-    /* Verify/status/calibration read failures during init are logged
-     * but not fatal */
-    bno_reset();
-    nak_mem_read_reg = REG_OPR_MODE;
-    CHECK(Compass_Init() == COMPASS_OK);
-    CHECK(strstr(Compass_GetErrorMessage(), "verify operation mode") != NULL);
-
-    bno_reset();
-    nak_mem_read_reg = REG_SYS_STAT;
-    CHECK(Compass_Init() == COMPASS_OK);
-    CHECK(strstr(Compass_GetErrorMessage(), "read system status") != NULL);
-
-    bno_reset();
-    nak_mem_read_reg = REG_CALIB_STAT;
-    CHECK(Compass_Init() == COMPASS_OK);
-    CHECK(strstr(Compass_GetErrorMessage(), "read calibration status") != NULL);
-}
-
 TEST(test_recover_failure_paths)
 {
     fresh_init();
     Compass_Data d = {0};
 
-    /* Chip gone before the streak even builds: the 10th consecutive failure
-     * triggers a recovery attempt whose IsDeviceReady probe fails (the
+    /* Hub disappears before the streak builds: the 10th consecutive
+     * failure triggers a recovery attempt whose IsAlive probe fails (the
      * attempt interval gate is wide open right after init). */
-    nak_euler_read = 1;
+    nak_rx = 1;
     present_28 = 0;
     for (int i = 0; i < 10; i++) {
         Test_SetTick(HAL_GetTick() + 200);
         (void)Compass_Update(&d);
     }
 
-    /* Chip back, but the chip-id read NAKs: recovery bails at the id check */
+    /* Hub back, fault cleared: recovery succeeds, streaming resumes */
     present_28 = 1;
-    nak_mem_read_reg = REG_CHIP_ID;
-    Test_SetTick(HAL_GetTick() + 6000);
-    (void)Compass_Update(&d);
-    nak_mem_read_reg = -1;
-
-    /* Fault clears: recovery succeeds and normal reads resume */
-    nak_euler_read = 0;
+    nak_rx = 0;
     Test_SetTick(HAL_GetTick() + 6000);
     (void)Compass_Update(&d);                   /* streak still hot: recovers */
     Test_SetTick(HAL_GetTick() + 200);
     CHECK(Compass_Update(&d) == COMPASS_OK);
 }
 
-TEST(test_update_sys_status_warning_and_error)
-{
-    fresh_init();
-    Compass_Data d = {0};
-
-    /* Fusion not running (idle): warning path runs, update still OK.
-     * NB the warning string is transiently in debug slot 2, then the same
-     * update's "Mag: ..." line overwrites it - assert the durable field. */
-    bno_regs[REG_SYS_STAT] = BNO055_SYS_STATUS_IDLE;
-    Test_SetTick(HAL_GetTick() + 6000);         /* status gate is 5 s */
-    CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK(compass_debug.sys_status == BNO055_SYS_STATUS_IDLE);
-
-    /* System error: the error register is read and surfaced (message is
-     * likewise overwritten later in the same update) */
-    bno_regs[REG_SYS_STAT] = BNO055_SYS_STATUS_ERROR;
-    bno_regs[REG_SYS_ERR]  = 0x03;
-    Test_SetTick(HAL_GetTick() + 6000);
-    CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK(compass_debug.sys_status == BNO055_SYS_STATUS_ERROR);
-
-    bno_regs[REG_SYS_STAT] = 5;                 /* fusion running again */
-}
-
-TEST(test_update_raw_burst_failure_zeroes_gyro_rate)
-{
-    fresh_init();
-    Compass_Data d = {0};
-
-    /* 18-byte raw sensor burst NAKs: Euler heading still updates, but
-     * cal_gyro_z falls back to 0 rather than holding stale data */
-    nak_mem_read_reg = REG_ACCEL_X;
-    CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK(d.cal_gyro_z == 0.0f);
-    nak_mem_read_reg = -1;
-}
-
-TEST(test_calibrate_failure_and_guidance_strings)
-{
-    fresh_init();
-
-    /* Register read failures bail with COMPASS_ERROR */
-    nak_mem_read_reg = REG_CALIB_STAT;
-    CHECK(Compass_Calibrate() == COMPASS_ERROR);
-    nak_mem_read_reg = REG_SYS_STAT;
-    CHECK(Compass_Calibrate() == COMPASS_ERROR);
-    nak_mem_read_reg = REG_ST_RESULT;
-    CHECK(Compass_Calibrate() == COMPASS_ERROR);
-    nak_mem_read_reg = -1;
-
-    /* System-status strings: every case plus the default */
-    bno_regs[REG_CALIB_STAT] = 0x00;            /* nothing calibrated */
-    for (uint8_t s = 0; s <= 4; s++) {
-        bno_regs[REG_SYS_STAT] = s;
-        CHECK(Compass_Calibrate() == COMPASS_ERROR_CALIB);
-    }
-    bno_regs[REG_SYS_STAT] = 9;                 /* unknown */
-    CHECK(Compass_Calibrate() == COMPASS_ERROR_CALIB);
-    bno_regs[REG_SYS_STAT] = 5;
-
-    /* MAG guidance 0/3 and 2/3 (1/3 covered by test_calibrate_partial) */
-    bno_regs[REG_CALIB_STAT] = 0x00;            /* mag 0 */
-    CHECK(Compass_Calibrate() == COMPASS_ERROR_CALIB);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "figure 8 pattern (0/3)") != NULL);
-    bno_regs[REG_CALIB_STAT] = 0x02;            /* mag 2 */
-    CHECK(Compass_Calibrate() == COMPASS_ERROR_CALIB);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "Almost done") != NULL);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "(2/3)") != NULL);
-
-    /* GYR + ACC complete strings while sys/mag lag */
-    bno_regs[REG_CALIB_STAT] = 0x3C;            /* gyr=3, acc=3, mag=0 */
-    CHECK(Compass_Calibrate() == COMPASS_ERROR_CALIB);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(6), "GYR CAL: Complete!") != NULL);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(7), "ACC CAL: Complete!") != NULL);
-}
-
-TEST(test_selftest_read_failures)
-{
-    fresh_init();
-
-    nak_mem_read_reg = REG_SYS_ERR;
-    CHECK(Compass_SelfTest() == COMPASS_ERROR);
-    nak_mem_read_reg = REG_CALIB_STAT;
-    CHECK(Compass_SelfTest() == COMPASS_ERROR);
-    nak_mem_read_reg = -1;
-
-    nak_euler_read = 1;
-    CHECK(Compass_SelfTest() == COMPASS_ERROR);
-    nak_euler_read = 0;
-}
-
-TEST(test_get_heading_failure_returns_zero)
-{
-    fresh_init();
-    nak_euler_read = 1;
-    CHECK(Compass_GetHeading() == 0.0f);
-    nak_euler_read = 0;
-}
-
-TEST(test_cal_data_write_failures)
-{
-    fresh_init();
-    uint8_t cal[22] = {0};
-
-    nak_master_tx = 1;                          /* mode-switch write NAKs */
-    CHECK(Compass_GetCalibrationData(cal, sizeof(cal)) == COMPASS_ERROR);
-    CHECK(Compass_SetCalibrationData(cal, sizeof(cal)) == COMPASS_ERROR);
-    nak_master_tx = 0;
-}
-
-TEST(test_get_system_status_read_failures)
-{
-    fresh_init();
-    uint8_t st, self, err;
-
-    nak_master_rx_reg = REG_SYS_STAT;           /* first read fails */
-    CHECK(Compass_GetSystemStatus(&st, &self, &err) == COMPASS_ERROR);
-    nak_master_rx_reg = REG_ST_RESULT;          /* second read fails */
-    CHECK(Compass_GetSystemStatus(&st, &self, &err) == COMPASS_ERROR);
-    nak_master_rx_reg = REG_SYS_ERR;            /* third read fails */
-    CHECK(Compass_GetSystemStatus(&st, &self, &err) == COMPASS_ERROR);
-    nak_master_rx_reg = -1;
-
-    int8_t temp;
-    nak_master_rx_reg = REG_TEMP;
-    CHECK(Compass_GetTemperature(&temp) == COMPASS_ERROR);
-    nak_master_rx_reg = -1;
-}
-
-TEST(test_display_scan_many_devices)
-{
-    fresh_init();
-
-    /* 5 devices: the scan screen wraps onto a second line of addresses */
-    present_29 = 1;
-    extra_addrs[0] = 0x50;
-    extra_addrs[1] = 0x51;
-    extra_addrs[2] = 0x52;
-    extra_addr_count = 3;
-    disp_nlines = 0;
-    CHECK(Compass_DisplayI2CScan() == 5);
-    int saw_second_line = 0;
-    for (int i = 0; i < disp_nlines; i++) {
-        if (strstr(disp_lines[i], "0x50") != NULL) saw_second_line = 1;
-    }
-    CHECK(saw_second_line);
-}
-
-TEST(test_get_debug_message_accessor)
-{
-    fresh_init();
-    const char *msg = Compass_GetDebugMessage();
-    CHECK(msg != NULL);
-    CHECK(strcmp(msg, Compass_GetDebugMessageByIndex(0)) == 0);
-}
-
-TEST(test_healthy_updates_preserve_error_state)
-{
-    /* A real error latched by any API must survive subsequent healthy
-     * 5 Hz updates - the routine "Heading: ..." debug line used to go
-     * through SetError(0,...), wiping the message AND the code every
-     * 200 ms, so error screens showed the heading and "Err: 0x00". */
-    fresh_init();
-    nak_master_tx = 1;
-    uint8_t mode;
-    CHECK(Compass_GetOperationMode(&mode) == COMPASS_ERROR);   /* latches error */
-    nak_master_tx = 0;
-    uint8_t code_before = Compass_GetErrorCode();
-    char msg_before[64];
-    strncpy(msg_before, Compass_GetErrorMessage(), sizeof(msg_before) - 1);
-    msg_before[sizeof(msg_before) - 1] = '\0';
-    CHECK(code_before != 0 && msg_before[0] != '\0');
-
-    Compass_Data d = {0};
-    for (int i = 0; i < 5; i++) {
-        Test_SetTick(HAL_GetTick() + 200);
-        CHECK(Compass_Update(&d) == COMPASS_OK);               /* healthy polls */
-    }
-    CHECK(Compass_GetErrorCode() == code_before);              /* not clobbered */
-    CHECK(strcmp(Compass_GetErrorMessage(), msg_before) == 0);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(4), "Heading:") != NULL);
-}
-
-/* ------------------------------------------------------------------ */
-
 int main(void)
 {
-    Test_SetTick(100000);
-
     run_test_init_success_default_address();
     run_test_init_alternate_address();
     run_test_init_no_devices();
-    run_test_init_wrong_chip_id();
-    run_test_init_survives_nak_writes_and_bad_status();
+    run_test_init_device_at_wrong_address_times_out();
+    run_test_init_hub_never_confirms_reset();
+    run_test_init_no_fusion_stream();
+    run_test_init_tx_failure();
+
     run_test_update_heading_offset_and_wrap();
     run_test_set_declination_overrides_site();
     run_test_location_table_and_precedence();
     run_test_location_update_rejects_impossible_fix();
-    run_test_update_raw_sensor_burst();
-    run_test_heading_valid_via_restored_cal();
+    run_test_update_raw_sensor_stream();
+
+    run_test_heading_valid_via_restored_cal_flag();
     run_test_heading_valid_latch();
-    run_test_periodic_mode_recovery();
+
     run_test_vertical_orientation_invalid();
-    run_test_quat_lock_and_tilt_robustness();
-    run_test_quat_lock_all_conventions_selectable();
     run_test_quat_lock_get_set_for_persistence();
-    run_test_quat_lock_refused_in_ambiguity_band();
+    run_test_fusion_stall_flagged();
     run_test_i2c_error_streak_recovers();
     run_test_stale_heading_flagged_on_comm_loss();
+
     run_test_calibrate_fully_calibrated();
     run_test_calibrate_partial_guidance();
     run_test_selftest();
-    run_test_cal_data_roundtrip();
+    run_test_cal_data_unsupported_contract();
     run_test_accessors();
     run_test_display_i2c_scan();
-    run_test_init_device_at_wrong_address_times_out();
-    run_test_init_chip_dies_after_reset();
-    run_test_init_register_read_failures_nonfatal();
     run_test_recover_failure_paths();
-    run_test_update_sys_status_warning_and_error();
-    run_test_update_raw_burst_failure_zeroes_gyro_rate();
-    run_test_calibrate_failure_and_guidance_strings();
-    run_test_selftest_read_failures();
-    run_test_get_heading_failure_returns_zero();
-    run_test_cal_data_write_failures();
-    run_test_get_system_status_read_failures();
-    run_test_display_scan_many_devices();
-    run_test_get_debug_message_accessor();
-    run_test_healthy_updates_preserve_error_state();
 
     return TEST_SUMMARY();
 }

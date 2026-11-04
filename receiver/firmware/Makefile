@@ -27,6 +27,7 @@ STARTUP = lib/STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Source/Templates/gcc
 C_SOURCES = \
 	$(SRC_DIR)/main.c \
 	$(SRC_DIR)/button.c \
+	$(SRC_DIR)/bno085.c \
 	$(SRC_DIR)/compass.c \
 	$(SRC_DIR)/display.c \
 	$(SRC_DIR)/eink.c \

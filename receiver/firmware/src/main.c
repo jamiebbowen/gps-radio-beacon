@@ -352,7 +352,7 @@ int main(void)
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
 
-  /* Shared I2C1 bus (BNO055 + jogpad) - must come up before anything that
+  /* Shared I2C1 bus (BNO085 + jogpad) - must come up before anything that
    * talks I2C. All sensors keep running degraded if it fails. */
   I2CBus_Init();
 
@@ -721,29 +721,30 @@ int main(void)
         SD_Card_LogEvent(dmsg);
       }
     }
-    /* BNO055 initialized successfully - try to restore saved calibration */
-    if (sd_card_ok) {
+    /* BNO085 initialized successfully - restore saved calibration only on
+     * sensors that accept host offsets. The BNO085 does not (calibration
+     * is dynamic in-sensor), so on this hardware we just report that. */
+    if (sd_card_ok && Compass_HasHostCalOffsets()) {
       uint8_t cal_data[BNO055_CAL_DATA_LEN];
       if (SD_Card_LoadCompassCal(cal_data, sizeof(cal_data)) == SD_CARD_OK) {
         Display_Clear();
-        Display_DrawTextRowCol(1, 1, "BNO055 Initialized");
+        Display_DrawTextRowCol(1, 1, "BNO085 Initialized");
         if (Compass_SetCalibrationData(cal_data, sizeof(cal_data)) == COMPASS_OK) {
           Display_DrawTextRowCol(2, 1, "Cal: Restored");
         } else {
-          /* Write happened but read-back verification failed - the compass
-           * is running UNCALIBRATED despite a valid file on the SD card. */
           Display_DrawTextRowCol(2, 1, "Cal: RESTORE FAILED");
         }
         Display_Update();
       } else {
         Display_Clear();
-        Display_DrawTextRowCol(1, 1, "BNO055 Initialized");
+        Display_DrawTextRowCol(1, 1, "BNO085 Initialized");
         Display_DrawTextRowCol(2, 1, "Cal: None saved");
         Display_Update();
       }
     } else {
       Display_Clear();
-      Display_DrawTextRowCol(1, 1, "BNO055 Initialized");
+      Display_DrawTextRowCol(1, 1, "BNO085 Initialized");
+      Display_DrawTextRowCol(2, 1, "Cal: dynamic (sens)");
       Display_Update();
     }
     HAL_Delay(1000);
@@ -1441,8 +1442,9 @@ int main(void)
     
     /* Persist compass calibration as soon as it is "good enough" (mag_cal >= 2),
      * and re-save whenever calibration quality improves. Only latch on a
-     * successful save so transient SD errors are retried. */
-    if (sd_card_ok) {
+     * successful save so transient SD errors are retried. Skipped entirely
+     * on the BNO085: it exposes no host-loadable calibration offsets. */
+    if (sd_card_ok && Compass_HasHostCalOffsets()) {
       static uint8_t best_mag_cal_saved = 0; /* 0 = nothing persisted yet */
       static uint32_t last_cal_save_ms = 0;
 
@@ -2002,12 +2004,19 @@ void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(EINK_DC_GPIO_PORT, EINK_DC_PIN, GPIO_PIN_RESET);
 
   GPIO_InitStruct.Pin = SHARP_CS_PIN | SHARP_DISP_PIN |
-                        EINK_CS_PIN | EINK_SRCS_PIN |
+                        EINK_SRCS_PIN |
                         EINK_RST_PIN | EINK_DC_PIN;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* eInk CS lives on GPIOC (PC15; PB11 is not on the BlackPill header) */
+  GPIO_InitStruct.Pin = EINK_CS_PIN;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(EINK_CS_GPIO_PORT, &GPIO_InitStruct);
 
   /* eInk BUSY: module-driven, idle LOW - pull-down keeps a disconnected
    * (unsoldered pad) line reading "not busy" instead of hanging refreshes */

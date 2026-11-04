@@ -1,0 +1,238 @@
+(kicad_sch
+	(version 20260306)
+	(generator "eeschema")
+	(generator_version "10.0")
+	(uuid "08227b5f-e94f-4cd7-8933-5f33d26ed72f")
+	(paper "A4")
+	(lib_symbols)
+	(sheet
+		(at 113.03 72.39)
+		(size 12.7 6.35)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "223b80e3-6f56-43ed-a512-6bd9389e50c3")
+		(property "Sheetname" "eInk Display"
+			(at 113.03 71.6784 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "eink_display.kicad_sch"
+			(at 113.03 79.3246 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "panel"
+				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/f213709e-99ba-4a9a-add9-804cbfca2bc6"
+					(page "6")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 111.8362 95.168)
+		(size 12.7 6.35)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "a1b2f333-d9fe-43b4-bc22-c747f79cc842")
+		(property "Sheetname" "SD Card"
+			(at 111.8362 94.4564 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "sd_card.kicad_sch"
+			(at 111.8362 102.1026 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "panel"
+				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/f213709e-99ba-4a9a-add9-804cbfca2bc6"
+					(page "5")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 166.37 82.55)
+		(size 12.7 3.81)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "c0d76409-3274-4cea-9e85-a227c3534cf1")
+		(property "Sheetname" "Jog Pad"
+			(at 166.37 81.8384 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "jogpad.kicad_sch"
+			(at 166.37 86.9446 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "panel"
+				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/f213709e-99ba-4a9a-add9-804cbfca2bc6"
+					(page "7")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 104.14 129.54)
+		(size 12.7 3.81)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "e343a0bf-3cdb-4312-9f01-55469816b292")
+		(property "Sheetname" "Main Panel Connector"
+			(at 104.14 128.8284 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "mp_conn.kicad_sch"
+			(at 104.14 133.9346 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "panel"
+				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/f213709e-99ba-4a9a-add9-804cbfca2bc6"
+					(page "3")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 110.49 111.76)
+		(size 12.7 3.81)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(stroke
+			(width 0.1524)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0)
+		)
+		(uuid "f9ec612d-9eca-422d-971e-560cae97695a")
+		(property "Sheetname" "SHARP LCD"
+			(at 110.49 111.0484 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "sharp_lcd.kicad_sch"
+			(at 110.49 116.1546 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "panel"
+				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/f213709e-99ba-4a9a-add9-804cbfca2bc6"
+					(page "4")
+				)
+			)
+		)
+	)
+)

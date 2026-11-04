@@ -56,22 +56,32 @@ extern "C" {
 #define LORA_SPI_INSTANCE       SPI2
 #define LORA_CS_PIN             GPIO_PIN_12     // PB12 - Chip Select
 #define LORA_CS_PORT            GPIOB
-#define LORA_RESET_PIN          GPIO_PIN_8      // PA8 - Reset
+#define LORA_RESET_PIN          GPIO_PIN_10     // PA10 - Reset (v2.9: swapped with DIO1
+                                                // for PCB routing)
 #define LORA_RESET_PORT         GPIOA
-#define LORA_BUSY_PIN           GPIO_PIN_0      // PB0 - Busy (moved from PA7 to avoid SD card conflict)
-#define LORA_BUSY_PORT          GPIOB
-#define LORA_DIO1_PIN           GPIO_PIN_1      // PB1 - DIO1 (interrupt) (moved from PA6 to avoid SD card conflict)
-#define LORA_DIO1_PORT          GPIOB
-/* RF switch control (v2.0 hardware): RXEN on PA9 (RX enable, active high) and
- * TXEN on PA10 (TX enable, active high, module pin 7). BOTH are manually
- * driven - EByte specifies TXEN from MCU IO *or* DIO2, never both, so the
- * SX1268 stays in DIO2-as-IRQ mode (SetDio2AsRfSwitchCtrl param 0x00) and
- * there is no contention on the switch node. DIO2 (module pin 8) is wired to
+#define LORA_BUSY_PIN           GPIO_PIN_9      // PA9 - Busy (v2.8: moved from PB0 for
+                                                // modular routing; PB0 is now a spare)
+#define LORA_BUSY_PORT          GPIOA
+/* DIO1 (PA8) -> EXTI8 -> EXTI9_5_IRQn shared vector. Nothing else on this
+ * design uses the 5-9 EXTI group (SD card detect PB9 is polled, not an
+ * EXTI), so the shared vector is unambiguous. */
+#define LORA_DIO1_PIN           GPIO_PIN_8      // PA8 - DIO1 (interrupt)
+#define LORA_DIO1_PORT          GPIOA
+#define LORA_DIO1_EXTI_IRQn     EXTI9_5_IRQn
+#define LORA_DIO1_IRQHandler    EXTI9_5_IRQHandler
+/* RF switch control (v2.0/v2.8 hardware): RXEN on PA11 (RX enable, active
+ * high) and TXEN on PA12 (TX enable, active high, module pin 7) - v2.8 moved
+ * both onto the USB pins; they are only USB data lines while the ROM DFU
+ * bootloader runs, where random RXEN/TXEN toggling is harmless (the SX1268
+ * PA only turns on in commanded TX mode). BOTH are manually driven - EByte
+ * specifies TXEN from MCU IO *or* DIO2, never both, so the SX1268 stays in
+ * DIO2-as-IRQ mode (SetDio2AsRfSwitchCtrl param 0x00) and there is no
+ * contention on the switch node. DIO2 (module pin 8) is wired to
  * PA15 as an input-only spare for future use (e.g. a second IRQ line); it is
  * never configured as an MCU output while connected to DIO2. */
-#define LORA_RXEN_PIN           GPIO_PIN_9      // PA9 - RXEN (RF switch RX enable)
+#define LORA_RXEN_PIN           GPIO_PIN_11     // PA11 - RXEN (RF switch RX enable)
 #define LORA_RXEN_PORT          GPIOA
-#define LORA_TXEN_PIN           GPIO_PIN_10     // PA10 - TXEN (RF switch TX enable)
+#define LORA_TXEN_PIN           GPIO_PIN_12     // PA12 - TXEN (RF switch TX enable)
 #define LORA_TXEN_PORT          GPIOA
 #define LORA_DIO2_PIN           GPIO_PIN_15     // PA15 - DIO2 (unused input only)
 #define LORA_DIO2_PORT          GPIOA

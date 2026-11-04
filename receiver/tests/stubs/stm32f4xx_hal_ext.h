@@ -36,6 +36,7 @@ typedef struct {
 #define GPIO_PIN_8   (1u << 8)
 #define GPIO_PIN_9   (1u << 9)
 #define GPIO_PIN_10  (1u << 10)
+#define GPIO_PIN_11  (1u << 11)
 #define GPIO_PIN_12  (1u << 12)
 #define GPIO_PIN_13  (1u << 13)
 #define GPIO_PIN_14  (1u << 14)
@@ -177,6 +178,7 @@ typedef int IRQn_Type;
 #define DMA1_Stream3_IRQn 59
 #define DMA1_Stream4_IRQn 60
 #define EXTI1_IRQn        7
+#define EXTI9_5_IRQn      23
 #define EXTI2_IRQn        8
 #define EXTI15_10_IRQn    40
 #define USART2_IRQn       38
