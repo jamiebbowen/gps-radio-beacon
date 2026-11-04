@@ -147,8 +147,8 @@
       },
       "rules": {
         "max_error": 0.005,
-        "min_clearance": 0.0,
-        "min_connection": 0.0,
+        "min_clearance": 0.15,
+        "min_connection": 0.15,
         "min_copper_edge_clearance": 0.5,
         "min_groove_width": 0.0,
         "min_hole_clearance": 0.25,
@@ -160,9 +160,9 @@
         "min_text_height": 0.8,
         "min_text_thickness": 0.08,
         "min_through_hole_diameter": 0.3,
-        "min_track_width": 0.0,
-        "min_via_annular_width": 0.1,
-        "min_via_diameter": 0.5,
+        "min_track_width": 0.15,
+        "min_via_annular_width": 0.15,
+        "min_via_diameter": 0.6,
         "solder_mask_to_copper_clearance": 0.0,
         "use_height_for_length_calcs": true
       },
@@ -704,36 +704,12 @@
       "Reciever"
     ],
     [
-      "a1b2f333-d9fe-43b4-bc22-c747f79cc842",
-      "SD Card"
-    ],
-    [
-      "41d2ada4-f546-4406-a713-00b22ff4a8c7",
-      "Front Panel"
-    ],
-    [
-      "f9ec612d-9eca-422d-971e-560cae97695a",
-      "SHARP LCD"
-    ],
-    [
       "93811f37-363c-4dd6-9e41-cfa8973bccea",
       "Front Panel Connector"
     ],
     [
-      "e343a0bf-3cdb-4312-9f01-55469816b292",
-      "Main Panel Connector"
-    ],
-    [
-      "223b80e3-6f56-43ed-a512-6bd9389e50c3",
-      "eInk Display"
-    ],
-    [
       "0568d7ae-b55a-445a-afb4-44ffcf356588",
       "Main Board"
-    ],
-    [
-      "c0d76409-3274-4cea-9e85-a227c3534cf1",
-      "Jog Pad"
     ],
     [
       "ed554969-a13f-4de5-8094-162144088090",

@@ -12,7 +12,7 @@
 
 ## Pin Assignments by Function
 
-### 🛰️ GPS Module (u-blox MAX-M10S)
+### 🛰️ GPS Module (FlyFishRC M10 Mini, u-blox M10)
 
 **UART Interface (Hardware Serial1)**
 
@@ -20,7 +20,7 @@
 |---------------|-------------|----------|---------|-------------|
 | **RX (0)** | 0 | Serial1 RX | TX | GPS transmits NMEA sentences |
 | **TX (1)** | 1 | Serial1 TX | RX | GPS receives commands (optional) |
-| - | - | - | VCC | Power (3.3V) |
+| - | - | - | VCC | Power (5V rail from TPS63070; module spec 3.3-5.5V) |
 | - | - | - | GND | Ground |
 
 **Configuration:**
@@ -40,10 +40,12 @@
 | **MISO** | MISO | SPI MISO | MISO (16) | SPI Master In |
 | **SCK** | SCK | SPI SCK | SCK (18) | SPI Clock |
 | **5** | 5 | GPIO OUT | NSS (19) | Chip Select (active low) |
-| **11** | 11 | GPIO OUT | NRST (15) | Reset (active low) |
-| **6** | 6 | GPIO IN | BUSY (14) | Busy status indicator |
+| **2** | 2 | GPIO OUT | NRST (15) | Reset (active low) |
+| **7** | 7 | GPIO IN | BUSY (14) | Busy status indicator |
 | **9** | 9 | GPIO INT | DIO1 (13) | Interrupt (TxDone/RxDone) |
-| **12** | 12 | GPIO OUT | TXEN (7) | TX Enable (optional) |
+| **12** | 12 | GPIO OUT | TXEN (7) | RF switch TX enable |
+| **13** | 13 | GPIO OUT | RXEN (6) | RF switch RX enable (shares onboard LED) |
+| **11** | 11 | GPIO IN | DIO2 (8) | Input-only spare - never drive (module output) |
 | - | - | - | VCC (9, 10) | Power (3.3V or 5V) |
 | - | - | - | GND | Ground |
 | - | - | - | ANT (21) | **433MHz Antenna (REQUIRED)** |
@@ -59,7 +61,9 @@
 
 **Notes:**
 - Hardware SPI uses default ItsyBitsy M4 pins (MOSI, MISO, SCK)
-- TXEN pin is optional and may not be used on all E22-400M33S variants
+- RF switch is MCU-driven via TXEN/RXEN with break-before-make; DIO2 is not
+  used as switch control
+- ItsyBitsy M4 has no pin 6 or 8; BUSY is on pin 7
 - Maximum range: ~15-20km line-of-sight at 22 dBm
 
 ---
@@ -73,7 +77,7 @@
 | **SDA** | SDA | I2C Data | SDA | I2C Data |
 | **SCL** | SCL | I2C Clock | SCL | I2C Clock |
 | **10** | 10 | GPIO OUT | RST | Reset (optional, can be -1) |
-| - | - | - | VCC | Power (3.3V) |
+| - | - | - | VIN | Power (5V rail; breakout has onboard regulator) |
 | - | - | - | GND | Ground |
 
 **I2C Configuration:**
@@ -109,16 +113,16 @@
 |--------------|-------------|-------------|------------|-------|
 | 0 (RX) | 0 | GPS RX | ❌ | Hardware Serial1 RX |
 | 1 (TX) | 1 | GPS TX | ❌ | Hardware Serial1 TX |
-| 2 | 2 | **Available** | ✅ | Digital I/O, PWM |
+| 2 | 2 | LoRa NRST | ❌ | LoRa reset (carrier PCB v2) |
 | 3 | 3 | **Available** | ✅ | Digital I/O, PWM |
 | 4 | 4 | **Available** | ✅ | Digital I/O, PWM |
 | 5 | 5 | LoRa CS | ❌ | SPI Chip Select |
 | 7 | 7 | LoRa BUSY | ❌ | LoRa status (pin 6 does not exist on ItsyBitsy M4) |
 | 9 | 9 | LoRa DIO1 | ❌ | LoRa interrupt |
 | 10 | 10 | IMU Reset | ❌ | BNO085 reset (optional) |
-| 11 | 11 | LoRa RESET | ❌ | LoRa reset |
-| 12 | 12 | LoRa TXEN | ⚠️ | LoRa TX enable (optional) |
-| 13 (LED) | 13 | Onboard LED | ⚠️ | Can be repurposed |
+| 11 | 11 | LoRa DIO2 | ⚠️ | Input-only: module drives this pin; never an output |
+| 12 | 12 | LoRa TXEN | ❌ | RF switch TX enable |
+| 13 (LED) | 13 | LoRa RXEN | ❌ | RF switch RX enable; onboard LED mirrors RX state |
 | SCK | SCK | LoRa SPI CLK | ❌ | Hardware SPI |
 | MOSI | MOSI | LoRa SPI MOSI | ❌ | Hardware SPI |
 | MISO | MISO | LoRa SPI MISO | ❌ | Hardware SPI |
@@ -129,8 +133,8 @@
 
 | Physical Pin | Arduino Pin | Current Use | Available? | Notes |
 |--------------|-------------|-------------|------------|-------|
-| A0 | A0 | **Available** | ✅ | Analog input, 12-bit ADC |
-| A1 | A1 | **Available** | ✅ | Analog input, 12-bit ADC |
+| A0 | A0 | **Available** | ✅ | Analog input, 12-bit ADC (battery divider lands here on the PCB; not yet read by firmware) |
+| A1 | A1 | Backup channel jumper | ⚠️ | Short to GND at power-on = backup LoRa channel (read once, then free) |
 | A2 | A2 | **Available** | ✅ | Analog input, 12-bit ADC |
 | A3 | A3 | **Available** | ✅ | Analog input, 12-bit ADC |
 | A4 | A4 | **Available** | ✅ | Analog input, 12-bit ADC |
@@ -140,25 +144,21 @@
 
 ---
 
-## Available Pins for Expansion (9 pins)
+## Available Pins for Expansion
 
 ### Digital Pins Available:
-- **Pin 2** - Digital I/O, PWM
 - **Pin 3** - Digital I/O, PWM
 - **Pin 4** - Digital I/O, PWM
-- **Pin 7** - Digital I/O, PWM
 
 ### Analog Pins Available:
 - **A0** - Analog/Digital, 12-bit ADC
-- **A1** - Analog/Digital, 12-bit ADC
 - **A2** - Analog/Digital, 12-bit ADC
 - **A3** - Analog/Digital, 12-bit ADC
 - **A4** - Analog/Digital, 12-bit ADC
 - **A5** - Analog/Digital, 12-bit ADC
 
-### Potentially Repurposable:
-- **Pin 12** - TXEN (if not needed by your E22-400M33S variant)
-- **Pin 13** - LED (if visual status not needed)
+### Shares a Pin:
+- **Pin 13** - RXEN doubles as the onboard LED (LED lights during RX windows)
 
 ---
 
@@ -169,7 +169,7 @@
 | **Hardware SPI** | SCK, MOSI, MISO, Pin 5 (CS) | E22-400M33S LoRa | High-speed SPI |
 | **Hardware I2C** | SDA, SCL | BNO085 IMU | Shared bus |
 | **Hardware Serial1** | Pin 0 (RX), Pin 1 (TX) | GPS Module | 9600 baud UART |
-| **GPIO** | Pins 6, 9, 10, 11, 12 | LoRa control, IMU reset | Digital I/O |
+| **GPIO** | Pins 2, 7, 9, 10, 12, 13 | LoRa control, IMU reset | Digital I/O (11 = LoRa DIO2, input-only) |
 
 ---
 
@@ -358,10 +358,12 @@ Transmitted every 5 minutes for FCC compliance.
 │  TX(1) ────► RX    MAX-M10S    │
 │                                │
 │  Pin 5 ────► NSS              │
-│  Pin 11 ───► NRST             │
+│  Pin 2 ────► NRST             │
 │  Pin 7 ◄──── BUSY   E22-400M33S│
 │  Pin 9 ◄──── DIO1    LoRa      │
 │  Pin 12 ───► TXEN   (SX1268)   │
+│  Pin 13 ───► RXEN              │
+│  Pin 11 ◄──── DIO2  (in only)  │
 │  SCK ──────► SCK               │
 │  MOSI ─────► MOSI              │
 │  MISO ◄──── MISO               │
@@ -413,10 +415,10 @@ Transmitted every 5 minutes for FCC compliance.
 ## Pin Usage Summary
 
 - **Used Pins:** 13 (including SPI/I2C/UART hardware pins)
-- **Available Pins:** 9 (4 digital + 6 analog, minus conflicts)
-- **Potentially Repurposable:** 2 (TXEN, LED)
+- **Available Pins:** 7 (2 digital + 5 analog)
+- **Shared:** pin 13 carries both LoRa RXEN and the onboard LED
 
-**Pin Utilization:** ~50% of available GPIO used
+**Pin Utilization:** ~60% of available GPIO used
 
 ---
 

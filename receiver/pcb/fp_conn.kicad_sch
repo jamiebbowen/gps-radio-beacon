@@ -1169,6 +1169,12 @@
 			(embedded_fonts no)
 		)
 	)
+	(junction
+		(at 83.82 91.44)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "96ddf072-2f44-44d5-a868-3cfa7d2f07ff")
+	)
 	(wire
 		(pts
 			(xy 147.32 77.47) (xy 147.32 74.93)
@@ -1201,7 +1207,7 @@
 	)
 	(wire
 		(pts
-			(xy 69.85 86.36) (xy 77.47 86.36)
+			(xy 69.85 86.36) (xy 83.82 86.36)
 		)
 		(stroke
 			(width 0)
@@ -1231,6 +1237,16 @@
 	)
 	(wire
 		(pts
+			(xy 83.82 86.36) (xy 83.82 91.44)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "ba078ff4-b4d1-41be-8947-f8e4c73b6da9")
+	)
+	(wire
+		(pts
 			(xy 142.24 125.73) (xy 142.24 127)
 		)
 		(stroke
@@ -1238,6 +1254,16 @@
 			(type default)
 		)
 		(uuid "db483ae0-e5a4-466f-934d-4b3c4c5f55e4")
+	)
+	(wire
+		(pts
+			(xy 69.85 91.44) (xy 83.82 91.44)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "fb95a9da-b29a-4f6b-814d-035e718153de")
 	)
 	(wire
 		(pts
@@ -1777,7 +1803,7 @@
 			)
 		)
 	)
-	(global_label "FP_PB10"
+	(global_label "FP_PC15"
 		(shape bidirectional)
 		(at 139.7 123.19 0)
 		(fields_autoplaced yes)
@@ -1803,7 +1829,7 @@
 	)
 	(global_label "PC15"
 		(shape bidirectional)
-		(at 69.85 88.9 0)
+		(at 69.85 121.92 0)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -1813,7 +1839,7 @@
 		)
 		(uuid "7c27c27b-a4fd-47ce-8884-a23a9be6cdb0")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 78.9055 88.9 0)
+			(at 78.9055 121.92 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1971,7 +1997,7 @@
 	)
 	(global_label "PB10"
 		(shape bidirectional)
-		(at 69.85 121.92 0)
+		(at 69.85 88.9 0)
 		(fields_autoplaced yes)
 		(effects
 			(font
@@ -1981,7 +2007,7 @@
 		)
 		(uuid "9ea5c918-5812-4c12-b829-bcafb807e313")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
-			(at 78.9055 121.92 0)
+			(at 78.9055 88.9 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2041,7 +2067,7 @@
 			)
 		)
 	)
-	(global_label "FP_PC15"
+	(global_label "FP_PB10"
 		(shape bidirectional)
 		(at 139.7 120.65 0)
 		(fields_autoplaced yes)
@@ -2408,7 +2434,7 @@
 	)
 	(symbol
 		(lib_id "panel-eagle-import:GND")
-		(at 69.85 93.98 0)
+		(at 83.82 93.98 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -2418,7 +2444,7 @@
 		(dnp no)
 		(uuid "3df5ea79-36f9-4731-8ff9-c7b2b9cd59be")
 		(property "Reference" "#GND020"
-			(at 69.85 93.98 0)
+			(at 83.82 93.98 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2429,7 +2455,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 69.85 95.25 0)
+			(at 83.82 95.25 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2440,7 +2466,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 69.85 93.98 0)
+			(at 83.82 93.98 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2451,7 +2477,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 69.85 93.98 0)
+			(at 83.82 93.98 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2462,7 +2488,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 69.85 93.98 0)
+			(at 83.82 93.98 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2493,7 +2519,6 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "3f5109f1-b232-4edd-bd15-79b10bb3e1cf")
 		(property "Reference" "J6"
 			(at 65.405 71.12 0)
@@ -2516,7 +2541,7 @@
 			)
 		)
 		(property "Footprint" "Connector_IDC:IDC-Header_2x10_P2.54mm_Vertical"
-			(at 64.77 101.6 0)
+			(at 36.322 100.584 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -2611,83 +2636,6 @@
 			(project "pcb"
 				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/0568d7ae-b55a-445a-afb4-44ffcf356588/93811f37-363c-4dd6-9e41-cfa8973bccea"
 					(reference "J6")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "panel-eagle-import:GND")
-		(at 77.47 88.9 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "40651a23-6861-482b-8902-1372a4c17cda")
-		(property "Reference" "#GND036"
-			(at 77.47 88.9 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 77.47 90.17 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.778 1.5113)
-				)
-				(justify top)
-			)
-		)
-		(property "Footprint" ""
-			(at 77.47 88.9 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 77.47 88.9 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 77.47 88.9 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "04d03afc-fc91-446c-ae2b-b20f371b96e4")
-		)
-		(instances
-			(project "pcb"
-				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/0568d7ae-b55a-445a-afb4-44ffcf356588/93811f37-363c-4dd6-9e41-cfa8973bccea"
-					(reference "#GND036")
 					(unit 1)
 				)
 			)

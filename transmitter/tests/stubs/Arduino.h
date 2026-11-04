@@ -42,6 +42,14 @@ void delayMicroseconds(unsigned int us);
 #define INPUT_PULLUP 2
 #define LOW 0
 #define HIGH 1
+/* ItsyBitsy M4 analog pin aliases (real values come from the Adafruit SAMD
+ * variant on target; host tests only need them to be distinct integers) */
+#define A0 14
+#define A1 15
+#define A2 16
+#define A3 17
+#define A4 18
+#define A5 19
 void pinMode(int pin, int mode);
 int  digitalRead(int pin);
 void digitalWrite(int pin, int value);

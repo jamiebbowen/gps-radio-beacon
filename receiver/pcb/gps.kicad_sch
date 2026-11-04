@@ -772,7 +772,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Value" "10uF"
+		(property "Value" "10µF"
 			(at 134.112 105.029 0)
 			(show_name no)
 			(do_not_autoplace no)

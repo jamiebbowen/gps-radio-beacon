@@ -14,11 +14,15 @@
 
 // Pin assignments for ItsyBitsy M4 Express
 // E22-400M33S LoRa Module (SX1268) - SPI Interface
+// Carrier PCB v2 pinout (panel_2.kicad_sch): NRST moved 11->2 and DIO2/RXEN
+// broken out for routing. Pin 11 is the E22's DIO2 line - it is an INPUT
+// ONLY; the module drives it, so firmware must never pinMode() it.
 #define LORA_CS             5   // SPI Chip Select
 #define LORA_DIO1           9   // DIO1 interrupt pin (TxDone/RxDone)
 #define LORA_BUSY           7   // BUSY status pin (NOTE: No pin 6 on ItsyBitsy M4!)
-#define LORA_NRST           11  // Reset pin
-#define LORA_TXEN           12  // TX enable (optional)
+#define LORA_NRST           2   // Reset pin (PCB v2; was 11, now E22 DIO2)
+#define LORA_TXEN           12  // RF switch TX enable
+#define LORA_RXEN           13  // RF switch RX enable (shares LED_BUILTIN: LED mirrors RX state)
 // SPI pins (hardware SPI): MOSI=MOSI, MISO=MISO, SCK=SCK on ItsyBitsy M4
 
 // BNO085 IMU - I2C Interface for launch detection
@@ -110,7 +114,10 @@
 // open = primary channel, jumpered to GND = backup channel.
 // Default backup = +4 channels (1 MHz away, wraps), far enough that a noisy
 // primary won't also cover the backup.
-#define CHANNEL_JUMPER_PIN  2                           // Free GPIO on ItsyBitsy M4
+// Pin is A1: free on the ItsyBitsy M4 and unrouted on the carrier (pin 2 was
+// taken by E22 NRST on the PCB). Jumper wire goes directly to the ItsyBitsy
+// A1 pad and GND.
+#define CHANNEL_JUMPER_PIN  A1                          // Free GPIO on ItsyBitsy M4
 #define LORA_CHANNEL_BACKUP ((LORA_CHANNEL + 4) % LORA_CHANNEL_COUNT)
 
 // Primary-channel frequency, for reference only: radio.cpp resolves the

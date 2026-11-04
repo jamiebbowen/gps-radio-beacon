@@ -182,7 +182,7 @@
 			)
 			(embedded_fonts no)
 		)
-		(symbol "E22-400M30S:E22-400M30S"
+		(symbol "E22-400M33S:E22-400M33S"
 			(pin_names
 				(offset 1.016)
 			)
@@ -202,7 +202,7 @@
 					(justify bottom)
 				)
 			)
-			(property "Value" "E22-400M30S"
+			(property "Value" "E22-400M33S"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -213,7 +213,7 @@
 					(justify bottom)
 				)
 			)
-			(property "Footprint" "E22-400M30S:E22-400M30S"
+			(property "Footprint" "E22-400M33S:E22-400M33S"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -284,7 +284,7 @@
 					(justify bottom)
 				)
 			)
-			(property "SnapEDA_Link" "https://www.snapeda.com/parts/E22-400M30S/EBYTE/view-part/?ref=snap"
+			(property "SnapEDA_Link" "https://www.snapeda.com/parts/E22-400M33S/EBYTE/view-part/?ref=snap"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -296,7 +296,7 @@
 					(justify bottom)
 				)
 			)
-			(property "MP" "E22-400M30S"
+			(property "MP" "E22-400M33S"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -320,7 +320,7 @@
 					(justify bottom)
 				)
 			)
-			(property "Check_prices" "https://www.snapeda.com/parts/E22-400M30S/EBYTE/view-part/?ref=eda"
+			(property "Check_prices" "https://www.snapeda.com/parts/E22-400M33S/EBYTE/view-part/?ref=eda"
 				(at 0 0 0)
 				(show_name no)
 				(do_not_autoplace no)
@@ -332,7 +332,7 @@
 					(justify bottom)
 				)
 			)
-			(symbol "E22-400M30S_0_0"
+			(symbol "E22-400M33S_0_0"
 				(polyline
 					(pts
 						(xy 7.62 35.56) (xy 7.62 0)
@@ -381,7 +381,7 @@
 						(type none)
 					)
 				)
-				(text "E22-400M30S"
+				(text "E22-400M33S"
 					(at 7.62 -2.54 0)
 					(effects
 						(font
@@ -1846,7 +1846,7 @@
 		)
 	)
 	(symbol
-		(lib_id "E22-400M30S:E22-400M30S")
+		(lib_id "E22-400M33S:E22-400M33S")
 		(at 114.3 80.01 0)
 		(mirror x)
 		(unit 1)
@@ -1867,7 +1867,7 @@
 				)
 			)
 		)
-		(property "Value" "E22-400M30S"
+		(property "Value" "E22-400M33S"
 			(at 132.08 118.11 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1877,7 +1877,7 @@
 				)
 			)
 		)
-		(property "Footprint" "E22-400M30S:E22-400M30S"
+		(property "Footprint" "E22-400M33S:E22-400M33S"
 			(at 114.3 80.01 0)
 			(hide yes)
 			(show_name no)
@@ -1948,7 +1948,7 @@
 				(justify bottom)
 			)
 		)
-		(property "SnapEDA_Link" "https://www.snapeda.com/parts/E22-400M30S/EBYTE/view-part/?ref=snap"
+		(property "SnapEDA_Link" "https://www.snapeda.com/parts/E22-400M33S/EBYTE/view-part/?ref=snap"
 			(at 114.3 80.01 0)
 			(hide yes)
 			(show_name no)
@@ -1960,7 +1960,7 @@
 				(justify bottom)
 			)
 		)
-		(property "MP" "E22-400M30S"
+		(property "MP" "E22-400M33S"
 			(at 114.3 80.01 0)
 			(hide yes)
 			(show_name no)
@@ -1984,7 +1984,7 @@
 				(justify bottom)
 			)
 		)
-		(property "Check_prices" "https://www.snapeda.com/parts/E22-400M30S/EBYTE/view-part/?ref=eda"
+		(property "Check_prices" "https://www.snapeda.com/parts/E22-400M33S/EBYTE/view-part/?ref=eda"
 			(at 114.3 80.01 0)
 			(hide yes)
 			(show_name no)
@@ -2170,7 +2170,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Value" "45uF"
+		(property "Value" "47µF"
 			(at 182.372 113.919 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2561,7 +2561,7 @@
 				(justify left bottom)
 			)
 		)
-		(property "Value" "10uF"
+		(property "Value" "10µF"
 			(at 164.592 113.919 0)
 			(show_name no)
 			(do_not_autoplace no)

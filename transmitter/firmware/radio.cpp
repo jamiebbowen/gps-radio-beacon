@@ -25,6 +25,39 @@ static const uint8_t MAX_INIT_RETRIES = 3;
 static uint8_t tx_fail_streak = 0;
 #define TX_FAIL_STREAK_LIMIT 8
 
+/* E22-400M33S RF switch control (PCB v2: TXEN on pin 12, RXEN on pin 13,
+ * both MCU-driven; DIO2 is NOT used as switch control). Truth table:
+ *   RX mode = RXEN 1 / TXEN 0,  TX mode = RXEN 0 / TXEN 1,  idle = both 0.
+ * Break-before-make on every transition so the PA output is never routed
+ * into the LNA path. Defaults to the RX side up in enable() - same idle
+ * convention as the receiver firmware. */
+static void rf_switch_rx(void) {
+#ifdef LORA_TXEN
+    digitalWrite(LORA_TXEN, LOW);
+#endif
+#ifdef LORA_RXEN
+    digitalWrite(LORA_RXEN, HIGH);
+#endif
+}
+
+static void rf_switch_tx(void) {
+#ifdef LORA_RXEN
+    digitalWrite(LORA_RXEN, LOW);
+#endif
+#ifdef LORA_TXEN
+    digitalWrite(LORA_TXEN, HIGH);
+#endif
+}
+
+static void rf_switch_idle(void) {  /* antenna isolated */
+#ifdef LORA_RXEN
+    digitalWrite(LORA_RXEN, LOW);
+#endif
+#ifdef LORA_TXEN
+    digitalWrite(LORA_TXEN, LOW);
+#endif
+}
+
 /**
  * Initialize the E22-400M33S LoRa module (SX1268)
  */
@@ -55,6 +88,11 @@ void radio_init(void) {
     pinMode(LORA_BUSY, INPUT);
     Serial.print("[Radio] BUSY pin state: ");
     Serial.println(digitalRead(LORA_BUSY) ? "HIGH" : "LOW");
+
+    // RF switch control pins: start isolated (both enables LOW) until a TX
+    // burst or RX window claims the antenna. DIO2 stays an input (default).
+    rf_switch_idle();
+    Serial.println("[Radio] RF switch parked (RXEN=0 TXEN=0)");
     
     // Resolve the active channel from the backup-channel jumper:
     // open (pull-up reads HIGH) = primary, shorted to GND = backup.
@@ -181,12 +219,10 @@ void radio_enable(void) {
     // For LoRa, we don't need to explicitly enable
     // Just set a flag that we're ready to transmit
     radio_enabled = true;
-    
-    // Optionally control TXEN pin if your module uses it
-    #ifdef LORA_TXEN
-    pinMode(LORA_TXEN, OUTPUT);
-    digitalWrite(LORA_TXEN, HIGH);
-    #endif
+
+    // RF switch parked on the RX side; transmit_packet() and radio_poll_rx()
+    // steer it per operation from here on.
+    rf_switch_rx();
 }
 
 /**
@@ -199,10 +235,8 @@ void radio_disable(void) {
     
     radio.standby();
     radio_enabled = false;
-    
-    #ifdef LORA_TXEN
-    digitalWrite(LORA_TXEN, LOW);
-    #endif
+
+    rf_switch_idle();
 }
 
 /**
@@ -227,10 +261,12 @@ int transmit_packet(const uint8_t* data, size_t length) {
     if (!radio_enabled) {
         Serial.println("[Radio] Warning: Transmitting while disabled");
     }
-    
-    // Transmit the packet
+
+    // Route the antenna to the PA for the burst, then back to the RX side.
+    rf_switch_tx();
     int state = radio.transmit(const_cast<uint8_t*>(data), length);
-    
+    rf_switch_rx();
+
     if (state == RADIOLIB_ERR_NONE) {
         Serial.print("[Radio] ✓ Transmitted ");
         Serial.print(length);
@@ -299,6 +335,7 @@ int radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms) {
 
     if (!radio_enabled) radio_enable();
 
+    rf_switch_rx();  // antenna on the LNA side for the listen window
     int state = radio.startReceive();
     if (state != RADIOLIB_ERR_NONE) return -state;
 

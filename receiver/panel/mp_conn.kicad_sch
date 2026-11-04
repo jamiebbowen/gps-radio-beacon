@@ -1169,6 +1169,22 @@
 			(embedded_fonts no)
 		)
 	)
+	(junction
+		(at 186.69 101.6)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "8b434895-895a-4775-9ab1-02291685d07e")
+	)
+	(wire
+		(pts
+			(xy 186.69 101.6) (xy 165.1 101.6)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "2870a8ea-e4e0-4b51-a993-2a27c252366e")
+	)
 	(wire
 		(pts
 			(xy 165.1 88.9) (xy 172.72 88.9)
@@ -1181,7 +1197,17 @@
 	)
 	(wire
 		(pts
-			(xy 165.1 96.52) (xy 175.26 96.52)
+			(xy 186.69 96.52) (xy 186.69 101.6)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "77fe0c9d-ea44-465e-8adb-4152e1e19a9f")
+	)
+	(wire
+		(pts
+			(xy 165.1 96.52) (xy 186.69 96.52)
 		)
 		(stroke
 			(width 0)
@@ -1551,7 +1577,7 @@
 	)
 	(symbol
 		(lib_id "panel-eagle-import:GND")
-		(at 165.1 104.14 0)
+		(at 186.69 104.14 0)
 		(unit 1)
 		(body_style 1)
 		(exclude_from_sim no)
@@ -1561,7 +1587,7 @@
 		(dnp no)
 		(uuid "328bc340-094e-4440-ab31-ea3e076e46c5")
 		(property "Reference" "#GND022"
-			(at 165.1 104.14 0)
+			(at 186.69 104.14 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1572,7 +1598,7 @@
 			)
 		)
 		(property "Value" "FP_GND"
-			(at 165.1 105.41 0)
+			(at 186.69 105.41 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -1583,7 +1609,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 165.1 104.14 0)
+			(at 186.69 104.14 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1594,7 +1620,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 165.1 104.14 0)
+			(at 186.69 104.14 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -1605,7 +1631,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 165.1 104.14 0)
+			(at 186.69 104.14 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -1627,83 +1653,6 @@
 		)
 	)
 	(symbol
-		(lib_id "panel-eagle-import:GND")
-		(at 175.26 99.06 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(uuid "4d65f907-5f2f-4029-acd4-f750fc273bd1")
-		(property "Reference" "#GND037"
-			(at 175.26 99.06 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "FP_GND"
-			(at 175.26 100.33 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.778 1.5113)
-				)
-				(justify top)
-			)
-		)
-		(property "Footprint" ""
-			(at 175.26 99.06 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 175.26 99.06 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" ""
-			(at 175.26 99.06 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "97e48c83-46c3-490a-b352-1c0d7e7e0343")
-		)
-		(instances
-			(project "panel"
-				(path "/5d202663-4652-4899-9f3b-75eb5416da0f/f213709e-99ba-4a9a-add9-804cbfca2bc6/e343a0bf-3cdb-4312-9f01-55469816b292"
-					(reference "#GND037")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Connector:Conn_01x20_Socket")
 		(at 160.02 111.76 180)
 		(unit 1)
@@ -1713,7 +1662,6 @@
 		(on_board yes)
 		(in_pos_files yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "b7d9d8be-56e2-4bb7-8178-a100d8ede8b8")
 		(property "Reference" "J8"
 			(at 160.655 81.28 0)
@@ -1736,7 +1684,7 @@
 			)
 		)
 		(property "Footprint" "Connector_IDC:IDC-Header_2x10_P2.54mm_Vertical"
-			(at 160.02 111.76 0)
+			(at 132.08 103.124 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects

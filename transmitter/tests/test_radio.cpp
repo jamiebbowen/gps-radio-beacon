@@ -34,10 +34,12 @@ unsigned long millis(void) { return now_ms; }
 void delay(unsigned long ms) { (void)ms; }
 void delayMicroseconds(unsigned int us) { (void)us; }
 
-/* GPIO: jumper pin + BUSY pin are scriptable */
+/* GPIO: jumper pin + BUSY pin are scriptable; RF switch pins are tracked */
 static int jumper_level  = HIGH;   /* open = primary */
 static int busy_level    = LOW;
 static int txen_level    = -1;
+static int rxen_level    = -1;
+static int txen_high_seen = 0;     /* TXEN asserted at least once (TX burst) */
 
 void pinMode(int pin, int mode) { (void)pin; (void)mode; }
 int digitalRead(int pin)
@@ -48,7 +50,8 @@ int digitalRead(int pin)
 }
 void digitalWrite(int pin, int value)
 {
-    if (pin == LORA_TXEN) txen_level = value;
+    if (pin == LORA_TXEN) { txen_level = value; if (value == HIGH) txen_high_seen = 1; }
+    if (pin == LORA_RXEN) rxen_level = value;
 }
 
 /* RadioLib knobs */
@@ -93,6 +96,8 @@ static void reset_knobs(void)
     jumper_level = HIGH;
     busy_level = LOW;
     txen_level = -1;
+    rxen_level = -1;
+    txen_high_seen = 0;
     Serial.clear();
 }
 
@@ -117,6 +122,10 @@ TEST(test_init_primary_channel)
      * without this, every 22 dBm burst clamps mid-packet. */
     CHECK(radiolib_set_cl_calls == 1);
     CHECK(radiolib_current_limit == LORA_TX_CURRENT_MA);
+
+    /* RF switch parked isolated at init: neither enable asserted */
+    CHECK(txen_level == LOW);
+    CHECK(rxen_level == LOW);
 }
 
 TEST(test_init_current_limit_failure_is_advisory)
@@ -195,7 +204,8 @@ TEST(test_enable_recovers_on_retry)
     CHECK(radio_initialized == true);
     CHECK(radio_enabled == true);
     CHECK(strstr(Serial.log, "Reinitialize succeeded") != NULL);
-    CHECK(txen_level == HIGH);                 /* TXEN driven */
+    CHECK(txen_level == LOW);                  /* switch parked RX-side... */
+    CHECK(rxen_level == HIGH);                 /* ...TXEN is per-burst only */
 }
 
 TEST(test_transmit_paths)
@@ -206,6 +216,11 @@ TEST(test_transmit_paths)
     CHECK(radiolib_transmit_calls == 1);
     CHECK(radiolib_last_tx_len == 5);
     CHECK(memcmp(radiolib_last_tx, pkt, 5) == 0);
+
+    /* RF switch steered to TX for the burst, back to RX afterwards */
+    CHECK(txen_high_seen == 1);
+    CHECK(txen_level == LOW);
+    CHECK(rxen_level == HIGH);
 
     CHECK(transmit_string("beacon") == RADIOLIB_ERR_NONE);
     CHECK(radiolib_last_tx_len == 6);
@@ -231,7 +246,8 @@ TEST(test_disable)
     radio_disable();
     CHECK(radio_enabled == false);
     CHECK(radiolib_standby_calls == before + 1);
-    CHECK(txen_level == LOW);                  /* TXEN released */
+    CHECK(txen_level == LOW);                  /* antenna fully isolated */
+    CHECK(rxen_level == LOW);
 
     /* Transmitting while disabled still works but warns */
     Serial.clear();
