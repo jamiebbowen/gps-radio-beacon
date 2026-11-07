@@ -43,9 +43,9 @@
 | **2** | 2 | GPIO OUT | NRST (15) | Reset (active low) |
 | **7** | 7 | GPIO IN | BUSY (14) | Busy status indicator |
 | **9** | 9 | GPIO INT | DIO1 (13) | Interrupt (TxDone/RxDone) |
-| **12** | 12 | GPIO OUT | TXEN (7) | RF switch TX enable |
-| **13** | 13 | GPIO OUT | RXEN (6) | RF switch RX enable (shares onboard LED) |
-| **11** | 11 | GPIO IN | DIO2 (8) | Input-only spare - never drive (module output) |
+| **A4** | A4 | GPIO OUT | TXEN (7) | RF switch TX enable |
+| **A5** | A5 | GPIO OUT | RXEN (6) | RF switch RX enable |
+| **A3** | A3 | GPIO IN | DIO2 (8) | Input-only spare - never drive (module output) |
 | - | - | - | VCC (9, 10) | Power (3.3V or 5V) |
 | - | - | - | GND | Ground |
 | - | - | - | ANT (21) | **433MHz Antenna (REQUIRED)** |
@@ -120,9 +120,9 @@
 | 7 | 7 | LoRa BUSY | ❌ | LoRa status (pin 6 does not exist on ItsyBitsy M4) |
 | 9 | 9 | LoRa DIO1 | ❌ | LoRa interrupt |
 | 10 | 10 | IMU Reset | ❌ | BNO085 reset (optional) |
-| 11 | 11 | LoRa DIO2 | ⚠️ | Input-only: module drives this pin; never an output |
-| 12 | 12 | LoRa TXEN | ❌ | RF switch TX enable |
-| 13 (LED) | 13 | LoRa RXEN | ❌ | RF switch RX enable; onboard LED mirrors RX state |
+| 11 | 11 | **Available** | ✅ | Digital I/O |
+| 12 | 12 | **Available** | ✅ | Digital I/O |
+| 13 (LED) | 13 | Onboard LED | ⚠️ | Free for status use again |
 | SCK | SCK | LoRa SPI CLK | ❌ | Hardware SPI |
 | MOSI | MOSI | LoRa SPI MOSI | ❌ | Hardware SPI |
 | MISO | MISO | LoRa SPI MISO | ❌ | Hardware SPI |
@@ -136,9 +136,9 @@
 | A0 | A0 | **Available** | ✅ | Analog input, 12-bit ADC (battery divider lands here on the PCB; not yet read by firmware) |
 | A1 | A1 | Backup channel jumper | ⚠️ | Short to GND at power-on = backup LoRa channel (read once, then free) |
 | A2 | A2 | **Available** | ✅ | Analog input, 12-bit ADC |
-| A3 | A3 | **Available** | ✅ | Analog input, 12-bit ADC |
-| A4 | A4 | **Available** | ✅ | Analog input, 12-bit ADC |
-| A5 | A5 | **Available** | ✅ | Analog input, 12-bit ADC |
+| A3 | A3 | LoRa DIO2 | ⚠️ | Input-only: module drives this pin; never an output |
+| A4 | A4 | LoRa TXEN | ❌ | RF switch TX enable |
+| A5 | A5 | LoRa RXEN | ❌ | RF switch RX enable |
 
 **Note:** Analog pins can also be used as digital I/O
 
@@ -149,16 +149,13 @@
 ### Digital Pins Available:
 - **Pin 3** - Digital I/O, PWM
 - **Pin 4** - Digital I/O, PWM
+- **Pin 11** - Digital I/O
+- **Pin 12** - Digital I/O
+- **Pin 13** - Onboard LED / GPIO
 
 ### Analog Pins Available:
 - **A0** - Analog/Digital, 12-bit ADC
 - **A2** - Analog/Digital, 12-bit ADC
-- **A3** - Analog/Digital, 12-bit ADC
-- **A4** - Analog/Digital, 12-bit ADC
-- **A5** - Analog/Digital, 12-bit ADC
-
-### Shares a Pin:
-- **Pin 13** - RXEN doubles as the onboard LED (LED lights during RX windows)
 
 ---
 
@@ -361,9 +358,9 @@ Transmitted every 5 minutes for FCC compliance.
 │  Pin 2 ────► NRST             │
 │  Pin 7 ◄──── BUSY   E22-400M33S│
 │  Pin 9 ◄──── DIO1    LoRa      │
-│  Pin 12 ───► TXEN   (SX1268)   │
-│  Pin 13 ───► RXEN              │
-│  Pin 11 ◄──── DIO2  (in only)  │
+│  Pin A4 ───► TXEN   (SX1268)   │
+│  Pin A5 ───► RXEN              │
+│  Pin A3 ◄──── DIO2  (in only)  │
 │  SCK ──────► SCK               │
 │  MOSI ─────► MOSI              │
 │  MISO ◄──── MISO               │

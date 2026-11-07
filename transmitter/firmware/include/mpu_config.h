@@ -14,15 +14,16 @@
 
 // Pin assignments for ItsyBitsy M4 Express
 // E22-400M33S LoRa Module (SX1268) - SPI Interface
-// Carrier PCB v2 pinout (panel_2.kicad_sch): NRST moved 11->2 and DIO2/RXEN
-// broken out for routing. Pin 11 is the E22's DIO2 line - it is an INPUT
-// ONLY; the module drives it, so firmware must never pinMode() it.
+// Carrier PCB v3 pinout: control pins moved onto the free analog pads:
+//   RXEN D13->A5, TXEN D12->A4, DIO2 D11->A3. This frees D13 (onboard LED)
+//   and D11/D12 entirely. A3 is input-only territory: DIO2 is an output OF
+//   the module - never pinMode() it on this side.
 #define LORA_CS             5   // SPI Chip Select
 #define LORA_DIO1           9   // DIO1 interrupt pin (TxDone/RxDone)
 #define LORA_BUSY           7   // BUSY status pin (NOTE: No pin 6 on ItsyBitsy M4!)
-#define LORA_NRST           2   // Reset pin (PCB v2; was 11, now E22 DIO2)
-#define LORA_TXEN           12  // RF switch TX enable
-#define LORA_RXEN           13  // RF switch RX enable (shares LED_BUILTIN: LED mirrors RX state)
+#define LORA_NRST           2   // Reset pin
+#define LORA_TXEN           A4  // RF switch TX enable
+#define LORA_RXEN           A5  // RF switch RX enable
 // SPI pins (hardware SPI): MOSI=MOSI, MISO=MISO, SCK=SCK on ItsyBitsy M4
 
 // BNO085 IMU - I2C Interface for launch detection
