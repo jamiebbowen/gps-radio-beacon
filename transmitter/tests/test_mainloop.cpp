@@ -380,6 +380,20 @@ int main(void)
     CHECK(flog_gps_calls_value() >= 14);          /* GPS rows landing in the flash log */
     /* Raw GPS position packets stop on air - fused+IMU carry the invade */
 
+    /* Corrupt altitude field ("nan" parses literally via atof): the
+     * flight-log record must be SKIPPED rather than pass NaN through
+     * lroundf (UB) into the flash log. Landing detect treats the same
+     * field as no-fix, so the window keeps breaking instead of latching
+     * on a poisoned "stable" reading. */
+    snprintf(fake_coords.altitude, sizeof(fake_coords.altitude), "nan");
+    uint32_t flog0 = flog_gps_calls_value();
+    sim_run(4500);                                /* ~2 log ticks poisoned */
+    CHECK(flog_gps_calls_value() == flog0);
+    CHECK(launch_detect_has_landed() == false);
+    script_fix(SIM_LAT, SIM_LON, SIM_ALT, 8, 1);  /* honest field returns */
+    sim_run(5000);
+    CHECK(flog_gps_calls_value() > flog0);        /* logging resumes */
+
     /* ---------- Touchdown: quiet IMU + stable alt -> battery save ---- */
     sim_run((LAND_QUIET_S + 20) * 1000UL);
     CHECK(launch_detect_has_landed() == true);
