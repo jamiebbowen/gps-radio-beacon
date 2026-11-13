@@ -321,6 +321,43 @@ TEST(test_rearm_when_uart_ready)
     CHECK(receive_it_calls == calls_before);
 }
 
+TEST(test_error_callback_rearms_after_ore_teardown)
+{
+    CHECK(GPS_Init() == GPS_OK);
+
+    /* The HAL IRQHandler's ORE path calls UART_EndRxTransfer AFTER
+     * RxCpltCallback: the re-arm done there is torn back down and
+     * RxState lands on READY. HAL_UART_ErrorCallback must re-arm inside
+     * the same interrupt context so bytes aren't dropped until the next
+     * GPS_Update poll. */
+    huart_gps.RxState = HAL_UART_STATE_READY;
+    huart_gps.ErrorCode = 0x08;              /* HAL_UART_ERROR_ORE */
+    uint32_t calls_before = receive_it_calls;
+    uint32_t errs_before = uart_error_count;
+    HAL_UART_ErrorCallback(&huart_gps);
+    CHECK(receive_it_calls == calls_before + 1);
+    CHECK(uart_error_count == errs_before + 1);
+    CHECK(huart_gps.RxState == 0x22);        /* stub marks BUSY_RX */
+    CHECK(huart_gps.ErrorCode == HAL_UART_ERROR_NONE);
+
+    /* Non-ORE path: the armed transfer survives (RxState stays BUSY_RX),
+     * so the callback must NOT disturb it */
+    huart_gps.RxState = 0x22;
+    calls_before = receive_it_calls;
+    HAL_UART_ErrorCallback(&huart_gps);
+    CHECK(receive_it_calls == calls_before);
+
+    /* A different UART instance must be ignored entirely */
+    UART_HandleTypeDef other;
+    memset(&other, 0, sizeof(other));
+    USART_TypeDef other_usart;
+    other.Instance = &other_usart;
+    other.RxState = HAL_UART_STATE_READY;
+    calls_before = receive_it_calls;
+    HAL_UART_ErrorCallback(&other);
+    CHECK(receive_it_calls == calls_before);
+}
+
 TEST(test_isr_plumbing)
 {
     uint32_t before = irq_handler_calls;
@@ -491,6 +528,7 @@ int main(void)
     run_test_lf_without_cr_not_a_sentence();
     run_test_debug_rotation_covers_all_modes();
     run_test_rearm_when_uart_ready();
+    run_test_error_callback_rearms_after_ore_teardown();
     run_test_isr_plumbing();
     run_test_first_and_raw_capture_buffers_fill();
     run_test_fix_latch_expires_when_stream_dies();

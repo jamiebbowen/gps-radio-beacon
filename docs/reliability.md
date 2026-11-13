@@ -465,6 +465,17 @@ coverage, RX lowest modules are `sd_card` (92%) and `compass` (94%).
   three sats consumers; RX mirrors it in `gps_parser.c`/`rf_parser.c`.
   Fix quality >8 now reads as no-fix on both sides rather than
   saturating into "simulation" and still counting as valid.
+- **RX GPS UART overrun recovery**: the HAL IRQHandler's ORE path calls
+  `UART_EndRxTransfer` *after* `RxCpltCallback` - the receive re-armed
+  inside the callback is torn right back down (`RXNEIE` cleared,
+  `RxState=READY`). `GPS_Update`'s READY check eventually re-arms it,
+  but every byte until the next main-loop poll was dropped - a
+  display-stall-length gap that could tear whole NMEA sentences.
+  `HAL_UART_ErrorCallback` is now implemented and re-arms reception
+  inside the same interrupt when (and only when) the transfer actually
+  ended; non-ORE errors that leave the armed transfer alone are left
+  alone (`RxState` stays BUSY_RX). A distinct `0xF3` marker reports a
+  failed re-arm from this path.
 - **Parser fuzzing** (`test_fuzz_parsers.c`, TX `test_fuzz_nmea.c`):
   seeded xorshift mutates a corpus of real wire packets/NMEA sentences
   through the real parsers under ASan+UBSan. 30M+ iterations across

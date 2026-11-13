@@ -427,6 +427,37 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 }
 
 /**
+ * @brief HAL UART Error Callback - re-arms reception after error teardown
+ * @param huart UART handle
+ * @retval None
+ */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  /* HAL only reaches here for the GPS UART (the sole IT-mode receiver).
+   * The IRQHandler's ORE path calls UART_EndRxTransfer after RxCpltCallback:
+   * the receive re-armed there is torn right back down (RXNEIE cleared,
+   * RxState=READY). GPS_Update's READY check is the net that eventually
+   * re-arms it, but every byte until the next main-loop poll is dropped -
+   * a display-stall-length gap can tear whole sentences. Re-arming here
+   * restores reception inside the same interrupt. Non-ORE errors leave
+   * the armed transfer in place (RxState stays BUSY_RX) - only re-arm
+   * when it actually ended. */
+  if (huart->Instance == GPS_UART) {
+    __HAL_UART_CLEAR_PEFLAG(huart);
+    __HAL_UART_CLEAR_FEFLAG(huart);
+    __HAL_UART_CLEAR_NEFLAG(huart);
+    __HAL_UART_CLEAR_OREFLAG(huart);
+    if (huart->RxState == HAL_UART_STATE_READY) {
+      uart_error_count++;
+      huart->ErrorCode = HAL_UART_ERROR_NONE;
+      if (HAL_UART_Receive_IT(huart, &gps_rx_data, 1) != HAL_OK) {
+        last_bytes[0] = 0xF3; /* distinct marker: re-arm failed in error cb */
+      }
+    }
+  }
+}
+
+/**
  * @brief Get the last 4 raw bytes received from GPS
  * @param bytes Array to store the bytes (must be at least 4 bytes)
  * @retval None
