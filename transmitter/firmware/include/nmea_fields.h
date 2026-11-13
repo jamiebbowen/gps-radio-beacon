@@ -63,6 +63,19 @@ float nmea_coord_to_decimal(const char *nmea_coord, char direction);
  */
 int nmea_checksum_ok(const char *sentence);
 
+/**
+ * Parse an NMEA numeric field into a uint8_t with saturation.
+ *
+ * Uses strtol (atoi() on an out-of-int-range field is undefined) and
+ * clamps to [0, cap]: a corrupt-but-checksum-valid field like "999" must
+ * not wrap modulo 256 at a uint8_t cast and read as nonsense on the wire.
+ *
+ * @param s   field text (NULL/empty/non-numeric -> 0)
+ * @param cap maximum accepted value; larger inputs saturate to cap
+ * @return parsed value clamped to [0, cap]
+ */
+uint8_t nmea_u8_field(const char *s, uint8_t cap);
+
 #ifdef __cplusplus
 }
 #endif

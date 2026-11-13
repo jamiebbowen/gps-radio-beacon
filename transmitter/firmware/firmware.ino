@@ -4,6 +4,7 @@
 #include "include/config.h"
 #include "include/radio.h"
 #include "include/gps.h"
+#include "include/nmea_fields.h"
 #include "include/uart.h"
 #include "include/launch_detect.h"
 #include "include/beacon.h"
@@ -530,7 +531,7 @@ void loop() {
                                    (int32_t)lroundf(lat_d * 10000000.0f),
                                    (int32_t)lroundf(lon_d * 10000000.0f),
                                    alt_m,
-                                   (uint8_t)atoi(c->satellites), c->fix_quality);
+                                   nmea_u8_field(c->satellites, 99), c->fix_quality);
                 }
             }
             last_transmission_time = system_time_seconds;

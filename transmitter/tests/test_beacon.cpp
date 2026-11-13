@@ -476,6 +476,15 @@ TEST(test_heartbeat_null_coords_and_saturation)
     CHECK(hb->satellites == 0 && hb->fix_quality == 0);
     CHECK(hb->uptime_s == 65535);
     CHECK(radio_enables == 0);                /* fast mode: no power cycle */
+
+    /* Corrupt sats field "999" saturates to 99 instead of wrapping
+     * modulo 256 at the uint8_t cast. */
+    GPSCoordinates_t c = valid_coords();
+    strcpy(c.satellites, "999");
+    now_ms += HEARTBEAT_INTERVAL_SEC * 1000UL + 1;
+    CHECK(beacon_transmit_heartbeat(&c, 100100UL, HEARTBEAT_INTERVAL_SEC, 0) == 1);
+    hb = (const HeartbeatPacket_t *)tx_buf;
+    CHECK(hb->satellites == 99);
 }
 
 TEST(test_heartbeat_tx_failure_does_not_consume_slot)

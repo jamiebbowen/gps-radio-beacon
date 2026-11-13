@@ -53,8 +53,10 @@ $(BUILD)/test_fuzz_nmea: test_fuzz_nmea.c ../firmware/nmea_fields.c | $(BUILD)
 # stubs/Arduino.h shadows the real core. flight_maxima.cpp is a real
 # dependency of beacon_transmit_maxima().
 $(BUILD)/test_beacon: test_beacon.cpp ../firmware/beacon.cpp \
-                      ../firmware/flight_maxima.cpp stubs/Arduino.h | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< ../firmware/flight_maxima.cpp $(LDFLAGS)
+                      ../firmware/flight_maxima.cpp ../firmware/nmea_fields.c \
+                      stubs/Arduino.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< ../firmware/flight_maxima.cpp \
+	    ../firmware/nmea_fields.c $(LDFLAGS)
 
 # nav.cpp is #included by the test; the real EKF is linked in.
 $(BUILD)/test_nav: test_nav.cpp ../firmware/nav.cpp ../firmware/ekf.cpp \
@@ -87,9 +89,10 @@ $(BUILD)/test_uart: test_uart.cpp ../firmware/uart.cpp stubs/Arduino.h | $(BUILD
 $(BUILD)/test_flight_profile: test_flight_profile.cpp \
             ../firmware/launch_detect.cpp ../firmware/nav.cpp \
             ../firmware/ekf.cpp ../firmware/beacon.cpp \
-            ../firmware/flight_maxima.cpp \
+            ../firmware/flight_maxima.cpp ../firmware/nmea_fields.c \
             stubs/Arduino.h stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< ../firmware/flight_maxima.cpp $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< ../firmware/flight_maxima.cpp \
+	    ../firmware/nmea_fields.c $(LDFLAGS)
 
 # Pure state->timing policy; links the real module (Arduino stub headers
 # only satisfy mpu_config.h's include chain).
@@ -115,10 +118,11 @@ $(BUILD)/rf_parser_rx.o: ../../receiver/firmware/src/rf_parser.c | $(BUILD)
 
 $(BUILD)/test_airlink_roundtrip: test_airlink_roundtrip.cpp \
             ../firmware/beacon.cpp ../firmware/flight_maxima.cpp \
+            ../firmware/nmea_fields.c \
             $(BUILD)/rf_parser_rx.o stubs/Arduino.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -I../../receiver/tests/stubs \
 	    -I../../receiver/firmware/inc -o $@ $< ../firmware/flight_maxima.cpp \
-	    $(BUILD)/rf_parser_rx.o $(LDFLAGS)
+	    ../firmware/nmea_fields.c $(BUILD)/rf_parser_rx.o $(LDFLAGS)
 
 # Host sim of firmware.ino itself: the sketch runs over stubbed HAL with a
 # scripted GPS fix stream and IMU event queue.
@@ -126,10 +130,11 @@ $(BUILD)/test_mainloop: test_mainloop.cpp ../firmware/flight_cadence.cpp \
             ../firmware/firmware.ino ../firmware/launch_detect.cpp \
             ../firmware/nav.cpp ../firmware/ekf.cpp ../firmware/beacon.cpp \
             ../firmware/flight_events.cpp ../firmware/flight_maxima.cpp \
+            ../firmware/nmea_fields.c \
             stubs/Arduino.h stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< \
 	    ../firmware/flight_cadence.cpp ../firmware/flight_events.cpp \
-	    ../firmware/flight_maxima.cpp $(LDFLAGS)
+	    ../firmware/flight_maxima.cpp ../firmware/nmea_fields.c $(LDFLAGS)
 
 # On-chip flight recorder: file #included by the test; the NVMCTRL register
 # block and the FLOG_BASE flash region are faked in the test file.

@@ -6,6 +6,7 @@
 #include "include/packet_format.h"
 #include "include/nav.h"
 #include "include/flight_maxima.h"
+#include "include/nmea_fields.h"
 #include <Arduino.h>
 #include <string.h>
 #include <stdio.h>
@@ -336,7 +337,7 @@ uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t syste
     hb.packet_type = PACKET_TYPE_HEARTBEAT;
     hb.rocket_id   = (uint8_t)ROCKET_ID;
     hb.channel     = radio_get_channel();
-    hb.satellites  = coords ? (uint8_t)atoi(coords->satellites) : 0;
+    hb.satellites  = coords ? nmea_u8_field(coords->satellites, 99) : 0;
     hb.fix_quality = coords ? coords->fix_quality : 0;
     hb.uptime_s    = (system_time_seconds > 65535UL) ? 65535U
                                                      : (uint16_t)system_time_seconds;

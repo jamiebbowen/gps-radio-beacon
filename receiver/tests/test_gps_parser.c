@@ -121,6 +121,27 @@ TEST(test_gga_accepts_gn_talker) {
     CHECK(gps.satellites == 12);
 }
 
+TEST(test_gga_numeric_fields_clamped) {
+    GPS_Data gps;
+    char s[128];
+
+    /* A corrupt-but-checksum-valid sats field must saturate, not wrap
+     * modulo 256 at the uint8_t store. */
+    memset(&gps, 0, sizeof(gps));
+    make_sentence(s, sizeof(s),
+        "$GPGGA,123519,4807.038,N,01131.000,E,1,999,0.9,545.4,M,46.9,M,,");
+    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_OK);
+    CHECK(gps.satellites == 99);
+    CHECK(gps.fix == 1);
+
+    /* Out-of-spec fix quality (0-8 only) reads as no-fix: rejected. */
+    memset(&gps, 0, sizeof(gps));
+    make_sentence(s, sizeof(s),
+        "$GPGGA,123519,4807.038,N,01131.000,E,9,08,0.9,545.4,M,46.9,M,,");
+    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_ERROR);
+    CHECK(gps.fix == 0);
+}
+
 TEST(test_gga_southern_western_hemisphere) {
     GPS_Data gps;
     char s[128];
@@ -419,6 +440,7 @@ int main(void) {
     run_test_debug_fields_for_tiny_sentence();
     run_test_gga_valid_sentence();
     run_test_gga_accepts_gn_talker();
+    run_test_gga_numeric_fields_clamped();
     run_test_gga_southern_western_hemisphere();
     run_test_gga_nan_fields_never_reach_gps_data();
     run_test_gga_no_fix_rejected();

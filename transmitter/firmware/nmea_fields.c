@@ -91,3 +91,15 @@ int nmea_checksum_ok(const char *sentence) {
     }
     return (uint8_t)((hi << 4) | lo) == cksum;
 }
+
+uint8_t nmea_u8_field(const char *s, uint8_t cap)
+{
+    /* strtol saturates on overflow (atoi() is UB out of int range) and the
+     * [0, cap] clamp keeps corrupt fields like "999" from wrapping at a
+     * uint8_t cast into nonsense values on the wire. */
+    if (!s) return 0;
+    char *endp;
+    long v = strtol(s, &endp, 10);
+    if (endp == s || v <= 0) return 0;
+    return (v > (long)cap) ? cap : (uint8_t)v;
+}

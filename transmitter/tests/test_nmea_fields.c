@@ -178,6 +178,21 @@ TEST(test_checksum_crlf_and_case) {
     CHECK(nmea_checksum_ok(s) == 1);
 }
 
+TEST(test_u8_field_clamps_and_rejects) {
+    CHECK(nmea_u8_field("12", 99) == 12);
+    CHECK(nmea_u8_field("0", 99) == 0);
+    CHECK(nmea_u8_field("99", 99) == 99);
+    CHECK(nmea_u8_field("100", 99) == 99);        /* saturates at cap */
+    CHECK(nmea_u8_field("999", 99) == 99);        /* would wrap to 231 raw */
+    CHECK(nmea_u8_field("999999999999", 99) == 99); /* strtol saturates */
+    CHECK(nmea_u8_field("-5", 99) == 0);          /* negative -> 0 */
+    CHECK(nmea_u8_field("abc", 99) == 0);         /* non-numeric -> 0 */
+    CHECK(nmea_u8_field("", 99) == 0);            /* empty -> 0 */
+    CHECK(nmea_u8_field(NULL, 99) == 0);
+    CHECK(nmea_u8_field("9", 8) == 8);            /* fix-quality cap */
+    CHECK(nmea_u8_field("12abc", 99) == 12);      /* parses prefix */
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void) {
@@ -193,6 +208,7 @@ int main(void) {
     run_test_checksum_rejects_corruption();
     run_test_checksum_rejects_missing_or_malformed();
     run_test_checksum_crlf_and_case();
+    run_test_u8_field_clamps_and_rejects();
 
     return TEST_SUMMARY();
 }

@@ -535,6 +535,30 @@ TEST(test_bad_checksum_drops_sentence)
     CHECK(gps_get_checksum_errors() == errs0 + 3);
 }
 
+TEST(test_out_of_spec_fix_quality_rejected)
+{
+    /* Fix quality is spec'd 0-8. A checksum-valid but corrupt field ("9")
+     * must not claim a fix - it unlatches like a no-fix sentence. */
+    feed_and_poll(GGA_FIX);
+    const GPSCoordinates_t *c = gps_get_current_coordinates();
+    CHECK(c->valid == 1);
+
+    feed_and_poll(
+        "$GPGGA,123519,3953.40284,N,10453.11007,W,9,08,0.9,1655.4,M,46.9,M,,*6E\r\n");
+    c = gps_get_current_coordinates();
+    CHECK(c->fix_quality == 0);
+    CHECK(c->valid == 0);
+
+    /* A corrupt sats field stays faithful as a raw string; the numeric
+     * consumers clamp it (nmea_u8_field) - covered in test_nmea_fields. */
+    feed_and_poll(GGA_FIX);
+    feed_and_poll(
+        "$GPGGA,123519,3953.40284,N,10453.11007,W,1,999,0.9,1655.4,M,46.9,M,,*57\r\n");
+    c = gps_get_current_coordinates();
+    CHECK(c->valid == 1);
+    CHECK(strcmp(c->satellites, "999") == 0);
+}
+
 TEST(test_mid_sentence_silence_abandons_parse)
 {
     /* The GPS watchdog's cold-start reboots the module, which goes silent
@@ -572,6 +596,7 @@ int main(void)
     run_test_oversize_sentence_does_not_overflow();
     run_test_continuous_uart_garbage_is_bounded();
     run_test_bad_checksum_drops_sentence();
+    run_test_out_of_spec_fix_quality_rejected();
     run_test_mid_sentence_silence_abandons_parse();
 
     return TEST_SUMMARY();

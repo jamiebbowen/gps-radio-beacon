@@ -196,6 +196,22 @@ TEST(test_ascii_nan_altitude_clamped_not_stored) {
     CHECK(gps.altitude == 0.0f);
 }
 
+TEST(test_ascii_satellites_clamped) {
+    RF_Parser_Reset();
+    GPS_Data gps;
+
+    /* Corrupt sats field "999" must saturate to 99, not wrap modulo 256
+     * at the uint8_t store. */
+    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,1671.7,999") == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.satellites == 99);
+
+    RF_Parser_Reset();
+    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,1671.7,-5") == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.satellites == 0);
+}
+
 TEST(test_ascii_last_packet_bookkeeping) {
     RF_Parser_Reset();
     char buf[RF_PARSER_BUFFER_SIZE];
@@ -809,6 +825,7 @@ int main(void) {
     run_test_ascii_insufficient_fields_rejected();
     run_test_ascii_invalid_coordinates_rejected();
     run_test_ascii_nan_altitude_clamped_not_stored();
+    run_test_ascii_satellites_clamped();
     run_test_ascii_last_packet_bookkeeping();
     run_test_binary_valid_packet();
     run_test_binary_negative_altitude();

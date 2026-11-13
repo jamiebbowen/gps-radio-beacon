@@ -554,7 +554,11 @@ next_sentence:
             if (!is_rmc) {
                 // Fix quality (field 6): 0=invalid, 1=GPS, 2=DGPS, 3=PPS, ...
                 if (nmea_get_field(nmea_buffer, 6, fbuf, sizeof(fbuf)) > 0) {
-                    current_coords.fix_quality = atoi(fbuf);
+                    /* Fix quality is spec'd 0-8; a corrupt checksum-valid
+                     * field like "9" must not claim a fix - reject it. */
+                    long fq = strtol(fbuf, NULL, 10);
+                    current_coords.fix_quality =
+                        (fq < 0 || fq > 8) ? 0 : (uint8_t)fq;
                     /* Quality 0 = no fix: unlatch. valid is set again by
                      * the lon_dir branch above when a real position
                      * sentence arrives. */
@@ -591,7 +595,7 @@ next_sentence:
                         float lon = gps_nmea_to_decimal(current_coords.lon,
                                                        current_coords.lon_dir);
                         float alt = atof(current_coords.altitude);
-                        uint8_t sats = (uint8_t)atoi(current_coords.satellites);
+                        uint8_t sats = nmea_u8_field(current_coords.satellites, 99);
                         nav_update_from_gps(lat, lon, alt,
                                             sats, current_coords.fix_quality);
                     }

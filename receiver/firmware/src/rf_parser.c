@@ -213,7 +213,13 @@ uint8_t RF_Parser_ParseAsciiPacket(const char *packet) {
         break;
         
       case 3: /* Satellites (optional - only in full packets) */
-        parsed_gps_data.satellites = atoi(token);
+        {
+          /* strtol saturates (atoi is UB out of int range); cap at 99 so a
+           * corrupt field can't wrap at the uint8_t store. */
+          long v = strtol(token, NULL, 10);
+          parsed_gps_data.satellites =
+              (v < 0) ? 0 : (v > 99 ? 99 : (uint8_t)v);
+        }
         break;
         
       default:

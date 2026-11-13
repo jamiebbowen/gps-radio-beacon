@@ -41,6 +41,16 @@ static float nmea_atof_finite(const char *s) {
   return isfinite(v) ? v : 0.0f;
 }
 
+/* strtol saturates (atoi on an out-of-int-range field is UB) and the
+ * [0, cap] clamp keeps corrupt fields like "999" from wrapping at a
+ * uint8_t cast. */
+static uint8_t nmea_atoi_u8(const char *s, uint8_t cap) {
+  char *endp;
+  long v = s ? strtol(s, &endp, 10) : 0;
+  if (!s || endp == s || v <= 0) return 0;
+  return (v > (long)cap) ? cap : (uint8_t)v;
+}
+
 /**
  * @brief Parse NMEA sentence
  * @param nmea_sentence NMEA sentence string
@@ -312,11 +322,15 @@ static uint8_t GPS_ParseGPGGA(const char* nmea_sentence, GPS_Data *gps_data)
         break;
         
       case 6: /* Fix quality (0=no fix, 1=GPS fix, 2=DGPS fix) */
-        gps_data->fix = atoi(token);
+        /* Spec'd 0-8; a corrupt "9" must not claim a fix - reads as 0. */
+        {
+          uint8_t fq = nmea_atoi_u8(token, 255);
+          gps_data->fix = (fq > 8) ? 0 : fq;
+        }
         break;
         
       case 7: /* Number of satellites */
-        gps_data->satellites = atoi(token);
+        gps_data->satellites = nmea_atoi_u8(token, 99);
         /* Store raw satellites string for debugging */
         strncpy(gps_data->debug_sats, token, GPS_DEBUG_BUFFER_SIZE - 1);
         gps_data->debug_sats[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
