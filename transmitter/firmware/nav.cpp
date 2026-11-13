@@ -140,16 +140,25 @@ void nav_predict(void) {
         imu_get_quaternion(&w, &qx, &qy, &qz);
         imu_get_linear_accel_body(&accel_body[0], &accel_body[1], &accel_body[2]);
 
-        /* body -> earth (BNO085 returns ENU by default) */
-        float a_enu[3];
-        rotate_by_quat(w, qx, qy, qz, accel_body, a_enu);
+        /* rotate_by_quat's output scales with |q|^2, and the BNO085 can
+         * report a not-yet-unit quaternion while fusion converges or a
+         * sensor reset recovers: a saturated sample would amplify accel
+         * ~4x, a near-zero one erase it. Normalize sane samples; a
+         * degenerate quaternion can't orient the body at all, so that
+         * predict step coasts on zero accel (same as the no-quat path). */
+        float n2 = w*w + qx*qx + qy*qy + qz*qz;
+        if (isfinite(n2) && n2 > 0.25f && n2 < 4.0f) {
+            float inv = 1.0f / sqrtf(n2);
+            float a_enu[3];
+            rotate_by_quat(w*inv, qx*inv, qy*inv, qz*inv, accel_body, a_enu);
 
-        /* ENU -> NED:  n = east?  actually  n = north = a_enu.y
-         *              e = east  = a_enu.x
-         *              d = down  = -a_enu.z (up-positive -> down-positive) */
-        a_earth_ned[0] =  a_enu[1];
-        a_earth_ned[1] =  a_enu[0];
-        a_earth_ned[2] = -a_enu[2];
+            /* ENU -> NED:  n = north = a_enu.y
+             *              e = east  = a_enu.x
+             *              d = down  = -a_enu.z (up -> down-positive) */
+            a_earth_ned[0] =  a_enu[1];
+            a_earth_ned[1] =  a_enu[0];
+            a_earth_ned[2] = -a_enu[2];
+        }
     }
 
     ekf_predict(&s_ekf, a_earth_ned, dt);
@@ -159,6 +168,11 @@ void nav_update_from_gps(float lat_deg, float lon_deg, float alt_m,
                          uint8_t sats, uint8_t fix_quality) {
     if (fix_quality < 1) return;
     if (sats < 4)        return;
+    /* NaN/Inf guard: atof() parses "nan"/"inf" field text literally, and
+     * one NaN into ekf_update_gps_position poisons the filter state
+     * permanently (x += K*NaN propagates forever). Boundary-check any
+     * upstream garbage here, same contract as the sats/fix gates. */
+    if (!isfinite(lat_deg) || !isfinite(lon_deg) || !isfinite(alt_m)) return;
 
     if (!s_anchored) {
         /* Anchor on two CONSECUTIVE fixes that agree: a single glitch fix

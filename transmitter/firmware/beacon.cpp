@@ -67,10 +67,25 @@ uint8_t beacon_transmit_gps_data(const GPSCoordinates_t* coords, uint32_t system
     
     // Sanity check altitude (reasonable range: -500m to 50000m)
     float altitude = atof(coords->altitude);
-    if (altitude < -500.0f || altitude > 50000.0f) {
+    if (!isfinite(altitude) || altitude < -500.0f || altitude > 50000.0f) {
         Serial.print(F("[Beacon] Rejecting GPS - unreasonable altitude: "));
         Serial.println(altitude);
         return 0;
+    }
+    
+    /* Coordinate sanity: atof() parses "nan"/"inf" field text literally,
+     * so a checksum-valid corrupt sentence can carry non-finite or
+     * out-of-range coordinates through the earlier gates. Reject before
+     * the radio is powered rather than put "nan" on the air. */
+    {
+        float lat_d = gps_nmea_to_decimal(coords->lat, coords->lat_dir);
+        float lon_d = gps_nmea_to_decimal(coords->lon, coords->lon_dir);
+        if (!isfinite(lat_d) || !isfinite(lon_d) ||
+            lat_d < -90.0f || lat_d > 90.0f ||
+            lon_d < -180.0f || lon_d > 180.0f) {
+            Serial.println(F("[Beacon] Rejecting GPS - bad coords"));
+            return 0;
+        }
     }
     
     Serial.println(F("[Beacon] GPS data valid, building packet..."));
@@ -193,9 +208,23 @@ uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t
     }
     
     float altitude = atof(coords->altitude);
-    if (altitude < -500.0f || altitude > 50000.0f) {
+    if (!isfinite(altitude) || altitude < -500.0f || altitude > 50000.0f) {
         Serial.print(F("[Beacon] Rejecting GPS - unreasonable altitude: "));
         Serial.println(altitude);
+        return 0;
+    }
+    
+    /* Convert + validate BEFORE the radio is powered: atof() parses
+     * "nan"/"inf" field text literally, and ENCODE_COORD's float->int32
+     * cast of a non-finite value is undefined behavior - a checksum-valid
+     * corrupt sentence could otherwise put garbage coordinates on the
+     * air. Out-of-range is rejected too: lat +-90, lon +-180. */
+    float lat_decimal = gps_nmea_to_decimal(coords->lat, coords->lat_dir);
+    float lon_decimal = gps_nmea_to_decimal(coords->lon, coords->lon_dir);
+    if (!isfinite(lat_decimal) || !isfinite(lon_decimal) ||
+        lat_decimal < -90.0f || lat_decimal > 90.0f ||
+        lon_decimal < -180.0f || lon_decimal > 180.0f) {
+        Serial.println(F("[Beacon] Rejecting GPS - bad coords"));
         return 0;
     }
     
@@ -205,10 +234,6 @@ uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t
         radio_enable();
         delay(10);
     }
-    
-    // Convert NMEA to decimal degrees
-    float lat_decimal = gps_nmea_to_decimal(coords->lat, coords->lat_dir);
-    float lon_decimal = gps_nmea_to_decimal(coords->lon, coords->lon_dir);
     
     // Build binary packet
     BinaryGPSPacket_t packet;
@@ -653,6 +678,14 @@ uint8_t beacon_transmit_fused_data(uint32_t system_time_seconds, uint8_t transmi
     NavFused_t f;
     nav_get_fused(&f);
     if (!f.valid) {
+        return 0;
+    }
+    /* Non-finite guard: ENCODE_COORD and clamp_i16's lroundf are undefined
+     * behavior on NaN/Inf, and a poisoned filter must not reach the wire
+     * as garbage coordinates. nav_update_from_gps already rejects
+     * non-finite fixes; this is the last line of defense. */
+    if (!isfinite(f.lat_deg) || !isfinite(f.lon_deg) || !isfinite(f.alt_m) ||
+        !isfinite(f.v_n) || !isfinite(f.v_e) || !isfinite(f.v_d)) {
         return 0;
     }
 

@@ -426,6 +426,18 @@ coverage, RX lowest modules are `sd_card` (92%) and `compass` (94%).
   coverage except `sd_card.c` (~93% - the LittleFS-fault recovery
   ladder is defensive code the RAM block device can't drive
   faithfully; documented in `test_sd_card.c`).
+- **Non-finite/degenerate-input guards**: `atof()` parses `"nan"`/`"inf"`
+  literally, so a checksum-valid corrupt NMEA field could reach the
+  wire encoders. `nav_update_from_gps` now rejects non-finite fixes at
+  the nav boundary (one NaN into `ekf_update_gps_position` poisons the
+  filter permanently), both GPS transmit paths validate
+  finite+in-range before `ENCODE_COORD` (whose float->int32 cast is UB
+  on NaN/Inf), and `beacon_transmit_fused_data` guards all six fused
+  fields. `nav_predict` also normalizes the IMU quaternion -
+  `rotate_by_quat` scales with |q|^2, so a not-yet-unit sample from a
+  fusion-convergence or reset-recovery transient amplified accel up to
+  4x; degenerate samples coast that predict step. Regression tests in
+  `test_nav.cpp`/`test_beacon.cpp`.
 - **Parser fuzzing** (`test_fuzz_parsers.c`, TX `test_fuzz_nmea.c`):
   seeded xorshift mutates a corpus of real wire packets/NMEA sentences
   through the real parsers under ASan+UBSan. 30M+ iterations across

@@ -376,6 +376,45 @@ TEST(test_binary_rejection_and_tx_failure)
     tx_result = 0;
 }
 
+TEST(test_non_finite_and_range_coords_rejected)
+{
+    /* atof() parses "nan"/"inf" literally - a checksum-valid corrupt
+     * sentence can carry them through every string gate. ENCODE_COORD's
+     * float->int32 cast on non-finite input is undefined behavior, so
+     * the transmit path must reject before encoding (and before the
+     * radio is powered). */
+    reset_tx();
+    GPSCoordinates_t c = valid_coords();
+
+    strcpy(c.lat, "nan");                       /* atof -> NaN   */
+    CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 0);
+    c = valid_coords();
+    strcpy(c.lat, "inf");                       /* atof -> +Inf  */
+    CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 0);
+    c = valid_coords();
+    strcpy(c.lon, "-inf");                      /* atof -> -Inf  */
+    CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 0);
+    c = valid_coords();
+    strcpy(c.altitude, "nan");                  /* NaN slipped the old range gate */
+    CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 0);
+    c = valid_coords();
+    strcpy(c.lat, "9999.9");                    /* 99.99 deg - finite, out of range */
+    CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 0);
+    c = valid_coords();
+    strcpy(c.lon, "19999.9");                   /* ~200 deg - out of range */
+    CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 0);
+    CHECK(tx_count == 0);
+
+    /* ASCII path: same garbage must not be put on the wire as text. */
+    c = valid_coords();
+    strcpy(c.lat, "nan");
+    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
+    c = valid_coords();
+    strcpy(c.altitude, "inf");
+    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
+    CHECK(tx_count == 0);
+}
+
 /* ------------------------------------------------------------------ */
 /* Heartbeat tests                                                     */
 /* ------------------------------------------------------------------ */
@@ -1039,6 +1078,7 @@ int main(void)
     run_test_binary_launch_flag();
     run_test_landed_flag_both_packet_types();
     run_test_binary_rejection_and_tx_failure();
+    run_test_non_finite_and_range_coords_rejected();
     run_test_heartbeat_contents_and_rate_limit();
     run_test_heartbeat_null_coords_and_saturation();
     run_test_callsign_format();

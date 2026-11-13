@@ -253,6 +253,93 @@ TEST(test_predict_axis_mapping_enu_to_ned)
     CHECK(fabsf(f.v_e) < 0.5f);
 }
 
+TEST(test_non_unit_quat_is_normalized)
+{
+    /* The BNO085 can emit a not-yet-unit quaternion while its fusion
+     * converges or a sensor reset recovers. rotate_by_quat scales by
+     * |q|^2, so an unguarded norm-1.5 quat would integrate 2.25x the real
+     * accel; the fix normalizes, so it must track the identity-quat run
+     * exactly. */
+    fresh_nav_with_anchor();
+    fake_has_quat = true;
+    fake_quat[0] = 1.5f; fake_quat[1] = 0; fake_quat[2] = 0; fake_quat[3] = 0;
+    fake_accel[0] = 0; fake_accel[1] = 0; fake_accel[2] = 10.0f;
+    fake_accel_ms = now_ms;
+
+    nav_predict();
+    for (int i = 0; i < 10; i++) {
+        now_ms += 100;
+        fake_accel_ms = now_ms;
+        nav_predict();
+    }
+    NavFused_t f;
+    nav_get_fused(&f);
+    CHECK(f.v_d < -5.0f);          /* ~1 s of 10 m/s^2 up, not 22.5 */
+    CHECK(f.v_d > -15.0f);
+    CHECK(fabsf(f.v_n) < 0.5f && fabsf(f.v_e) < 0.5f);
+}
+
+TEST(test_degenerate_quat_coasts)
+{
+    /* A garbage quaternion (all-zeros on a torn report, or NaN) can't
+     * orient the body - the predict step must coast rather than amplify
+     * or erase the accel. */
+    fresh_nav_with_anchor();
+    fake_has_quat = true;
+    fake_quat[0] = 0; fake_quat[1] = 0; fake_quat[2] = 0; fake_quat[3] = 0;
+    fake_accel[0] = 0; fake_accel[1] = 0; fake_accel[2] = 10.0f;
+    fake_accel_ms = now_ms;
+
+    nav_predict();
+    for (int i = 0; i < 10; i++) {
+        now_ms += 100;
+        fake_accel_ms = now_ms;
+        nav_predict();
+    }
+    NavFused_t f;
+    nav_get_fused(&f);
+    CHECK(fabsf(f.v_n) < 0.5f && fabsf(f.v_e) < 0.5f && fabsf(f.v_d) < 0.5f);
+
+    /* NaN quat: same treatment. isfinite() on the norm gates it out. */
+    fresh_nav_with_anchor();
+    fake_quat[0] = 0.0f/0.0f;  /* NaN */
+    nav_predict();
+    for (int i = 0; i < 10; i++) {
+        now_ms += 100;
+        fake_accel_ms = now_ms;
+        nav_predict();
+    }
+    nav_get_fused(&f);
+    CHECK(fabsf(f.v_n) < 0.5f && fabsf(f.v_e) < 0.5f && fabsf(f.v_d) < 0.5f);
+    CHECK(f.v_d == f.v_d);       /* state must stay finite */
+}
+
+TEST(test_non_finite_gps_rejected)
+{
+    /* atof() parses "nan"/"inf" literally - a checksum-valid NMEA field
+     * containing either reaches nav as a real float, and one NaN into
+     * ekf_update_gps_position poisons the filter permanently. The nav
+     * boundary must reject non-finite fixes before they touch the EKF. */
+    fresh_nav_with_anchor();
+    fake_has_quat = true;
+    fake_quat[0] = 1; fake_quat[1] = 0; fake_quat[2] = 0; fake_quat[3] = 0;
+    fake_accel_ms = now_ms;
+
+    float nan_f = 0.0f/0.0f, inf_f = 1.0f/0.0f;
+    nav_update_from_gps(nan_f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    nav_update_from_gps(ANCHOR_LAT, inf_f, ANCHOR_ALT, 8, 1);
+    nav_update_from_gps(ANCHOR_LAT, ANCHOR_LON, -inf_f, 8, 1);
+
+    /* The EKF must still track honest fixes as if the garbage never came. */
+    NavFused_t f;
+    nav_get_fused(&f);
+    CHECK(f.valid == true);
+    CHECK(fabsf(f.lat_deg - ANCHOR_LAT) < 0.0001);
+    CHECK(fabsf(f.lon_deg - ANCHOR_LON) < 0.0001);
+    CHECK(f.lat_deg == f.lat_deg && f.alt_m == f.alt_m);  /* no NaN */
+    CHECK(nav_get_gps_rejects() == 0);                    /* gated, not NIS-counted */
+}
+
 TEST(test_innovation_gate_rejects_gps_glitch)
 {
     fresh_nav_with_anchor();
@@ -587,12 +674,15 @@ int main(void)
     run_test_anchor_candidate_expires();
     run_test_anchor_and_roundtrip();
     run_test_gps_updates_pull_position();
+    run_test_non_finite_gps_rejected();
     run_test_innovation_gate_rejects_gps_glitch();
     run_test_survives_random_gps_holes_and_glitches();
     run_test_innovation_gate_fails_open_when_imu_dead();
     run_test_rescue_fails_open_after_starvation();
     run_test_rescue_reanchors_when_far();
     run_test_predict_axis_mapping_enu_to_ned();
+    run_test_non_unit_quat_is_normalized();
+    run_test_degenerate_quat_coasts();
     run_test_rotated_quaternion();
     run_test_zero_dt_predict_is_noop();
     run_test_freshness_flags_age_out();
