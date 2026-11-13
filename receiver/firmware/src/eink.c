@@ -127,6 +127,10 @@ static void eink_hardware_reset(void)
 /** Power-up + full init + RAM windows (every refresh, like the reference). */
 static void eink_power_up(void)
 {
+  /* SPI1 is shared: an SD transaction may have left the bus at the
+   * negotiated /2 (~10 MHz), far past what the panel's ribbon tolerates.
+   * Re-pin the eInk's own clock every power-up instead of inheriting. */
+  eink_set_bus_speed();
   eink_hardware_reset();
   HAL_Delay(100);
   eink_wait_not_busy(EINK_BUSY_WAIT_TIMEOUT_MS);

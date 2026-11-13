@@ -476,8 +476,9 @@ uint8_t LoRa_ReadPacket(LoRa_Packet_t *packet) {
     uint8_t payload_length = buffer_status[0];
     uint8_t rx_start_ptr = buffer_status[1];
     
-    /* Read the packet */
-    if (payload_length > 0 && payload_length <= 256) {
+    /* Read the packet. No explicit upper bound needed: the length byte
+     * (max 255) always fits the 256-byte payload buffer. */
+    if (payload_length > 0) {
         if (LoRa_ReadBuffer(rx_start_ptr, packet->data, payload_length) == LORA_OK) {
             packet->length = payload_length;
             packet->crc_error = false;

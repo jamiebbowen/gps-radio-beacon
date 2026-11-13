@@ -877,6 +877,39 @@ TEST(test_timestamp_format)
 
 /* ------------------------------------------------------------------ */
 
+TEST(test_big_sync_burst_logged_once)
+{
+    /* A >500 ms lfs_file_sync leaves a forensic "SD sync burst Nms" event
+     * row so post-flight analysis can attribute main-loop stalls. Drive
+     * the duration by auto-advancing the tick across the sync window. */
+    wipe_card();
+    Test_SetTick(1000);
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+
+    GPS_Data beacon; memset(&beacon, 0, sizeof(beacon));
+    beacon.latitude = 39.9f; beacon.longitude = -105.1f;
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 0.1f, 1.0f, 0.0f,
+                                0.0f, 0.0f, -90, 5) == SD_CARD_OK);
+    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    CHECK(sd_dirty == 0);
+
+    /* Dirty a row, then force the sync; every HAL_GetTick call inside
+     * ServiceSync advances 600 ms so the measured window exceeds 500. */
+    Test_SetTick(5000);
+    CHECK(SD_Card_LogNavigation(&beacon, NULL, 0.2f, 2.0f, 0.0f,
+                                0.0f, 0.0f, -90, 5) == SD_CARD_OK);
+    sd_dirty_rows = SD_SYNC_ROW_CAP;            /* force, don't wait idle */
+    Test_SetTickAutoAdvance(600);
+    SD_Card_ServiceSync(0);
+    Test_SetTickAutoAdvance(0);
+
+    /* The burst event was queued as a row; flush and look for it. */
+    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    char big[4096];
+    CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
+    CHECK(strstr(big, "SD sync burst") != NULL);
+}
+
 int main(void)
 {
     Test_SetTick(1000);
@@ -902,6 +935,7 @@ int main(void)
     run_test_io_error_streak_steps_bus_down();
     run_test_io_stepup_requires_streak_and_cooldown();
     run_test_timestamp_format();
+    run_test_big_sync_burst_logged_once();
 
     return TEST_SUMMARY();
 }

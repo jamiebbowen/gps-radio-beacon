@@ -118,8 +118,12 @@
 
 /* Master switch. When 1, the beacon transmits PACKET_TYPE_FUSED packets in
  * addition to PACKET_TYPE_GPS. When 0, the EKF still runs (so residuals can
- * be logged to Serial for tuning) but no fused packets go over the air. */
+ * be logged to Serial for tuning) but no fused packets go over the air.
+ * #ifndef-wrapped so the host test Makefile can build the =0 configuration
+ * and catch code paths that only compile when fusion is off. */
+#ifndef IMU_FUSION_ENABLED
 #define IMU_FUSION_ENABLED              1
+#endif
 
 /* When 1, print GPS measurement innovation and fused state to Serial after
  * every EKF update. Useful for σ tuning from recorded bench or flight data. */

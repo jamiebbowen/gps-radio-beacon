@@ -31,7 +31,7 @@ SPIClass SPI;
 
 static unsigned long now_ms = 0;
 unsigned long millis(void) { return now_ms; }
-void delay(unsigned long ms) { (void)ms; }
+void delay(unsigned long ms) { now_ms += ms; }  /* poll_rx bounds its window on this clock */
 void delayMicroseconds(unsigned int us) { (void)us; }
 
 /* GPIO: jumper pin + BUSY pin are scriptable; RF switch pins are tracked */
@@ -93,6 +93,10 @@ static void reset_knobs(void)
     radiolib_current_limit = 0;
     radiolib_set_cl_result = RADIOLIB_ERR_NONE;
     radiolib_time_on_air_us = 1118000;
+    radiolib_start_receive_result = RADIOLIB_ERR_NONE;
+    radiolib_irq_flags = 0;
+    radiolib_rx_len = 0;
+    memset(radiolib_rx_buf, 0, sizeof(radiolib_rx_buf));
     jumper_level = HIGH;
     busy_level = LOW;
     txen_level = -1;
@@ -332,6 +336,107 @@ TEST(test_airtime_sanity_report)
     radiolib_time_on_air_us = 1118000;
 }
 
+/* ------------------------------------------------------------------ */
+/* radio_poll_rx: the command listen window                            */
+/* ------------------------------------------------------------------ */
+
+TEST(test_poll_rx_guards)
+{
+    reset_knobs();
+    radio_init();
+    radio_enabled = true;
+    uint8_t buf[32];
+
+    radio_initialized = false;
+    CHECK(radio_poll_rx(buf, sizeof(buf), 50) == 0);
+    radio_initialized = true;
+    CHECK(radio_poll_rx(NULL, sizeof(buf), 50) == 0);
+    CHECK(radio_poll_rx(buf, 0, 50) == 0);
+
+    /* startReceive failure: returns -state (positive when state<0) */
+    radiolib_start_receive_result = -2;
+    CHECK(radio_poll_rx(buf, sizeof(buf), 50) == 2);
+    radiolib_start_receive_result = RADIOLIB_ERR_NONE;
+}
+
+TEST(test_poll_rx_captures_packet_and_switches_rx)
+{
+    reset_knobs();
+    radio_init();
+    radio_enabled = false;                     /* poll must self-enable */
+    const uint8_t cmd[5] = {0x07, 0x2A, 0x01, 0x00, 0x99};
+    memcpy(radiolib_rx_buf, cmd, sizeof(cmd));
+    radiolib_rx_len = sizeof(cmd);
+    radiolib_irq_flags = RADIOLIB_SX126X_IRQ_RX_DONE;
+
+    uint8_t buf[32];
+    int standby_before = radiolib_standby_calls;
+    int n = radio_poll_rx(buf, sizeof(buf), 50);
+    CHECK(n == 5);
+    CHECK(memcmp(buf, cmd, 5) == 0);
+    CHECK(radiolib_standby_calls == standby_before + 1);
+    CHECK(rxen_level == HIGH);                 /* antenna on LNA side */
+    CHECK(txen_level == LOW);
+}
+
+TEST(test_poll_rx_crc_error_and_timeout_paths)
+{
+    reset_knobs();
+    radio_init();
+    radio_enabled = true;
+    uint8_t buf[32];
+    int standby_before;
+
+    /* CRC-corrupt frame is dropped quietly, still standby'd */
+    radiolib_rx_len = 4;
+    radiolib_irq_flags = RADIOLIB_SX126X_IRQ_RX_DONE | RADIOLIB_SX126X_IRQ_CRC_ERR;
+    standby_before = radiolib_standby_calls;
+    CHECK(radio_poll_rx(buf, sizeof(buf), 50) == 0);
+    CHECK(radiolib_standby_calls == standby_before + 1);
+
+    /* Radio-signal timeout IRQ ends the listen window immediately */
+    radiolib_irq_flags = RADIOLIB_SX126X_IRQ_TIMEOUT;
+    standby_before = radiolib_standby_calls;
+    CHECK(radio_poll_rx(buf, sizeof(buf), 50) == 0);
+    CHECK(radiolib_standby_calls == standby_before + 1);
+
+    /* Dead air: no IRQ ever arrives; the ms deadline must close the window */
+    radiolib_irq_flags = 0;
+    CHECK(radio_poll_rx(buf, sizeof(buf), 20) == 0);
+}
+
+TEST(test_poll_rx_truncates_oversized_packet)
+{
+    reset_knobs();
+    radio_init();
+    radio_enabled = true;
+    memset(radiolib_rx_buf, 0xAB, 200);
+    radiolib_rx_len = 200;
+    radiolib_irq_flags = RADIOLIB_SX126X_IRQ_RX_DONE;
+
+    uint8_t buf[16];
+    int n = radio_poll_rx(buf, sizeof(buf), 50);
+    CHECK(n == (int)sizeof(buf));              /* truncated to fit */
+    CHECK(buf[0] == 0xAB && buf[15] == 0xAB);
+}
+
+TEST(test_transmit_ack_frame)
+{
+    reset_knobs();
+    radio_init();
+    radio_enabled = true;
+
+    CHECK(radio_transmit_ack(0x2A, 0x01, 0x12, 0x34, 0x56) == RADIOLIB_ERR_NONE);
+    CHECK(radiolib_transmit_calls == 1);
+    CHECK(radiolib_last_tx_len == 6);
+    CHECK(radiolib_last_tx[0] == 0x09);        /* PACKET_TYPE_ACK */
+    CHECK(radiolib_last_tx[1] == 0x2A);
+    CHECK(radiolib_last_tx[2] == 0x01);
+    CHECK(radiolib_last_tx[3] == 0x12);
+    CHECK(radiolib_last_tx[4] == 0x34);
+    CHECK(radiolib_last_tx[5] == 0x56);
+}
+
 int main(void)
 {
     run_test_init_primary_channel();
@@ -345,6 +450,11 @@ int main(void)
     run_test_tx_failure_streak_forces_reinit();
     run_test_dead_radio_keeps_retrying_reinit();
     run_test_airtime_sanity_report();
+    run_test_poll_rx_guards();
+    run_test_poll_rx_captures_packet_and_switches_rx();
+    run_test_poll_rx_crc_error_and_timeout_paths();
+    run_test_poll_rx_truncates_oversized_packet();
+    run_test_transmit_ack_frame();
 
     return TEST_SUMMARY();
 }

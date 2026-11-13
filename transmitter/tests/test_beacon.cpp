@@ -59,16 +59,34 @@ static uint8_t  fake_channel    = 2;
 void radio_enable(void)  { radio_enables++; }
 void radio_disable(void) { radio_disables++; }
 uint8_t radio_get_channel(void) { return fake_channel; }
-bool radio_is_transmitting(void) { return false; }
+
+/* Two-way command channel knobs: script the inbound frame, spy on the
+ * ACK fields the beacon answers with. */
+static uint8_t  fake_tx_active  = 0;
+static uint8_t  fake_rx_pkt[32];
+static int      fake_rx_len     = 0;
+static int      rx_polls        = 0;
+static uint16_t rx_last_window  = 0;
+static int      ack_calls       = 0;
+static uint8_t  ack_rocket, ack_cmd, ack_hi, ack_lo, ack_echo;
+
+bool radio_is_transmitting(void) { return fake_tx_active; }
 int  radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms)
 {
-    (void)out; (void)max_len; (void)timeout_ms;
-    return 0;   /* always nothing on the wire in this harness */
+    rx_polls++;
+    rx_last_window = timeout_ms;
+    if (fake_rx_len <= 0) return 0;
+    size_t n = (size_t)fake_rx_len;
+    if (n > max_len) n = max_len;
+    memcpy(out, fake_rx_pkt, n);
+    return (int)n;
 }
 int  radio_transmit_ack(uint8_t rocket_id, uint8_t cmd_code,
                         uint8_t seq_hi, uint8_t seq_lo, uint8_t echo)
 {
-    (void)rocket_id; (void)cmd_code; (void)seq_hi; (void)seq_lo; (void)echo;
+    ack_calls++;
+    ack_rocket = rocket_id; ack_cmd = cmd_code;
+    ack_hi = seq_hi; ack_lo = seq_lo; ack_echo = echo;
     return 0;
 }
 
@@ -150,6 +168,11 @@ static void reset_tx(void)
     tx_result = 0;
     radio_enables = 0;
     radio_disables = 0;
+    fake_tx_active = 0;
+    fake_rx_len = 0;
+    rx_polls = 0;
+    rx_last_window = 0;
+    ack_calls = 0;
     Serial.log_len = 0;
     Serial.log[0] = '\0';
 }
@@ -902,6 +925,109 @@ TEST(test_fused_hexdump_cadence_and_tx_failure)
 
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* beacon_poll_commands: two-way command channel in the cadence gaps   */
+/* ------------------------------------------------------------------ */
+
+TEST(test_poll_commands_skips_when_busy_or_flying)
+{
+    reset_tx();
+    /* A pending inbound command is deliberately staged - it must NOT be
+     * serviced while airborne or mid-transmit. */
+    uint8_t ping[6] = { PACKET_TYPE_CMD, (uint8_t)ROCKET_ID, CMD_PING, 1, 2, 0x77 };
+    memcpy(fake_rx_pkt, ping, 6); fake_rx_len = 6;
+
+    beacon_poll_commands(1);            /* in flight: never listens */
+    CHECK(rx_polls == 0);
+    CHECK(ack_calls == 0);
+
+    fake_tx_active = 1;
+    beacon_poll_commands(0);            /* our own TX in flight: skip */
+    CHECK(rx_polls == 0);
+    CHECK(ack_calls == 0);
+}
+
+TEST(test_poll_commands_ping_ack_echo)
+{
+    reset_tx();
+    uint8_t ping[6] = { PACKET_TYPE_CMD, (uint8_t)ROCKET_ID, CMD_PING, 0x12, 0x34, 0x77 };
+    memcpy(fake_rx_pkt, ping, 6); fake_rx_len = 6;
+
+    beacon_poll_commands(0);
+    CHECK(rx_polls == 1);
+    CHECK(rx_last_window == 40);        /* bounded 40 ms listen */
+    CHECK(ack_calls == 1);
+    CHECK(ack_rocket == (uint8_t)ROCKET_ID);
+    CHECK(ack_cmd   == CMD_PING);
+    CHECK(ack_hi    == 0x12);
+    CHECK(ack_lo    == 0x34);
+    CHECK(ack_echo  == 0x77);           /* PING echoes back byte 5 */
+    CHECK(strstr(Serial.log, "CMD answered") != NULL);
+}
+
+TEST(test_poll_commands_unsupported_and_unknown_echo)
+{
+    reset_tx();
+    /* TUNE_NEXT_CH: beacon channels are jumper-set, so the RX must learn
+     * "unsupported" (0xFF) rather than silently succeeding. */
+    uint8_t tune[6] = { PACKET_TYPE_CMD, (uint8_t)ROCKET_ID, CMD_TUNE_NEXT_CH, 0, 1, 0 };
+    memcpy(fake_rx_pkt, tune, 6); fake_rx_len = 6;
+    beacon_poll_commands(0);
+    CHECK(ack_calls == 1);
+    CHECK(ack_cmd == CMD_TUNE_NEXT_CH);
+    CHECK(ack_echo == 0xFF);
+
+    /* Unknown opcode answers 0xFE so the RX can tell apart
+     * "heard but meaningless" from radio silence. */
+    uint8_t unk[6] = { PACKET_TYPE_CMD, (uint8_t)ROCKET_ID, 0xEE, 0xAA, 0xBB, 0 };
+    memcpy(fake_rx_pkt, unk, 6);
+    beacon_poll_commands(0);
+    CHECK(ack_calls == 2);
+    CHECK(ack_cmd == 0xEE);
+    CHECK(ack_echo == 0xFE);
+    CHECK(ack_hi == 0xAA && ack_lo == 0xBB);
+}
+
+TEST(test_poll_commands_ignores_other_packets)
+{
+    reset_tx();
+    /* Wrong packet type: telemetry echoing back is not a command */
+    uint8_t wrong_type[6] = { 0x42, (uint8_t)ROCKET_ID, CMD_PING, 0, 0, 0x55 };
+    memcpy(fake_rx_pkt, wrong_type, 6); fake_rx_len = 6;
+    beacon_poll_commands(0);
+    CHECK(ack_calls == 0);
+
+    /* Another rocket's command: binding must hold on the uplink too */
+    uint8_t other_rocket[6] = { PACKET_TYPE_CMD, (uint8_t)(ROCKET_ID + 1), CMD_PING, 0, 0, 0x55 };
+    memcpy(fake_rx_pkt, other_rocket, 6);
+    beacon_poll_commands(0);
+    CHECK(ack_calls == 0);
+
+    /* Runt frame shorter than a command packet: ignored */
+    uint8_t runt[3] = { PACKET_TYPE_CMD, (uint8_t)ROCKET_ID, CMD_PING };
+    memcpy(fake_rx_pkt, runt, 3); fake_rx_len = 3;
+    beacon_poll_commands(0);
+    CHECK(ack_calls == 0);
+
+    /* Empty listen window: still no ACK */
+    fake_rx_len = 0;
+    beacon_poll_commands(0);
+    CHECK(ack_calls == 0);
+}
+
+TEST(test_slow_path_powers_radio_up_and_down)
+{
+    /* transmit_fast=0 exists for pre-launch cadence windows: the radio is
+     * duty-cycled around each packet. These paths had no coverage. */
+    reset_tx();
+    CHECK(beacon_transmit_flight_event(FLIGHT_EVENT_APOGEE, 100, 5, 0) == 1);
+    CHECK(radio_enables == 1 && radio_disables == 1);
+
+    reset_tx();
+    CHECK(beacon_transmit_maxima(0, 0) == 1);
+    CHECK(radio_enables == 1 && radio_disables == 1);
+}
+
 int main(void)
 {
     run_test_ascii_full_packet();
@@ -935,6 +1061,12 @@ int main(void)
     run_test_airlink_golden_gps_encode();
     run_test_airlink_golden_fused_encode();
     run_test_fused_hexdump_cadence_and_tx_failure();
+    run_test_poll_commands_skips_when_busy_or_flying();
+    run_test_poll_commands_ping_ack_echo();
+    run_test_poll_commands_unsupported_and_unknown_echo();
+    run_test_poll_commands_ignores_other_packets();
+    run_test_slow_path_powers_radio_up_and_down();
 
     return TEST_SUMMARY();
 }
+

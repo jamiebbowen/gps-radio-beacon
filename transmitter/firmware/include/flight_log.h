@@ -32,10 +32,18 @@
  *   9 fused        lat/lon/alt + vn/ve/vd + flags (EKF snapshot taken
  *                  while GPS is stale - the only position data the
  *                  beacon has during a fix hole)
+ *  10 state        flight-state marker on the RESERVED last 8KB row:
+ *                  code 1=FLYING (written at arm), 2=LANDED (landing
+ *                  latch). This is the mid-flight reboot-resume evidence:
+ *                  a boot that finds the marker still FLYING knows the
+ *                  chip reset in mid-air and calls flight_log_resume()
+ *                  instead of erasing the surviving log.
  *
- * Erase policy: full-region erase at next launch. The space spans twelve
- * 16KB erase rows; that takes NVMCTL row-erase time per row (~20 ms each,
- * ~250 ms total), which happens once at T0 - on the pad the PAYOFF is
+ * Erase policy: full-region erase at next launch, INCLUDING the marker
+ * row (the arm then rewrites it FLYING). Normal records append only into
+ * the first FLOG_BYTES-8KB so a full data region can never clobber the
+ * marker. The erase takes NVMCTL row-erase time per row (~20 ms each,
+ * ~500 ms total), which happens once at T0 - on the pad the PAYOFF is
  * worth it. In flight the writes append with a 512B page commit; if power
  * dies mid-page, only that page is lost.
  */
@@ -47,6 +55,17 @@ void flight_log_init(void);
 void flight_log_arm(void);
 uint8_t flight_log_armed(void);
 uint8_t flight_log_busy(void);          /* erase in progress */
+
+/** Nonzero when the state row still says FLYING - i.e. the previous run
+ *  was airborne when the chip reset. Checked at boot before arming. */
+uint8_t flight_log_prev_flying(void);
+/** Mid-flight reboot-resume: restores the append point by scanning for
+ *  the first uncommitted page and re-arms WITHOUT erasing prior records.
+ *  Returns nonzero when it resumed (marker was FLYING). */
+uint8_t flight_log_resume(void);
+/** Rewrites the state marker LANDED at the landing latch so the next
+ *  boot reads it as a power-on, not a mid-flight reset. */
+void flight_log_mark_landed(void);
 
 /** Raw IMU sample: centi-g and centi-deg/s, same units as the IMU packet. */
 void flight_log_imu(uint32_t ms,

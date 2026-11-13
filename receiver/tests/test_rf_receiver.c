@@ -1335,7 +1335,6 @@ TEST(test_diagnostics_getters)
     /* Deprecated UART-era shims: fixed answers, no side effects */
     RF_Receiver_SetBaudFudgeFactor(1234);
     CHECK(RF_Receiver_GetBaudFudgeFactor() == RF_BAUD_FUDGE_FACTOR_DEFAULT);
-    RF_Receiver_OutputCalibrationSignal(10);
 
     uint32_t irqs = 1; uint32_t pkts = 0; uint32_t dups = 1;
     RF_Receiver_GetPacketLossDiagnostics(&irqs, &pkts, &dups);
@@ -1377,6 +1376,41 @@ TEST(test_radio_wedge_rx_recovery)
     run_for(1000, 200);
     CHECK(rf_wedges_recovered == wedges_now);
     CHECK(RF_Receiver_GetWedgesRecovered() == rf_wedges_recovered);
+
+    /* A closed deaf window is reported exactly once, NULL-safe */
+    uint32_t cnt = 0, last_ms = 0, total_ms = 0;
+    CHECK(RF_Receiver_TakeWedgeReport(&cnt, &last_ms, &total_ms) == 1);
+    CHECK(cnt == rf_wedges_recovered);
+    CHECK(last_ms > 0);
+    CHECK(total_ms >= last_ms);
+    CHECK(RF_Receiver_TakeWedgeReport(&cnt, &last_ms, &total_ms) == 0);  /* consumed */
+}
+
+TEST(test_live_noise_floor_min_samples_and_min_pick)
+{
+    /* Below the 5-sample minimum the estimate refuses to report */
+    fake_mode = 5;
+    live_nf_count = 0;
+    live_nf_idx = 0;
+    int16_t nf = 0;
+    CHECK(RF_Receiver_GetLiveNoiseFloor(&nf) == 0);
+    CHECK(RF_Receiver_GetLiveNoiseFloor(NULL) == 0);
+
+    /* Seed the window directly: the reported floor is the MINIMUM across
+     * samples (the quietest instant), not the mean. */
+    int16_t seed[6] = {-110, -95, -118, -102, -108, -97};
+    for (uint8_t i = 0; i < 6; i++) live_nf_samples[i] = seed[i];
+    live_nf_count = 6;
+    CHECK(RF_Receiver_GetLiveNoiseFloor(&nf) == 1);
+    CHECK(nf == -118);
+
+    /* And via the real sampling path: 1 Hz while mode==RX */
+    live_nf_count = 0;
+    live_nf_idx = 0;
+    fake_rssi_inst = -105;
+    run_for(6000, 250);
+    CHECK(RF_Receiver_GetLiveNoiseFloor(&nf) == 1);
+    CHECK(nf == -105);
 }
 
 TEST(test_auto_rescan_after_prolonged_silence)
@@ -2238,6 +2272,7 @@ int main(void)
     run_test_noise_sweep_median_rejects_spike();
     run_test_noise_sweep_null_guard();
     run_test_diagnostics_getters();
+    run_test_live_noise_floor_min_samples_and_min_pick();
     run_test_auto_rescan_after_prolonged_silence();
     run_test_foreign_beacon_filter();
     run_test_foreign_chatter_does_not_suppress_auto_rescan();

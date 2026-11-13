@@ -112,6 +112,17 @@ public:
     void println()                    { append("\n"); }
     template <typename T> void println(T v)        { print(v); append("\n"); }
     template <typename T> void println(T v, int m) { print(v, m); append("\n"); }
+
+    /* USB RX queue for the command channel ('DUMP' etc.). The device
+     * reads USB CDC via Serial.available()/read(); tests inject bytes. */
+    uint8_t rx[256];
+    size_t  rx_head = 0, rx_tail = 0;
+    int  available() { return (int)(rx_tail - rx_head); }
+    int  read() {
+        if (rx_head == rx_tail) return -1;
+        return rx[rx_head++ % sizeof(rx)];
+    }
+    void inject(const char *s) { while (*s) rx[rx_tail++ % sizeof(rx)] = (uint8_t)*s++; }
 };
 
 extern FakeSerial Serial;

@@ -133,6 +133,52 @@ TEST(test_coord_conversion_precision) {
 }
 
 /* ------------------------------------------------------------------ */
+/* nmea_checksum_ok                                                    */
+/* ------------------------------------------------------------------ */
+
+TEST(test_checksum_valid_accepted) {
+    /* Real on-wire sentences with genuine checksums (recomputed) */
+    CHECK(nmea_checksum_ok(
+        "$GPGGA,123519,3953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*66") == 1);
+    CHECK(nmea_checksum_ok(
+        "$GNRMC,123519,A,3954.00000,N,10454.00000,W,022.4,084.4,230394,,*10") == 1);
+}
+
+TEST(test_checksum_rejects_corruption) {
+    /* One flipped payload digit: the classic "silent position shift" */
+    CHECK(nmea_checksum_ok(
+        "$GPGGA,123519,3953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*67") == 0);
+    /* One corrupted body byte, original checksum kept */
+    CHECK(nmea_checksum_ok(
+        "$GPGGA,123519,4953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*66") == 0);
+}
+
+TEST(test_checksum_rejects_missing_or_malformed) {
+    /* No '*' at all: truncated/corrupt - NMEA requires the checksum */
+    CHECK(nmea_checksum_ok("$GPGGA,123519,3953.40284,N,10453.11007,W") == 0);
+    /* '*' present but no hex digits */
+    CHECK(nmea_checksum_ok("$GPGGA,123519*") == 0);
+    CHECK(nmea_checksum_ok("$GPGGA,123519*G") == 0);
+    CHECK(nmea_checksum_ok("$GPGGA,123519*ZZ") == 0);
+    /* Not an NMEA sentence */
+    CHECK(nmea_checksum_ok(NULL) == 0);
+    CHECK(nmea_checksum_ok("") == 0);
+    CHECK(nmea_checksum_ok("GPGGA,123519*66") == 0);  /* missing '$' */
+}
+
+TEST(test_checksum_crlf_and_case) {
+    /* Compute a real checksum inline so the fixture can't rot */
+    const char *body = "GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M";
+    uint8_t ck = 0;
+    for (const char *p = body; *p; p++) ck ^= (uint8_t)*p;
+    char s[96];
+    snprintf(s, sizeof(s), "$%s*%02X\r\n", body, ck);
+    CHECK(nmea_checksum_ok(s) == 1);
+    snprintf(s, sizeof(s), "$%s*%02x\r\n", body, ck);  /* lowercase hex ok */
+    CHECK(nmea_checksum_ok(s) == 1);
+}
+
+/* ------------------------------------------------------------------ */
 
 int main(void) {
     run_test_field_extraction_by_position();
@@ -143,6 +189,10 @@ int main(void) {
     run_test_coord_conversion();
     run_test_coord_conversion_edge_cases();
     run_test_coord_conversion_precision();
+    run_test_checksum_valid_accepted();
+    run_test_checksum_rejects_corruption();
+    run_test_checksum_rejects_missing_or_malformed();
+    run_test_checksum_crlf_and_case();
 
     return TEST_SUMMARY();
 }

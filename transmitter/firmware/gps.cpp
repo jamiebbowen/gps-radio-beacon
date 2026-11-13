@@ -34,6 +34,7 @@ static uint32_t gps_last_byte_ms = 0;      // last UART byte received
 static uint32_t gps_last_fix_ms  = 0;      // last accepted lat/lon commit
 static uint32_t gps_last_sentence_ms = 0;  // last recognizable GGA/RMC
 static uint8_t  gps_recovery_attempts = 0; // watchdog resets issued
+static uint32_t gps_checksum_errors = 0;   // sentences dropped on *XX mismatch
 
 /* Grace periods before declaring a fault. The module emits NMEA in 1 Hz
  * bursts, so multi-second silence is already abnormal; kept well below the
@@ -196,9 +197,13 @@ uint32_t gps_get_fix_age_ms(void) {
     return millis() - gps_last_fix_ms;
 }
 
+uint32_t gps_get_checksum_errors(void) {
+    return gps_checksum_errors;
+}
+
 // Poll for GPS data and extract lat/lon using buffer-based approach
 // Returns number of bytes processed, 0 if none
-uint8_t gps_poll_rx(void) {
+uint16_t gps_poll_rx(void) {
     uint16_t bytes_processed = 0;
     static char nmea_buffer[84]; // NMEA spec: max 80 characters per sentence plus a few extra
     static char lat_buffer[12] = {0};
@@ -274,9 +279,13 @@ uint8_t gps_poll_rx(void) {
         // the factory-defaults variant ($PUBX,04,0,0,0,...) here: it
         // reverts UART1 to 9600 baud and we talk at 115200 - recovery
         // would permanently deafen the link it was meant to restore.
-        uart_tx_string("$PUBX,00*33\r\n");  // u-blox poll request
+        /* Route through gps_send_pubx so the checksum is computed, not
+         * recalled: the hardcoded *12 suffix this line used to send was
+         * wrong (*29), and a checksummed-out command is silently ignored
+         * by the module - the "recovery" was a no-op since introduction. */
+        gps_send_pubx("PUBX,00");            // u-blox poll request
         delay(100);
-        uart_tx_string("$PUBX,04,0,0,2,0,0*12\r\n");  // u-blox cold start
+        gps_send_pubx("PUBX,04,0,0,2,0,0");  // u-blox cold start
         delay(500);
         
         // Reinitialize GPS
@@ -293,7 +302,7 @@ uint8_t gps_poll_rx(void) {
         gps_recovery_attempts++;
         
         // Recovery: Cold restart GPS
-        uart_tx_string("$PUBX,04,0,0,2,0,0*12\r\n");  // u-blox controlled software reset (cold start)
+        gps_send_pubx("PUBX,04,0,0,2,0,0");  // u-blox controlled software reset (cold start)
         delay(1000);
         
         // Reinitialize GPS
@@ -436,7 +445,18 @@ next_sentence:
             Serial.println();
             last_sentence_debug = millis();
         }
-        
+
+        /* Integrity gate FIRST: NMEA-0183 requires the *XX XOR checksum on
+         * every sentence, so a missing or mismatched one means the bytes
+         * were corrupted on the wire. A single flipped digit in a latitude
+         * field silently shifts the reported position hundreds of meters -
+         * far worse than dropping one 1 Hz update. (The receiver's parser
+         * has always done this; the beacon now matches.) */
+        if (!nmea_checksum_ok(nmea_buffer)) {
+            gps_checksum_errors++;
+            goto next_sentence;
+        }
+
         // Check if this is a GGA or RMC sentence (support both GP and GN prefixes)
         if (strncmp(nmea_buffer, "$GNGGA", 6) == 0 || 
                  strncmp(nmea_buffer, "$GNRMC", 6) == 0 ||

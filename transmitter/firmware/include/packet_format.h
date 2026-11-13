@@ -265,13 +265,16 @@ typedef struct __attribute__((packed)) {
 #define CMD_PING              0x01
 #define CMD_TUNE_NEXT_CH      0x02
 
-// Helper macros for encoding/decoding
-#define GPS_COORD_SCALE         10000000.0f  // Scale factor for lat/lon (10^7)
+// Helper macros for encoding/decoding. Double math, not float: the
+// int32 products run ~4e8 counts - beyond float32's 24-bit mantissa, so
+// float encode rounded up to ~16 counts (~1.6e-5 deg) off the true value.
+// RX decodes in double; the TX must scale in double to be symmetric.
+#define GPS_COORD_SCALE         10000000.0  // Scale factor for lat/lon (10^7)
 
 // Convert decimal degrees to encoded integer
 #define ENCODE_COORD(deg)       ((int32_t)((deg) * GPS_COORD_SCALE))
 
 // Convert encoded integer back to decimal degrees
-#define DECODE_COORD(val)       ((float)(val) / GPS_COORD_SCALE)
+#define DECODE_COORD(val)       ((double)(val) / GPS_COORD_SCALE)
 
 #endif // _PACKET_FORMAT_H_

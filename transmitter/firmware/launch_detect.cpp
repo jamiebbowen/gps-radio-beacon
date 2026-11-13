@@ -40,7 +40,11 @@ static volatile uint32_t last_rotvec_ms = 0;
 
 /* GPS-altitude launch fallback state (see launch_detect_gps_fallback_update) */
 static bool     gf_baseline_set = false;
+static bool     gf_armed = false;
 static float    gf_baseline_alt = 0.0f;
+static uint8_t  gf_fix_samples = 0;
+static uint32_t gf_first_fix_s = 0;
+static uint32_t gf_last_fix_s = 0;
 static uint8_t  gf_climb_samples = 0;
 
 /* Landing detection state (see landing_detect_update) */
@@ -128,6 +132,8 @@ void launch_detect_init(void) {
     detection_start_time_ms = 0;
     launch_detected = false;
     gf_baseline_set = false;
+    gf_armed = false;
+    gf_fix_samples = 0;
     gf_climb_samples = 0;
     landed = false;
     land_window_start_s = 0;
@@ -267,14 +273,52 @@ uint32_t imu_last_rotvec_ms(void) { return last_rotvec_ms; }
  * as the IMU path would (same state + one-shot edge), so a dead IMU no
  * longer pins the beacon at pad cadence for the whole flight.
  * Returns true on the sample that confirms launch.
+ *
+ * Baseline = running maximum of every valid fix the pad ever reports.
+ * The first fix used to freeze the baseline instantly: GPS cold-start
+ * fixes are often tens of meters LOW for several seconds, so when the
+ * error decayed the recovery "climb" exceeded +50 m for 3+ samples and
+ * confirmed a launch that never happened. Two guards now prevent that:
+ *  - SETTLE: the climb test stays disarmed until the fix stream has run
+ *    LAUNCH_GPS_BASELINE_SETTLE_S seconds with enough samples; during
+ *    settle the baseline just tracks the max, absorbing the correction.
+ *  - RATCHET: after arming, a non-triggering sample still raises the
+ *    baseline, so slow pad drift can never accumulate into a fake climb
+ *    (a real launch climbs far faster than drift can lift the max).
+ * A fix outage longer than the settle window re-enters settle - a
+ * re-acquired fix gets the same cold-start transient treatment.
  */
 bool launch_detect_gps_fallback_update(float alt_m, uint32_t system_time_seconds) {
     if (current_state == LAUNCH_STATE_CONFIRMED) return false;  /* already flying */
 
     if (!gf_baseline_set) {
-        gf_baseline_alt = alt_m;   /* pad altitude baseline */
+        gf_baseline_alt = alt_m;   /* first seed for the max-tracked baseline */
         gf_baseline_set = true;
+        gf_first_fix_s = system_time_seconds;
+        gf_last_fix_s  = system_time_seconds;
+        gf_fix_samples = 1;
         gf_climb_samples = 0;
+        return false;
+    }
+
+    /* Long outage: the re-acquired stream is a fresh cold start. Stay
+     * conservative - keep the max baseline but disarm the climb test for
+     * another settle window. */
+    if (gf_armed &&
+        (system_time_seconds - gf_last_fix_s) > LAUNCH_GPS_BASELINE_SETTLE_S) {
+        gf_armed = false;
+        gf_first_fix_s = system_time_seconds;
+        gf_fix_samples = 0;
+    }
+    gf_last_fix_s = system_time_seconds;
+    gf_fix_samples++;
+
+    if (!gf_armed) {
+        if (alt_m > gf_baseline_alt) gf_baseline_alt = alt_m;   /* max track */
+        if ((system_time_seconds - gf_first_fix_s) >= LAUNCH_GPS_BASELINE_SETTLE_S &&
+            gf_fix_samples >= LAUNCH_GPS_BASELINE_MIN_FIXES) {
+            gf_armed = true;
+        }
         return false;
     }
 
@@ -290,6 +334,10 @@ bool launch_detect_gps_fallback_update(float alt_m, uint32_t system_time_seconds
         }
     } else {
         gf_climb_samples = 0;
+        /* Non-triggering max still raises the baseline: slow pad drift
+         * (thermal, multipath wander) is absorbed instead of accumulating
+         * toward the +50 m threshold. */
+        if (alt_m > gf_baseline_alt) gf_baseline_alt = alt_m;
     }
     return false;
 }
@@ -362,6 +410,17 @@ bool launch_detect_is_launched(void) {
         return true;
     }
     return false;
+}
+
+void launch_detect_force_confirmed(uint32_t system_time_seconds) {
+    /* CONFIRMED with NO edge: is_launched() must not fire, or firmware.ino
+     * would re-run the launch block and erase the resumed flight log.
+     * launch_time_seconds anchors t_since_launch at the resume moment -
+     * the true T0 is lost with the reboot, but event pacing only needs a
+     * consistent reference. */
+    current_state = LAUNCH_STATE_CONFIRMED;
+    launch_time_seconds = system_time_seconds;
+    launch_detected = false;
 }
 
 /**

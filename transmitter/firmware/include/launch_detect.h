@@ -27,6 +27,15 @@ void launch_detect_update(uint32_t system_time_seconds, uint32_t ms_counter);
  */
 bool launch_detect_is_launched(void);
 
+/**
+ * Force the state machine into CONFIRMED WITHOUT the one-shot edge.
+ * Used by the mid-flight reboot-resume path: the previous boot already
+ * ran the launch transition (T0 packet, flight-log arm); re-firing the
+ * edge would erase the surviving log. Also handy in tests that need a
+ * flying beacon without scripting a boost.
+ */
+void launch_detect_force_confirmed(uint32_t system_time_seconds);
+
 /** Level query: current launch detection state (never auto-clears). */
 launch_state_t launch_detect_get_state(void);
 

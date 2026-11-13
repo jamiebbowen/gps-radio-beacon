@@ -61,3 +61,33 @@ float nmea_coord_to_decimal(const char *nmea_coord, char direction) {
 
     return (float)decimal;
 }
+
+static int hex_val(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
+int nmea_checksum_ok(const char *sentence) {
+    if (sentence == NULL || sentence[0] != '$') {
+        return 0;
+    }
+
+    /* XOR of all bytes between '$' and '*' */
+    uint8_t cksum = 0;
+    const char *p = sentence + 1;
+    while (*p && *p != '*' && *p != '\r' && *p != '\n') {
+        cksum ^= (uint8_t)*p++;
+    }
+    if (*p != '*') {
+        return 0;  /* no checksum field: truncated or corrupt */
+    }
+
+    int hi = hex_val(p[1]);
+    int lo = hex_val(p[2]);
+    if (hi < 0 || lo < 0) {
+        return 0;
+    }
+    return (uint8_t)((hi << 4) | lo) == cksum;
+}

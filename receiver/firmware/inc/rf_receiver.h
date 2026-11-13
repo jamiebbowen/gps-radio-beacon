@@ -164,7 +164,6 @@ uint8_t RF_Receiver_ScanUpdate(void);   /* Poll from main loop; 1 = just locked 
 /* Timing calibration functions */
 void RF_Receiver_SetBaudFudgeFactor(uint16_t fudge_factor);
 uint16_t RF_Receiver_GetBaudFudgeFactor(void);
-void RF_Receiver_OutputCalibrationSignal(uint32_t duration_ms);
 
 /* Signal quality and data age functions */
 void RF_Receiver_GetSignalQuality(int16_t *rssi, int8_t *snr);

@@ -910,17 +910,6 @@ uint16_t RF_Receiver_GetBaudFudgeFactor(void)
 }
 
 /**
- * @brief Output a calibration signal on the UART TX pin (deprecated for LoRa)
- * @param duration_ms Duration to output the signal in milliseconds
- * @retval None
- */
-void RF_Receiver_OutputCalibrationSignal(uint32_t duration_ms)
-{
-  /* Not applicable for LoRa - function kept for compatibility */
-  (void)duration_ms;
-}
-
-/**
  * @brief Get signal quality metrics from last packet
  * @param rssi Pointer to store RSSI in dBm
  * @param snr Pointer to store SNR in dB

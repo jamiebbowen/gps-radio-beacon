@@ -23,8 +23,9 @@ CPU = -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
 # Startup file
 STARTUP = lib/STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Source/Templates/gcc/startup_stm32f401xc.s
 
-# Source files
-C_SOURCES = \
+# Source files - project sources get -Wextra; vendor/HAL sources stay at
+# -Wall so their warnings don't drown ours in the build log.
+PROJECT_SOURCES = \
 	$(SRC_DIR)/main.c \
 	$(SRC_DIR)/button.c \
 	$(SRC_DIR)/bno085.c \
@@ -43,8 +44,6 @@ C_SOURCES = \
 	$(SRC_DIR)/sd_diskio.c \
 	$(SRC_DIR)/syscalls.c \
 	$(SRC_DIR)/lfs_sd_bd.c \
-	lib/littlefs/lfs.c \
-	lib/littlefs/lfs_util.c \
 	$(SRC_DIR)/display_modes/gps_mode.c \
 	$(SRC_DIR)/display_modes/compass_mode.c \
 	$(SRC_DIR)/display_modes/rf_mode.c \
@@ -55,7 +54,11 @@ C_SOURCES = \
 	$(SRC_DIR)/display_modes/sd_card_mode.c \
 	$(SRC_DIR)/display_modes/channel_mode.c \
 	$(SRC_DIR)/display_modes/rf_stats_mode.c \
-	$(SRC_DIR)/display_modes/preflight_mode.c \
+	$(SRC_DIR)/display_modes/preflight_mode.c
+
+VENDOR_SOURCES = \
+	lib/littlefs/lfs.c \
+	lib/littlefs/lfs_util.c \
 	lib/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_spi.c \
 	lib/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal.c \
 	lib/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_cortex.c \
@@ -68,6 +71,8 @@ C_SOURCES = \
 	lib/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pcd.c \
 	lib/STM32CubeF4/Drivers/STM32F4xx_HAL_Driver/Src/stm32f4xx_hal_pcd_ex.c \
 	lib/STM32CubeF4/Drivers/CMSIS/Device/ST/STM32F4xx/Source/Templates/system_stm32f4xx.c
+
+C_SOURCES = $(PROJECT_SOURCES) $(VENDOR_SOURCES)
 
 # Include paths
 INCLUDES = \
@@ -120,9 +125,13 @@ BIN = $(BIN_DIR)/$(PROJECT).bin
 HEX = $(BIN_DIR)/$(PROJECT).hex
 
 # Object files
+PROJECT_OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(PROJECT_SOURCES:.c=.o)))
 OBJECTS = $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
 OBJECTS += $(BUILD_DIR)/startup_stm32f401xc.o
 vpath %.c $(sort $(dir $(C_SOURCES)))
+
+# Project sources compile with -Wextra; vendor/HAL objects keep -Wall.
+$(PROJECT_OBJECTS): EXTRA_WARN = -Wextra
 
 # Pull in the gcc-generated header dependency files (absent on first build)
 -include $(wildcard $(BUILD_DIR)/*.d)
@@ -145,7 +154,7 @@ $(BIN_DIR):
 # Build rules
 $(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR)
 	@echo "Compiling $<"
-	@$(CC) -c $(CFLAGS) -Wa,-a,-ad,-alms=$(BUILD_DIR)/$(notdir $(<:.c=.lst)) $< -o $@
+	@$(CC) -c $(CFLAGS) $(EXTRA_WARN) -Wa,-a,-ad,-alms=$(BUILD_DIR)/$(notdir $(<:.c=.lst)) $< -o $@
 
 $(BUILD_DIR)/startup_stm32f401xc.o: $(STARTUP) | $(BUILD_DIR)
 	@echo "Assembling $<"

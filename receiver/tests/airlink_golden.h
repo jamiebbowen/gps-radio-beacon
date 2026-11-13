@@ -33,8 +33,8 @@
 
 static const uint8_t AIRLINK_FUSED_GOLDEN[19] = {
     0x04,                     /* PACKET_TYPE_FUSED            */
-    0x20, 0xBB, 0xC6, 0x17,   /* latitude  = 398900000        */
-    0x00, 0xCB, 0x7B, 0xC1,   /* longitude = -1048851712      */
+    0x19, 0xBB, 0xC6, 0x17,   /* latitude  = 398899993        */
+    0x0D, 0xCB, 0x7B, 0xC1,   /* longitude = -1048851699      */
     0xAE, 0x21,               /* alt_qm    = 8622 (1655.5 m)  */
     0xD2, 0x04,               /* v_n_cms   = 1234             */
     0xBF, 0xFE,               /* v_e_cms   = -321             */
@@ -59,8 +59,8 @@ static const uint8_t AIRLINK_FUSED_GOLDEN[19] = {
 
 static const uint8_t AIRLINK_GPS_GOLDEN[14] = {
     0x01,                     /* PACKET_TYPE_GPS              */
-    0x20, 0xBB, 0xC6, 0x17,   /* latitude  = 398900000        */
-    0x00, 0xCB, 0x7B, 0xC1,   /* longitude = -1048851712      */
+    0x19, 0xBB, 0xC6, 0x17,   /* latitude  = 398899993        */
+    0x0D, 0xCB, 0x7B, 0xC1,   /* longitude = -1048851699      */
     0x77, 0x06,               /* altitude  = 1655             */
     AIRLINK_GPS_SATS,
     AIRLINK_GPS_FLAGS,

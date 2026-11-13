@@ -44,7 +44,7 @@ typedef struct {
 
 // Public function declarations
 void gps_init(void);
-uint8_t gps_poll_rx(void);
+uint16_t gps_poll_rx(void);
 const GPSCoordinates_t* gps_get_current_coordinates(void);
 
 // GPS receiver health for the heartbeat (HB_GPS_* in packet_format.h):
@@ -53,6 +53,11 @@ uint8_t gps_get_health(void);
 
 // Milliseconds since the last accepted fix; UINT32_MAX if never had one.
 uint32_t gps_get_fix_age_ms(void);
+
+// Sentences dropped on missing/mismatched *XX checksum. A rising count on
+// the bench means UART noise (wiring, baud drift, PA bleed) corrupting
+// positions before the parser ever sees them.
+uint32_t gps_get_checksum_errors(void);
 
 // Convert NMEA coordinate to decimal degrees
 float gps_nmea_to_decimal(const char* nmea_coord, char direction);

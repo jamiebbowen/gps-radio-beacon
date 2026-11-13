@@ -13,8 +13,11 @@
 
 CC       ?= gcc
 CXX      ?= g++
-CFLAGS   := -std=gnu11 -Wall -Wextra -g -O0 -I../firmware -I../../receiver/tests
-CXXFLAGS := -std=c++11 -Wall -Wextra -g -O0 -I../firmware -I../../receiver/tests
+# -MMD -MP: header edits (packet_format.h, config.h, stubs) must rebuild
+# the test binaries too - a stale binary is a silent false-green, the same
+# trap the explicit source prerequisites below guard against.
+CFLAGS   := -std=gnu11 -Wall -Wextra -g -O0 -I../firmware -I../../receiver/tests -MMD -MP
+CXXFLAGS := -std=c++11 -Wall -Wextra -g -O0 -I../firmware -I../../receiver/tests -MMD -MP
 LDFLAGS  := -lm
 
 BUILD    := build
@@ -34,10 +37,10 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 $(BUILD)/test_ekf: test_ekf.cpp ../firmware/ekf.cpp | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(COVFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -o $@ $(filter %.cpp %.c %.ino,$^) $(LDFLAGS)
 
 $(BUILD)/test_nmea_fields: test_nmea_fields.c ../firmware/nmea_fields.c | $(BUILD)
-	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $(filter %.cpp %.c %.ino,$^) $(LDFLAGS)
 
 # beacon.cpp is #included by the test (static access + Arduino stub);
 # stubs/Arduino.h shadows the real core. flight_maxima.cpp is a real
@@ -85,17 +88,17 @@ $(BUILD)/test_flight_profile: test_flight_profile.cpp \
 # only satisfy mpu_config.h's include chain).
 $(BUILD)/test_flight_cadence: test_flight_cadence.cpp ../firmware/flight_cadence.cpp \
                               stubs/Arduino.h | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $^ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $(filter %.cpp %.c %.ino,$^) $(LDFLAGS)
 
 # Airborne event + anomaly detector: pure logic module, no Arduino deps.
 $(BUILD)/test_flight_events: test_flight_events.cpp ../firmware/flight_events.cpp \
                              stubs/Arduino.h | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $^ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $(filter %.cpp %.c %.ino,$^) $(LDFLAGS)
 
 # Running maxima tracker: pure logic module, no Arduino deps.
 $(BUILD)/test_flight_maxima: test_flight_maxima.cpp ../firmware/flight_maxima.cpp \
                              stubs/Arduino.h | $(BUILD)
-	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $^ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $(filter %.cpp %.c %.ino,$^) $(LDFLAGS)
 
 # Airlink round-trip: TX encoder (beacon.cpp, C++) + RX parser
 # (receiver's rf_parser.c, compiled as C) in one binary.
@@ -127,7 +130,17 @@ $(BUILD)/test_flight_log: test_flight_log.cpp ../firmware/flight_log.cpp \
                           stubs/Arduino.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
 
-test: $(BINS)
+# Alternate-config compile check (compile-only: no link, no run).
+# firmware.ino must build with IMU_FUSION_ENABLED=0 - the flag is
+# #ifndef-wrapped in config.h so -D overrides it. Regression: now_ms was
+# once declared inside `#if IMU_FUSION_ENABLED` yet used outside it, so
+# the fusion-off build broke without anyone noticing.
+$(BUILD)/altconfig_nofusion.o: test_mainloop.cpp ../firmware/firmware.ino \
+            ../firmware/include/config.h stubs/Arduino.h stubs/Wire.h \
+            stubs/Adafruit_BNO08x.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) -Istubs -DIMU_FUSION_ENABLED=0 -c -o $@ $<
+
+test: $(BINS) $(BUILD)/altconfig_nofusion.o
 	@rc=0; for b in $(BINS); do \
 	    echo "== $$b =="; ./$$b || rc=1; \
 	done; exit $$rc
@@ -157,3 +170,6 @@ coverage: clean $(BINS)
 
 clean:
 	rm -rf $(BUILD) *.gcov *.gcda *.gcno
+
+# Auto-generated header dependencies (see -MMD -MP above)
+-include $(BINS:%=%.d) $(BUILD)/altconfig_nofusion.d

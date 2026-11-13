@@ -31,6 +31,8 @@ typedef struct {
 #define GPIO_PIN_1   (1u << 1)
 #define GPIO_PIN_2   (1u << 2)
 #define GPIO_PIN_3   (1u << 3)
+#define GPIO_PIN_4   (1u << 4)
+#define GPIO_PIN_5   (1u << 5)
 #define GPIO_PIN_6   (1u << 6)
 #define GPIO_PIN_7   (1u << 7)
 #define GPIO_PIN_8   (1u << 8)
@@ -100,8 +102,34 @@ HAL_StatusTypeDef HAL_DMA_Init(DMA_HandleTypeDef *hdma);
 void              HAL_DMA_IRQHandler(DMA_HandleTypeDef *hdma);
 
 /* ---- SPI ---- */
-typedef struct { uint32_t unused; } SPI_TypeDef;
+/* Real register layout: sd_diskio.c pokes CR1 (speed ladder) and SR/DR
+ * (the direct-register byte pump) directly. */
+#ifndef __IO
+#define __IO volatile
+#endif
+typedef struct {
+    __IO uint32_t CR1, CR2, SR, DR, CRCPR, RXCRCR, TXCRCR, I2SCFGR, I2SPR;
+} SPI_TypeDef;
+#define SPI1 ((SPI_TypeDef *)0x5100u)
 #define SPI2 ((SPI_TypeDef *)0x5200u)
+
+#define SPI_CR1_BR_Pos      3u
+#define SPI_CR1_BR_Msk      (0x7u << SPI_CR1_BR_Pos)
+#define SPI_CR1_SPE         (1u << 6)
+#define SPI_SR_RXNE         (1u << 0)
+#define SPI_SR_TXE          (1u << 1)
+#define SPI_SR_BSY          (1u << 7)
+
+#define SPI_BAUDRATEPRESCALER_2   (0u << 3)
+#define SPI_BAUDRATEPRESCALER_4   (1u << 3)
+#define SPI_BAUDRATEPRESCALER_8   (2u << 3)
+#define SPI_BAUDRATEPRESCALER_32  (4u << 3)
+#define SPI_BAUDRATEPRESCALER_64  (5u << 3)
+#define SPI_BAUDRATEPRESCALER_128 (6u << 3)
+#define SPI_BAUDRATEPRESCALER_256 (7u << 3)
+
+#define __HAL_SPI_DISABLE(h) ((h)->Instance->CR1 &= ~SPI_CR1_SPE)
+#define __HAL_SPI_ENABLE(h)  ((h)->Instance->CR1 |= SPI_CR1_SPE)
 
 typedef struct {
     SPI_TypeDef *Instance;
@@ -120,7 +148,7 @@ typedef struct {
 #define SPI_POLARITY_LOW           0u
 #define SPI_PHASE_1EDGE            0u
 #define SPI_NSS_SOFT               0u
-#define SPI_BAUDRATEPRESCALER_16   0u
+#define SPI_BAUDRATEPRESCALER_16   (3u << 3)
 #define SPI_FIRSTBIT_MSB           0u
 #define SPI_TIMODE_DISABLE         0u
 #define SPI_CRCCALCULATION_DISABLE 0u
@@ -132,6 +160,9 @@ HAL_StatusTypeDef HAL_SPI_Receive(SPI_HandleTypeDef *hspi, uint8_t *data,
                                   uint16_t size, uint32_t timeout);
 HAL_StatusTypeDef HAL_SPI_Receive_DMA(SPI_HandleTypeDef *hspi, uint8_t *data,
                                       uint16_t size);
+HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *hspi, uint8_t *tx,
+                                          uint8_t *rx, uint16_t size,
+                                          uint32_t timeout);
 HAL_StatusTypeDef HAL_SPI_Abort(SPI_HandleTypeDef *hspi);
 
 /* ---- I2C ---- */

@@ -12,6 +12,7 @@
 #include "include/flight_events.h"
 #include "include/flight_maxima.h"
 #include "include/flight_log.h"
+#include "include/watchdog.h"
 
 /**
  * Beacon State Machine Documentation
@@ -148,7 +149,7 @@ void timer_isr_handler(void) {
  * ~2 s (IMU settle in launch_detect_init, which runs before the WDT is
  * armed), so 16 s only fires on a genuine lockup.
  * ---------------------------------------------------------------------- */
-static void watchdog_init(void) {
+void watchdog_init(void) {
     WDT->CTRLA.bit.ENABLE = 0;
     while (WDT->SYNCBUSY.bit.ENABLE);
     WDT->CONFIG.bit.PER = WDT_CONFIG_PER_CYC16384_Val;  /* 16384/1024Hz = 16 s */
@@ -156,7 +157,7 @@ static void watchdog_init(void) {
     while (WDT->SYNCBUSY.bit.ENABLE);
 }
 
-static void watchdog_feed(void) {
+void watchdog_feed(void) {
     /* Skip the feed if the previous CLEAR is still synchronizing: writing
      * during sync is an error case; the next loop pass feeds instead. */
     if (!WDT->SYNCBUSY.bit.CLEAR) {
@@ -218,6 +219,39 @@ void setup() {
     flight_maxima_init();
 
     flight_log_init();
+
+    /* Mid-flight reboot-resume. A WDT bite, brown-out, or battery-bounce
+     * POR while airborne used to strand the beacon at pad cadence for the
+     * rest of the flight - boost acceleration only happens once, so the
+     * launch FSM could never re-confirm. The log's state row survives the
+     * reset: still FLYING means "resume", not "re-arm". Resume regardless
+     * of RCAUSE (the marker is the authoritative persistent state and the
+     * cause rides the BOOT record as evidence); a false resume on the pad
+     * self-corrects via the landing latch within ~60 s.
+     *
+     * force_confirmed deliberately raises NO is_launched() edge - the
+     * launch block's flight_log_arm() would erase the surviving log. */
+    if (flight_log_prev_flying()) {
+        beacon_state = BEACON_STATE_LAUNCH;
+        transmit_beacon_flag = 1;
+        transmit_fast_flag = 1;
+        radio_enable();
+        delay(10);
+        launch_detect_force_confirmed(system_time_seconds);
+        if (flight_log_resume()) {
+            /* Reboot evidence lands first in the appended stream so the
+             * NAND record reads "...last pre-reset record, BOOT(rcause),
+             * first post-reset record". */
+            flight_log_event_ex(millis(), 8 /* boot reset cause */,
+                                (uint8_t)(g_boot_rcause & 0xFF), 0);
+        }
+        Serial.println(F("[Boot] *** mid-flight reboot: resuming flight ***"));
+        /* Certified airborne anomaly notice: ANOM_REBOOT was reserved for
+         * exactly this - the ground log now carries the interruption too. */
+        beacon_queue_flight_event(FLIGHT_EVENT_ANOM_REBOOT,
+                                  (int16_t)g_boot_rcause,
+                                  FLIGHT_EVENT_REPEATS);
+    }
 
     delay(1000);  // Let everything stabilize
 
@@ -294,6 +328,10 @@ void loop() {
                 radio_disable();
                 beacon_queue_flight_event(FLIGHT_EVENT_LANDED, 0, FLIGHT_EVENT_REPEATS);
                 flight_log_event(millis(), 4 /* landed */);
+                /* Flip the state row to LANDED so a power cycle during
+                 * recovery boots as a pad power-on instead of resuming a
+                 * finished flight. */
+                flight_log_mark_landed();
                 /* Final maxima copy: the flight's whole envelope rides the
                  * first post-touchdown airtime. */
                 beacon_transmit_maxima(system_time_seconds, 0);
@@ -560,6 +598,12 @@ void loop() {
         time_since_last_callsign_tx = system_time_seconds;
     }
 
+    /* One tick snapshot shared by every millisecond-paced block below
+     * (fused cadence, maxima, command listen, flight-event service). Was
+     * declared inside the IMU_FUSION_ENABLED block: building with fusion
+     * off left the later users with an undeclared identifier. */
+    uint32_t now_ms = millis();
+
 #if IMU_FUSION_ENABLED
     /* Fused-packet cadence: FUSED_TX_INTERVAL_MS in LAUNCH/POST_LAUNCH for
      * smooth interpolated telemetry, FUSED_TX_INTERVAL_IDLE_MS in
@@ -567,7 +611,6 @@ void loop() {
      * has nothing to fuse, and the PA quiet protects the GPS front end.
      * Kept separate from the GPS-packet TX path so both streams coexist. */
     static uint32_t last_fused_tx_ms = 0;
-    uint32_t now_ms = millis();
     uint32_t fused_interval_ms = flight_cadence_fused_interval_ms(beacon_state);
     if (fused_interval_ms != 0 && nav_is_valid() &&
         (now_ms - last_fused_tx_ms >= fused_interval_ms)) {
@@ -600,4 +643,36 @@ void loop() {
     /* Queued certified-event transmissions: one packet per loop pass max,
      * FLIGHT_EVENT_SPACING_MS between copies of the same edge. */
     beacon_service_flight_events(now_ms, system_time_seconds, transmit_fast_flag);
+
+    /* USB command channel: 'DUMP' + Enter prints the on-chip flight log
+     * over serial - the boot banner has advertised it to recovery crews
+     * since flight_log_init(), but nothing ever read the port. Bounded
+     * line buffer; unrecognized input is dropped at the next newline.
+     * Refused while airborne: a ~40 s printout is not worth lost fixes. */
+    {
+        static char ser_buf[12];
+        static uint8_t ser_len = 0;
+        while (Serial.available() > 0) {
+            int c = Serial.read();
+            if (c < 0) break;
+            if (c == '\r' || c == '\n') {
+                if (ser_len > 0 && strcmp(ser_buf, "DUMP") == 0) {
+                    if (beacon_state == BEACON_STATE_LAUNCH ||
+                        beacon_state == BEACON_STATE_POST_LAUNCH) {
+                        Serial.println(F("[FLOG] airborne - dump after landing"));
+                    } else {
+                        flight_log_dump_serial();
+                    }
+                }
+                ser_len = 0;
+                ser_buf[0] = '\0';
+            } else if (ser_len < sizeof(ser_buf) - 1) {
+                ser_buf[ser_len++] = (char)c;
+                ser_buf[ser_len] = '\0';
+            } else {
+                ser_len = 0;      /* overlong input: resync at next newline */
+                ser_buf[0] = '\0';
+            }
+        }
+    }
 }

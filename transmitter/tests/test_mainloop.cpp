@@ -70,6 +70,7 @@ static struct { struct { uint8_t reg; } RCAUSE; } fake_rstc;
 /* ------------------------------------------------------------------ */
 
 static uint32_t tx_by_type[16];   /* indexed by packet_type byte */
+static uint32_t fev_code_count[256]; /* FLIGHT_EVENT_* code histogram   */
 static uint32_t tx_callsigns = 0;
 static uint32_t tx_other = 0;
 static uint32_t radio_enables = 0, radio_disables = 0;
@@ -86,6 +87,8 @@ int transmit_packet(const uint8_t *data, size_t length)
     uint8_t t = data[0];
     if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_HELLO) {
         tx_by_type[t]++;
+        if (t == PACKET_TYPE_FLIGHT_EVENT && length >= 3)
+            fev_code_count[data[2]]++;      /* code field, offset 2 */
     } else if (t >= 0x20 && t <= 0x7E) {
         tx_callsigns++;              /* printable = callsign text */
     } else {
@@ -144,7 +147,7 @@ static GPSCoordinates_t fake_coords;
 static uint8_t fake_fix_ok = 1;
 
 void    gps_init(void) {}
-uint8_t gps_poll_rx(void) { return 0; }
+uint16_t gps_poll_rx(void) { return 0; }
 const GPSCoordinates_t* gps_get_current_coordinates(void) { return &fake_coords; }
 uint8_t gps_get_health(void) { return HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0); }
 uint32_t gps_get_fix_age_ms(void) { return 250; }
@@ -174,7 +177,16 @@ void     flight_log_event_ex(uint32_t ms, uint8_t kind, uint8_t code, int16_t va
 static uint32_t flog_fused_calls = 0;
 void     flight_log_fused(uint32_t ms, int32_t, int32_t, int16_t, int16_t, int16_t, int16_t, uint8_t)
          { (void)ms; flog_fused_calls++; }
-void     flight_log_dump_serial(void) {}
+static uint32_t flog_dump_calls = 0;
+void     flight_log_dump_serial(void) { flog_dump_calls++; }
+/* Reboot-resume seam: the host can't fake NVM rows, so the test scripts
+ * the persisted state directly and spies on which path setup() took. */
+static uint8_t  flog_prev_flying_flag = 0;
+static uint32_t flog_resume_calls = 0;
+static uint32_t flog_landed_marks = 0;
+uint8_t  flight_log_prev_flying(void) { return flog_prev_flying_flag; }
+uint8_t  flight_log_resume(void)      { flog_resume_calls++; return 1; }
+void     flight_log_mark_landed(void) { flog_landed_marks++; }
 uint8_t  flog_armed_count_value(void) { return flog_armed_count; }
 uint32_t flog_gps_calls_value(void)   { return flog_gps_calls; }
 
@@ -298,6 +310,20 @@ int main(void)
     CHECK(radio_enables > 0 && radio_disables == radio_enables);
     CHECK(radio_enabled_flag == 0);
 
+    /* ---------- USB 'DUMP' command: the serial command the boot banner
+     * advertises to recovery crews (was advertised but never wired) --- */
+    Serial.inject("DUMP\n");
+    loop();
+    CHECK(flog_dump_calls == 1);              /* on the pad: allowed */
+    Serial.inject("JUNK\nDUMP\r\n");          /* garbage line, then real */
+    loop();
+    CHECK(flog_dump_calls == 2);              /* only the real one fires */
+    Serial.inject("DU");                      /* a command split across */
+    loop();                                   /* loop passes reassembles */
+    Serial.inject("MP\n");
+    loop();
+    CHECK(flog_dump_calls == 3);
+
     /* ---------- GPS dies at the pad (cable knocked loose) ---------- */
     fake_fix_ok = 0;
     fake_coords.valid = 0;
@@ -325,6 +351,14 @@ int main(void)
     CHECK(radio_enables == enables_before + 1);   /* radio keyed once */
     CHECK(radio_enabled_flag == 1);
     CHECK(flog_armed_count_value() >= 1);         /* on-chip recorder armed */
+
+    /* DUMP refused while airborne - a 40 s printout is not worth lost
+     * fixes; the crew gets it back after touchdown */
+    Serial.clear();                            /* drop residual prints */
+    Serial.inject("DUMP\n");
+    loop();
+    CHECK(flog_dump_calls == 3);
+    CHECK(strstr(Serial.log, "airborne") != NULL);
 
     /* LAUNCH exits to POST_LAUNCH after POST_LAUNCH_DURATION_SEC */
     sim_run(3000);
@@ -367,6 +401,39 @@ int main(void)
     /* ---------- FCC ID cadence across the whole sim ---------------- */
     CHECK(tx_callsigns == 3);                     /* boot + 300 s + 600 s */
     CHECK(tx_other == 0);                         /* nothing unaccounted */
+    CHECK(flog_landed_marks == 1);                /* state row -> LANDED */
+
+    /* ---------- Mid-flight reboot-resume -----------------------------
+     * A WDT bite / brown-out / battery bounce while airborne used to
+     * strand the beacon at pad cadence for the rest of the flight: the
+     * launch FSM could never re-confirm without another boost. The state
+     * row survives the reset; setup() must RESUME, not re-arm. */
+    uint8_t  arms_before  = flog_armed_count_value();
+    uint32_t call_before  = tx_callsigns;
+    uint32_t hello_before = type_count(PACKET_TYPE_HELLO);
+    fake_rstc.RCAUSE.reg  = RSTC_RCAUSE_WDT;     /* the reset that killed it */
+    flog_prev_flying_flag = 1;                   /* marker row still FLYING */
+    setup();                                     /* <- the reboot itself   */
+    CHECK(beacon_state == BEACON_STATE_LAUNCH);  /* airborne cadence now */
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
+    CHECK(transmit_fast_flag == 1);
+    CHECK(radio_enabled_flag == 1);
+    CHECK(flog_resume_calls == 1);               /* append point restored */
+    CHECK(flog_armed_count_value() == arms_before); /* NO erase of survivors */
+    CHECK(tx_callsigns == call_before + 1);      /* boot ID still airs */
+    CHECK(type_count(PACKET_TYPE_HELLO) == hello_before + 1);
+
+    /* The reboot itself is certified on the air: ANOM_REBOOT copies ride
+     * the certified event path alongside normal telemetry. */
+    sim_run(5000);
+    CHECK(fev_code_count[FLIGHT_EVENT_ANOM_REBOOT] == FLIGHT_EVENT_REPEATS);
+
+    /* The resumed flight still completes its life-cycle: quiet + stable
+     * re-latches landing, which flips the marker to LANDED again. */
+    sim_run((LAND_QUIET_S + 20) * 1000UL);
+    CHECK(launch_detect_has_landed() == true);
+    CHECK(beacon_state == BEACON_STATE_BATTERY_SAVE);
+    CHECK(flog_landed_marks == 2);               /* touchdown #1 + re-latch */
 
     /* ---------- Watchdog never saw >16 s of silence ----------------- */
     /* (loop() feeds it every pass; the sim asserting loop-liveness is

@@ -51,6 +51,15 @@
 #define LAUNCH_GPS_ALT_CLIMB_M      50.0f   // climb above pad baseline (m)
 #define LAUNCH_GPS_ALT_CLIMB_SAMPLES 3      // consecutive 1 Hz samples above
 
+/* Baseline arming for the fallback. The first valid fix after GPS
+ * power-on is notoriously wrong - cold-start altitude can sit tens of
+ * meters low for several seconds, and when it corrects, the "climb"
+ * looks exactly like launch (+50 m over a few samples = false launch).
+ * So the baseline is a running MAXIMUM of everything the pad ever sees,
+ * and the climb test stays disarmed until the fix stream has settled. */
+#define LAUNCH_GPS_BASELINE_SETTLE_S   20u  /* valid-fix seconds to arm */
+#define LAUNCH_GPS_BASELINE_MIN_FIXES  5u   /* and at least this many fixes */
+
 /* Landing detection (post-launch only): gravity-removed accel near zero AND
  * GPS altitude stable for LAND_QUIET_S means the rocket is on the ground -
  * steady parachute descent shows quiet accel too, but its altitude is never

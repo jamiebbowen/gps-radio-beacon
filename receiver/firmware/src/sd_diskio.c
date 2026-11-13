@@ -89,6 +89,8 @@ static uint8_t SD_WriteData(const uint8_t *buff, uint8_t token);
 static void SD_CS_LOW(void);
 static void SD_CS_HIGH(void);
 static uint8_t SD_SPI_TxRx(uint8_t data);
+static void sd_set_prescaler(uint32_t br_bits);
+static void sd_apply_speed(void);
 
 /* Disk functions ------------------------------------------------------------*/
 
@@ -251,6 +253,8 @@ DRESULT SD_read(BYTE pdrv, BYTE* buff, DWORD sector, UINT count)
   if (pdrv || !count) return RES_PARERR;
   if (!SD_Type) return RES_NOTRDY;
 
+  sd_apply_speed();
+
   /* Convert to byte address if needed */
   if (!(SD_Type & 8)) sector *= 512;
 
@@ -287,6 +291,8 @@ DRESULT SD_write(BYTE pdrv, const BYTE* buff, DWORD sector, UINT count)
 {
   if (pdrv || !count) return RES_PARERR;
   if (!SD_Type) return RES_NOTRDY;
+
+  sd_apply_speed();
 
   /* Convert to byte address if needed */
   if (!(SD_Type & 8)) sector *= 512;
@@ -418,6 +424,27 @@ static void sd_set_prescaler(uint32_t br_bits)
   __HAL_SPI_ENABLE(&hspi1);
 }
 
+/* Re-apply the negotiated prescaler before EVERY runtime transaction.
+ * SPI1 is shared with the Sharp display and the eInk: Display_Update()
+ * fully re-inits the peripheral at /16 per frame and eink_power_up()
+ * sets /8 - either one silently reverts the bus to a slower clock than
+ * the ladder agreed on, and the step bookkeeping went dishonest (a
+ * "verified" rung never actually ran at that speed). Three register ops
+ * at transaction entry keep hardware == sd_spi_div.
+ * sd_spi_div == 0 means still on the init clock: leave it alone. */
+static void sd_apply_speed(void)
+{
+  uint32_t br;
+  switch (sd_spi_div) {
+    case 2:  br = 0x0; break;
+    case 4:  br = 0x1; break;
+    case 8:  br = 0x2; break;
+    case 16: br = 0x3; break;
+    default: return;
+  }
+  sd_set_prescaler(br);
+}
+
 /* Read-back sanity at whatever speed is currently set: identical content
  * across two consecutive reads, four rounds. Read-only, so a broken
  * verification can't damage anything on the card. */
@@ -477,11 +504,14 @@ uint8_t SD_StepSpeedUpTry(void)
   uint8_t try_div = next_faster[prev];
   if (try_div == prev) return prev;
 
+  /* Adopt the trial divider BEFORE verifying: SD_read() now re-asserts
+   * sd_spi_div at transaction entry, so a stale prev value would revert
+   * the trial prescaler and the verify would "pass" at the old speed. */
+  sd_spi_div = try_div;
   sd_set_prescaler(try_div == 2 ? 0x0 : try_div == 4 ? 0x1
                                           : try_div == 8 ? 0x2 : 0x3);
-  if (sd_verify_readback()) {
-    sd_spi_div = try_div;
-  } else {
+  if (!sd_verify_readback()) {
+    sd_spi_div = prev;
     sd_set_prescaler(prev == 16 ? 0x3 : prev == 8 ? 0x2
                                           : prev == 4 ? 0x1 : 0x0);
   }
@@ -494,6 +524,8 @@ uint8_t SD_StepSpeedUpTry(void)
 static uint8_t SD_SendCmd(uint8_t Cmd, uint32_t Arg, uint8_t Crc, uint8_t Response)
 {
   uint8_t n, res;
+  (void)Response;   /* vestigial from the ST template - the raw R1/R7
+                     * response is returned to the caller regardless */
 
   if (Cmd & 0x80) { /* ACMD<n> is the command sequence of CMD55-CMD<n> */
     Cmd &= 0x7F;

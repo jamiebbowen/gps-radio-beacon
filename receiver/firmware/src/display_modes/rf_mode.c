@@ -36,6 +36,7 @@ void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps,
   char line1[16] = {0};
   char line2[16] = {0};
   char ascii_buffer[64] = {0};
+  (void)rf_packet_count;
   uint32_t parse_attempts = 0;
   uint32_t parse_successes = 0;
   uint32_t parse_failures = 0;

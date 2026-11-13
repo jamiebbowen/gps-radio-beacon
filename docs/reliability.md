@@ -356,6 +356,75 @@ tests (`transmitter/tests`, `receiver/tests`).
   health indicators (wedges, LOST windows, IWDG resets, heartbeat GPS
   states, telemetry gaps, errors) so a flight can be audited in seconds.
 
+## 6c. Resiliency additions (2026-11-13 review)
+
+Coverage pass over both firmwares; all items have host-side regression
+tests. The two suites now cover every firmware module - TX at 100% line
+coverage, RX lowest modules are `sd_card` (92%) and `compass` (94%).
+
+### Transmitter
+
+- **NMEA checksum gate** (`gps.cpp`, `nmea_fields.c`): sentences failing
+  the `*XX` XOR checksum are dropped before parsing and counted
+  (`gps_get_checksum_errors`). One corrupted UART byte can no longer
+  commit a bad position. This also exposed a latent bug: the watchdog's
+  hardcoded cold-start command `$PUBX,04,0,0,2,0,0*12` carried a wrong
+  checksum (`*29` is correct), so the u-blox rejected it - now sent via
+  `gps_send_pubx()`, which computes the checksum.
+- **Serial `DUMP` command** (`firmware.ino`): the startup banner offered
+  a flight-log serial dump but nothing ever read the port - dead feature.
+  `loop()` now dispatches one-line commands; `DUMP` streams the log with
+  the watchdog fed inside the dump loop (a multi-second dump would
+  otherwise trip the IWDG).
+- **Mid-flight reboot resume**: a WDT/brown-out reboot used to strand the
+  beacon at pad cadence for the rest of the flight. The flight log now
+  writes a durable state-marker row on flight-state transitions; at boot,
+  `flight_log_resume_scan()` replays markers and
+  `launch_detect_force_confirmed()` restores FLYING (emitting `ANOM_REBOOT` in the event
+  stream) when the last durable state was airborne.
+- **GPS-altitude fallback baseline** (`launch_detect.cpp`): the altitude
+  fallback used to baseline on the *first* fix after arming - a cold-start
+  fix can sit tens of meters high and produce a false launch. The
+  baseline is now a running max over a settle window before the fallback
+  arms.
+- **Coordinate wire math** (`packet_format.h`): `GPS_COORD_SCALE` /
+  `DECODE_COORD` were `float` - int32 coordinate products (~4e8 counts)
+  exceed float32's 24-bit mantissa, so encodes rounded up to ~34 counts
+  (~0.4 m) off the true product. Both sides now use double math; the
+  shared airlink golden vectors (`receiver/tests/airlink_golden.h`) were
+  regenerated and pin the corrected bytes on both ends.
+- **Build-correctness fix**: `now_ms` was declared inside
+  `#if IMU_FUSION_ENABLED` but used unconditionally - an alternate-config
+  build break, now pinned by a compile check
+  (`build/altconfig_nofusion.o`).
+
+### Receiver
+
+- **Shared-SPI1 prescaler clobber** (`sd_diskio.c`, `eink.c`): every
+  `Display_Update()` re-initialized SPI1 at /16 (~1.3 MHz), silently
+  reverting whatever speed the SD card's negotiated ladder had reached.
+  `sd_apply_speed()` now re-asserts the negotiated divider on every SD
+  read/write transaction, and `eink_power_up()` re-pins its own /8 before
+  each refresh. **Operational note:** the SD now genuinely runs at its
+  negotiated speed (up to ~10 MHz where it was effectively 1.3 MHz
+  before) - bench-test a card before flying.
+- **Scripted virtual SD card** (`tests/test_sd_diskio.c`): a fake-SPI
+  card model drives `sd_diskio.c` through SDv2-HC/SDv1/MMC init,
+  ACMD41 warm-up retries, single/multi-block reads+writes, CMD12
+  termination, both CSD sector-count formulas, write-token rejection,
+  busy timeouts, the full speed ladder, and per-transaction prescaler
+  reassertion - the highest-risk, previously untested driver.
+
+### Tooling
+
+- `tools/test_packet_format_sync.py` mechanically compares the duplicated
+  TX/RX `packet_format.h` copies - every shared `#define` value and every
+  struct's common-prefix field layout must agree (RX keeps V1-superset
+  trailing fields intentionally). Wired into `tools-test`.
+- The TX test Makefile now generates `-MMD` header dependencies - a
+  stale test binary was masking a real wire-format change (the
+  golden-vector update above) as a false green.
+
 ## 7. Not-implemented / rejected approaches
 
 These were considered and intentionally **not** added:

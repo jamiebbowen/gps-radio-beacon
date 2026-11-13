@@ -447,6 +447,34 @@ TEST(test_pending_fifo_survives_stall_and_drops_oldest_none)
     CHECK(gps.satellites == 8);                /* but the GGA survived */
 }
 
+TEST(test_rx_stats_snapshot)
+{
+    /* Aggregate the counters the diagnostics screen reports: wire bytes,
+     * completed sentences, dropped-completions and UART errors. */
+    uart_byte_counter = 0;
+    nmea_sentence_counter = 0;
+    gps_sentences_dropped = 0;
+    uint32_t err_before = uart_error_count;
+
+    feed_sentence("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+    feed_string("garbage noise\r\n");          /* completes, unparseable */
+    GPS_Data gps;
+    memset(&gps, 0, sizeof(gps));
+    (void)GPS_Update(&gps);
+
+    uint32_t bytes = 0, sentences = 0, dropped = 0;
+    uint16_t uart_errs = 0;
+    GPS_GetRxStats(&bytes, &sentences, &dropped, &uart_errs);
+    CHECK(bytes == uart_byte_counter && bytes > 0);
+    CHECK(sentences == nmea_sentence_counter);
+    CHECK(dropped == gps_sentences_dropped);
+    CHECK(uart_errs == uart_error_count);
+    CHECK(uart_errs >= err_before);
+
+    /* NULL-safe */
+    GPS_GetRxStats(NULL, NULL, NULL, NULL);
+}
+
 /* ------------------------------------------------------------------ */
 
 int main(void)
@@ -466,6 +494,7 @@ int main(void)
     run_test_isr_plumbing();
     run_test_first_and_raw_capture_buffers_fill();
     run_test_fix_latch_expires_when_stream_dies();
+    run_test_rx_stats_snapshot();
 
     return TEST_SUMMARY();
 }

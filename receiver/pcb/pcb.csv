@@ -1,0 +1,16 @@
+"Id";"Designator";"Footprint";"Quantity";"Designation";"Supplier and ref";
+1;"C8, C10, C11, C12";"C_0805_2012Metric_Pad1.18x1.45mm_HandSolder";4;"10µF";;;
+2;"C9, C13";"C_0805_2012Metric_Pad1.18x1.45mm_HandSolder";2;"100nF";;;
+3;"C14";"C_0805_2012Metric_Pad1.18x1.45mm_HandSolder";1;"47µF";;;
+4;"J4";"JST_PH_B2B-PH-K_1x02_P2.00mm_Vertical";1;"BATT";;;
+5;"J5";"JST_PH_B2B-PH-K_1x02_P2.00mm_Vertical";1;"SW";;;
+6;"J6";"IDC-Header_2x10_P2.54mm_Vertical";1;"Conn_01x20_Socket";;;
+7;"J12";"SMA_Amphenol_901-143_Horizontal";1;"Conn_Coaxial_Small";;;
+8;"R1, R2";"R_0805_2012Metric";2;"4.7K";;;
+9;"R3";"R_0603_1608Metric";1;"100k";;;
+10;"R4";"R_0603_1608Metric";1;"330k";;;
+11;"U6";"Teyleten_TPS63070_5V_Module_THT";1;"TPS63070_Module_5V";;;
+12;"U7";"STM32F401CCU6_BlackPill_2x20";1;"STM32F401CCU6";;;
+13;"U8";"M10 GPS Module";1;"M10_GPS_Module";;;
+14;"U9";"MODULE_4754";1;"4754";;;
+15;"U10";"E22-400M33S";1;"E22-400M33S";;;

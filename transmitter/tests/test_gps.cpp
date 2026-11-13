@@ -130,9 +130,9 @@ static void feed_and_poll(const char *sentence)
 }
 
 #define GGA_FIX \
-    "$GPGGA,123519,3953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*47\r\n"
+    "$GPGGA,123519,3953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*66\r\n"
 #define RMC_FIX \
-    "$GNRMC,123519,A,3954.00000,N,10454.00000,W,022.4,084.4,230394,,*6A\r\n"
+    "$GNRMC,123519,A,3954.00000,N,10454.00000,W,022.4,084.4,230394,,*10\r\n"
 
 /* ------------------------------------------------------------------ */
 /* Tests                                                               */
@@ -170,6 +170,10 @@ TEST(test_init_sends_ublox_config)
     gps_tx_string("hello");
     CHECK(strcmp(uart_tx_log, "hello") == 0);
     gps_tx_string(NULL);
+
+    /* No fix has ever landed: fix age reads as "never" (UINT32_MAX),
+     * not as a bogus small number that would look fresh. */
+    CHECK(gps_get_fix_age_ms() == UINT32_MAX);
 }
 
 TEST(test_gga_full_fix_parsed_and_fed_to_nav)
@@ -192,6 +196,11 @@ TEST(test_gga_full_fix_parsed_and_fed_to_nav)
     CHECK(nav_last_lon < -104.88f && nav_last_lon > -104.89f);
     CHECK(fabsf(nav_last_alt - 1655.4f) < 0.1f);
     CHECK(nav_last_sats == 8 && nav_last_fq == 1);
+
+    /* Fix-age clock starts at the parsed fix and counts up */
+    CHECK(gps_get_fix_age_ms() == 0);
+    now_ms += 2500;
+    CHECK(gps_get_fix_age_ms() == 2500);
 }
 
 TEST(test_burst_drains_all_sentences_in_one_poll)
@@ -235,7 +244,7 @@ TEST(test_framing_error_bytes_skipped_pre_and_mid_sentence)
 
     /* Mid-sentence glitches: dropped before buffering, so the parser sees
      * the de-glitched text (no checksum layer on TX to reject it). */
-    feed("$GPRMC,1235\xFE\xFF" "19,A,3954.5,N,10454.5,W,,,230394,,*6A\r\n");
+    feed("$GPRMC,1235\xFE\xFF" "19,A,3954.5,N,10454.5,W,,,230394,,*02\r\n");
     (void)gps_poll_rx();
     (void)gps_poll_rx();
     CHECK(strcmp(c->lat, "3954.5") == 0);
@@ -247,7 +256,7 @@ TEST(test_rmc_void_status_skipped)
     char lat_before[12];
     strcpy(lat_before, c->lat);
 
-    feed_and_poll("$GPRMC,123519,V,9999.99999,N,19999.99999,W,,,230394,,*6A\r\n");
+    feed_and_poll("$GPRMC,123519,V,9999.99999,N,19999.99999,W,,,230394,,*1B\r\n");
     CHECK(strcmp(c->lat, lat_before) == 0);     /* V = void: ignored */
 }
 
@@ -261,7 +270,7 @@ TEST(test_partial_gga_preserves_last_coordinates)
     strcpy(lat_before, c->lat);
     strcpy(lon_before, c->lon);
 
-    feed_and_poll("$GPGGA,123520,,,,,0,00,99.9,,M,,M,,*66\r\n");
+    feed_and_poll("$GPGGA,123520,,,,,0,00,99.9,,M,,M,,*76\r\n");
     CHECK(strcmp(c->lat, lat_before) == 0);
     CHECK(strcmp(c->lon, lon_before) == 0);
     CHECK(c->fix_quality == 0);                 /* quality DID update */
@@ -271,7 +280,7 @@ TEST(test_partial_gga_preserves_last_coordinates)
 TEST(test_unknown_sentences_ignored)
 {
     nav_updates = 0;
-    feed_and_poll("$GPGSV,3,1,11,03,03,111,00,04,15,270,00*74\r\n");
+    feed_and_poll("$GPGSV,3,1,11,03,03,111,00,04,15,270,00*7F\r\n");
     feed_and_poll("garbage without a dollar\r\n");
     CHECK(nav_updates == 0);
 }
@@ -335,7 +344,7 @@ TEST(test_watchdog_no_fix_cold_restart)
     int fired_at = -1;
     for (int i = 0; i < 200 && fired_at < 0; i++) {
         now_ms += 1000;
-        feed_and_poll("$GPGSV,3,1,11,03,03,111,00*74\r\n"); /* parses as nothing */
+        feed_and_poll("$GPGSV,3,1,11,03,03,111,00*4A\r\n"); /* parses as nothing */
         if (gps_recovery_attempts >= 1) fired_at = i;
     }
 
@@ -350,10 +359,10 @@ TEST(test_hotstart_stale_position_unlatches)
      * (RMC status A / GGA with lat+lon) but fix quality 0 and 00 sats.
      * The old code latched valid=1 forever, which both hid the loss and
      * disarmed the no-fix watchdog (its timer refreshed on 'valid'). */
-    feed_and_poll("$GNRMC,123519,A,3953.00000,N,10453.00000,W,0.0,0.0,230394,,*6A\r\n");
+    feed_and_poll("$GNRMC,123519,A,3953.00000,N,10453.00000,W,0.0,0.0,230394,,*1C\r\n");
     CHECK(gps_get_current_coordinates()->valid == 1);   /* position latched */
 
-    feed_and_poll("$GPGGA,123520,3953.00000,N,10453.00000,W,0,00,99.9,,M,,M,,*6A\r\n");
+    feed_and_poll("$GPGGA,123520,3953.00000,N,10453.00000,W,0,00,99.9,,M,,M,,*50\r\n");
     const GPSCoordinates_t *c = gps_get_current_coordinates();
     CHECK(c->valid == 0);                               /* unlatched: no fix */
     CHECK(c->fix_quality == 0);
@@ -362,7 +371,7 @@ TEST(test_hotstart_stale_position_unlatches)
     /* RMC status V also unlatches */
     feed_and_poll(RMC_FIX);
     CHECK(c->valid == 1);
-    feed_and_poll("$GPRMC,123519,V,3953.00000,N,10453.00000,W,,,230394,,*6A\r\n");
+    feed_and_poll("$GPRMC,123519,V,3953.00000,N,10453.00000,W,,,230394,,*15\r\n");
     CHECK(c->valid == 0);
 
     /* Restore a good fix for the next test */
@@ -383,7 +392,7 @@ TEST(test_watchdog_zero_sats_cold_restart)
     int fired_at = -1;
     for (int i = 0; i < 150 && fired_at < 0; i++) {
         now_ms += 1000;
-        feed_and_poll("$GPGGA,123519,3953.40284,N,10453.11007,W,1,00,0.9,1655.4,M,46.9,M,,*47\r\n");
+        feed_and_poll("$GPGGA,123519,3953.40284,N,10453.11007,W,1,00,0.9,1655.4,M,46.9,M,,*6E\r\n");
         if (gps_recovery_attempts >= 1) fired_at = i;
     }
 
@@ -409,8 +418,8 @@ TEST(test_watchdog_never_factory_resets)
     now_ms += 31000;
     (void)gps_poll_rx();
     CHECK(gps_recovery_attempts == 1);
-    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,0,0,0*10") == NULL);
-    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,2,0,0*12") != NULL);
+    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,0,0,0*2B") == NULL);
+    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,2,0,0*29") != NULL);
 
     /* Restore live data for the cooldown test */
     feed_and_poll(GGA_FIX);
@@ -493,6 +502,39 @@ TEST(test_continuous_uart_garbage_is_bounded)
     CHECK(nav_updates == 1);
 }
 
+TEST(test_bad_checksum_drops_sentence)
+{
+    /* The integrity gate: one flipped wire bit changes a digit and shifts
+     * the reported position hundreds of meters - worse than dropping the
+     * 1 Hz update. NMEA requires the *XX checksum, so mismatches and
+     * checksum-less sentences are both rejected and counted. */
+    uint32_t errs0 = gps_get_checksum_errors();
+
+    nav_updates = 0;
+    /* Same body as GGA_FIX but a wrong checksum digit (*67 vs real *66) */
+    feed_and_poll(
+        "$GPGGA,123519,3953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*67\r\n");
+    CHECK(nav_updates == 0);
+    CHECK(gps_get_checksum_errors() == errs0 + 1);
+
+    /* No checksum field at all (truncated sentence): also rejected */
+    feed_and_poll(
+        "$GPGGA,123519,3953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,\r\n");
+    CHECK(nav_updates == 0);
+    CHECK(gps_get_checksum_errors() == errs0 + 2);
+
+    /* Corrupted body, correct-looking checksum: rejected */
+    feed_and_poll(
+        "$GPGGA,123519,4953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*66\r\n");
+    CHECK(nav_updates == 0);
+    CHECK(gps_get_checksum_errors() == errs0 + 3);
+
+    /* The very next good sentence still parses - no resync lost */
+    feed_and_poll(GGA_FIX);
+    CHECK(nav_updates == 1);
+    CHECK(gps_get_checksum_errors() == errs0 + 3);
+}
+
 TEST(test_mid_sentence_silence_abandons_parse)
 {
     /* The GPS watchdog's cold-start reboots the module, which goes silent
@@ -529,6 +571,7 @@ int main(void)
     run_test_watchdog_three_strikes_then_cooldown_rearm();
     run_test_oversize_sentence_does_not_overflow();
     run_test_continuous_uart_garbage_is_bounded();
+    run_test_bad_checksum_drops_sentence();
     run_test_mid_sentence_silence_abandons_parse();
 
     return TEST_SUMMARY();

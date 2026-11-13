@@ -803,8 +803,36 @@ TEST(test_recover_failure_paths)
     CHECK(Compass_Update(&d) == COMPASS_OK);
 }
 
+TEST(test_quat_heading_candidate_all_conventions)
+{
+    /* Every conversion in the lock-search table: yaw = atan2(vy,vx) with
+     * vx=1,vy=0 => yaw=0. The table must cover 1..8 and stay normalized. */
+    CHECK_NEAR(Compass_QuatHeadingCandidate(1, 1.0f, 0.0f),   0.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(2, 1.0f, 0.0f),   0.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(3, 1.0f, 0.0f), 180.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(4, 1.0f, 0.0f), 180.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(5, 1.0f, 0.0f),  90.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(6, 1.0f, 0.0f),  90.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(7, 1.0f, 0.0f), 270.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(8, 1.0f, 0.0f), 270.0f, 0.01);
+
+    /* yaw=+90 (vx=0,vy=1): verify each formula across the full range */
+    CHECK_NEAR(Compass_QuatHeadingCandidate(1, 0.0f, 1.0f),  90.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(2, 0.0f, 1.0f), 270.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(3, 0.0f, 1.0f), 270.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(4, 0.0f, 1.0f),  90.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(5, 0.0f, 1.0f),   0.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(6, 0.0f, 1.0f), 180.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(7, 0.0f, 1.0f), 180.0f, 0.01);
+    CHECK_NEAR(Compass_QuatHeadingCandidate(8, 0.0f, 1.0f),   0.0f, 0.01);
+
+    /* Out-of-range index falls to the default branch (conv 8 formula) */
+    CHECK_NEAR(Compass_QuatHeadingCandidate(0, 0.0f, 1.0f),  0.0f, 0.01);
+}
+
 int main(void)
 {
+    run_test_quat_heading_candidate_all_conventions();
     run_test_init_success_default_address();
     run_test_init_alternate_address();
     run_test_init_no_devices();

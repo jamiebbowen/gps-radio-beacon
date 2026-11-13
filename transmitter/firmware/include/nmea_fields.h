@@ -46,6 +46,23 @@ int nmea_get_field(const char *sentence, uint8_t index,
  */
 float nmea_coord_to_decimal(const char *nmea_coord, char direction);
 
+/**
+ * Validate the trailing *XX checksum of an NMEA sentence.
+ *
+ * The checksum is the XOR of all bytes between '$' and '*', expressed as
+ * two uppercase-or-lowercase hex digits after '*'. NMEA-0183 requires the
+ * checksum on every emitted sentence, so a sentence without one is
+ * truncated/corrupt and is rejected here (returns 0). The GPS UART feeds
+ * us whatever bytes survived the wire - a single flipped bit in a digit
+ * silently moves the reported position hundreds of meters, which is worse
+ * than dropping the sentence.
+ *
+ * @param sentence NUL-terminated sentence beginning with '$' (may include
+ *                 the trailing \r\n - it is ignored)
+ * @return 1 if a checksum is present and matches, 0 otherwise.
+ */
+int nmea_checksum_ok(const char *sentence);
+
 #ifdef __cplusplus
 }
 #endif

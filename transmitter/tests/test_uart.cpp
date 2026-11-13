@@ -105,6 +105,16 @@ TEST(test_tx_paths)
     CHECK(strcmp(Serial1.tx, "AT+CMD") == 0);
 }
 
+TEST(test_set_baud_reopens_port)
+{
+    /* GPS baud-recovery path: end() then begin() at the new rate */
+    uart_init();
+    uart_set_baud(9600);
+    CHECK(Serial1.baud == 9600);
+    uart_set_baud(115200);
+    CHECK(Serial1.baud == 115200);
+}
+
 TEST(test_error_counters_get_and_clear)
 {
     uart_init();
@@ -123,6 +133,7 @@ int main(void)
     run_test_read_path_and_diagnostics();
     run_test_flush_uart_buffer_drains_pending();
     run_test_tx_paths();
+    run_test_set_baud_reopens_port();
     run_test_error_counters_get_and_clear();
 
     return TEST_SUMMARY();

@@ -20,6 +20,7 @@
 #include "include/flight_log.h"
 #include "include/config.h"
 #include "include/radio.h"      /* nothing; same build-tree include chain */
+#include "include/watchdog.h"  /* dump keeps the WDT fed mid-printout */
 #include <Arduino.h>
 #include <string.h>
 #include <stdio.h>
@@ -55,6 +56,21 @@
 #define FLOG_KIND_BATTERY_SAVE  7
 #define FLOG_KIND_BOOT          8
 #define FLOG_KIND_FUSED         9
+#define FLOG_KIND_STATE        10   /* persistent flight-state marker    */
+
+/* Flight-state marker codes (kind 10 evt.code). Lives on the reserved
+ * last row, OUTSIDE the append area, so a wrap-to-full data region can
+ * never overwrite it. */
+#define FLOG_STATE_FLYING       1   /* armed and airborne                */
+#define FLOG_STATE_LANDED       2   /* landing latch hit                 */
+
+/* The last erase row of the region is reserved for the state marker;
+ * normal records append only into [0, FLOG_DATA_BYTES). The marker is
+ * what a mid-flight WDT/brown-out reboot uses to decide "resume the
+ * running flight" vs "pad power-up" at boot. An erased row reads 0xFF
+ * (kind byte 0xFF) -> no marker -> power-on. */
+#define FLOG_DATA_BYTES   (FLOG_BYTES - FLOG_ROW)
+#define FLOG_STATE_ADDR   (FLOG_BASE + FLOG_DATA_BYTES)
 
 /* Fused-record health flags (kind 9 payload). Same meaning as the fused
  * wire packet's flags, kept separate so the crash copy can't drift with
@@ -159,6 +175,29 @@ void flight_log_init(void)
     }
 }
 
+/* Page write buffer: records accumulate here and commit per NVM page.
+ * Async-safety is deliberately NOT aimed at: the main loop calls the
+ * append API on event edges only. */
+static uint8_t page_buf[FLOG_PAGE];
+static uint16_t page_fill = 0;
+
+/* Write the flight-state marker (kind 10) onto its reserved row. The row
+ * is always erased first because state writes (FLYING -> LANDED) flip
+ * bits in both directions, which NAND cannot do in place. */
+static void flog_write_state(uint8_t code)
+{
+    static uint8_t state_page[FLOG_PAGE];
+    flog_rec_t r;
+    memset(&r, 0, sizeof(r));
+    memset(state_page, 0xFF, sizeof(state_page));
+    r.f.magic       = FLOG_MAGIC;
+    r.f.kind        = FLOG_KIND_STATE;
+    r.f.p.evt.code  = code;
+    memcpy(state_page, &r, sizeof(r));
+    (void)nvm_erase_block(FLOG_STATE_ADDR);
+    (void)nvm_write_page(FLOG_STATE_ADDR, state_page);
+}
+
 void flight_log_arm(void)
 {
     if (armed || busy_erase) return;
@@ -169,20 +208,49 @@ void flight_log_arm(void)
     busy_erase = 0;
     armed = 1;
     wptr = 0;
+    flog_write_state(FLOG_STATE_FLYING);
 }
 
 uint8_t flight_log_armed(void) { return armed; }
 uint8_t flight_log_busy(void)  { return busy_erase; }
 
-/* Append one record. Async-safety is deliberately NOT aimed at: the main
- * loop calls these on event edges only. */
-static uint8_t page_buf[FLOG_PAGE];
-static uint16_t page_fill = 0;
+uint8_t flight_log_prev_flying(void)
+{
+    const flog_rec_t *s = (const flog_rec_t *)FLOG_STATE_ADDR;
+    return (s->f.magic == FLOG_MAGIC &&
+            s->f.kind  == FLOG_KIND_STATE &&
+            s->f.p.evt.code == FLOG_STATE_FLYING);
+}
+
+uint8_t flight_log_resume(void)
+{
+    if (armed || !flight_log_prev_flying()) return 0;
+
+    /* Find the append point: first page whose FIRST record lacks the
+     * magic. Power (or the reset) died with at most one partially-
+     * buffered page in RAM - every earlier page was committed. */
+    wptr = 0;
+    while (wptr < FLOG_DATA_BYTES) {
+        const flog_rec_t *r = (const flog_rec_t *)(FLOG_BASE + wptr);
+        if (r->f.magic != FLOG_MAGIC) break;
+        wptr += FLOG_PAGE;
+    }
+    page_fill = 0;
+    armed = 1;
+    return 1;
+}
+
+void flight_log_mark_landed(void)
+{
+    if (!armed) return;
+    flog_write_state(FLOG_STATE_LANDED);
+}
 
 static void flog_append_record(const flog_rec_t *rec)
 {
     if (!armed) return;
-    if (wptr + FLOG_RECORD > FLOG_BYTES) return;  /* hold; never wrap past end */
+    if (wptr + FLOG_RECORD > FLOG_DATA_BYTES) return;  /* hold; state row
+                                                        * is off-limits */
 
     memcpy(page_buf + page_fill, rec, FLOG_RECORD);
     page_fill += FLOG_RECORD;
@@ -265,9 +333,12 @@ void flight_log_fused(uint32_t ms, int32_t lat_e7, int32_t lon_e7,
 
 void flight_log_dump_serial(void)
 {
-    /* Parse records linearly over the whole region; skip magic-only padding */
+    /* Parse records linearly over the whole region; skip magic-only padding.
+     * 8192 records at 115200 baud is a ~40 s printout - the 16 s WDT would
+     * reboot mid-dump, so feed it on every record (a 2-op register poke). */
     Serial.println(F("ms,kind,ax,ay,az,gx,gy,gz,peak,stat_everything"));
     for (uint32_t off = 0; off < FLOG_BYTES; off += FLOG_RECORD) {
+        watchdog_feed();
         const flog_rec_t *r = (const flog_rec_t *)(FLOG_BASE + off);
         if (r->f.magic != FLOG_MAGIC) continue;
         Serial.print(r->f.ms);         Serial.print(',');
@@ -295,7 +366,8 @@ void flight_log_dump_serial(void)
             Serial.print(r->f.p.fus.vd_cms); Serial.print(',');
             Serial.print(r->f.p.fus.flags);
         } else if (r->f.kind == FLOG_KIND_FLIGHT_EVENT ||
-                   r->f.kind == FLOG_KIND_BOOT) {
+                   r->f.kind == FLOG_KIND_BOOT ||
+                   r->f.kind == FLOG_KIND_STATE) {
             Serial.print(r->f.p.evt.code);   Serial.print(',');
             Serial.print(r->f.p.evt.value);
         }

@@ -1870,13 +1870,6 @@ int main(void)
       break;
   }
   
-  /* Output calibration signal periodically for oscilloscope measurement */
-  static uint32_t last_calibration_time = 0;
-  if (current_time - last_calibration_time > 5000) { /* Every 5 seconds */
-    RF_Receiver_OutputCalibrationSignal(20); /* Output calibration pattern */
-    last_calibration_time = current_time;
-  }
-  
   /* Throttle display updates (SHARP full-frame SPI push is ~20 ms; the RF
    * RX path gets priority). A button-triggered mode change bypasses the
    * throttle so the new screen appears immediately. The 4 Hz frame cadence

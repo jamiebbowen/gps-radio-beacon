@@ -95,6 +95,17 @@ static void push_rotvec(float w, float i, float j, float k)
     bno_events[bno_event_tail++ % 32] = ev;
 }
 
+static void push_gyro(float x, float y, float z)
+{
+    sh2_SensorValue_t ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.sensorId = SH2_GYROSCOPE_CALIBRATED;
+    ev.un.gyroscope.x = x;
+    ev.un.gyroscope.y = y;
+    ev.un.gyroscope.z = z;
+    bno_events[bno_event_tail++ % 32] = ev;
+}
+
 /** One update tick at the current clock, after advancing it */
 static void tick(uint32_t ms, uint32_t sys_s)
 {
@@ -132,6 +143,23 @@ TEST(test_rotvec_enable_failure_warns_but_init_succeeds)
 
     /* No launch yet: time-since-launch is 0 (not garbage) */
     CHECK(launch_detect_get_time_since_launch(999) == 0);
+}
+
+TEST(test_gyro_enable_failure_is_advisory)
+{
+    /* Gyro is a witness-only channel: if the report can't be enabled the
+     * detector still works, but the boot log must say the inertial
+     * packet will lack rotation data. */
+    reset_all();
+    bno_enable_fail_sensor = SH2_GYROSCOPE_CALIBRATED;
+    launch_detect_init();
+    CHECK(launch_detect_get_imu_status() == true);
+    CHECK(strstr(Serial.log, "Gyro report unavailable") != NULL);
+    CHECK(strstr(Serial.log, "Launch detection ready") != NULL);
+
+    /* No accel sample has ever arrived: staleness is UINT32_MAX, not 0
+     * (0 would read as "data is fresh" to a caller). */
+    CHECK(launch_detect_imu_staleness_ms() == UINT32_MAX);
 }
 
 TEST(test_init_failures)
@@ -246,6 +274,22 @@ TEST(test_sensor_event_draining_and_accessors)
     imu_get_quaternion(NULL, NULL, NULL, NULL);
     CHECK(imu_last_accel_ms() == now_ms);
     CHECK(imu_last_rotvec_ms() == now_ms);
+
+    /* Staleness counts ms since the newest linear-accel sample */
+    CHECK(launch_detect_imu_staleness_ms() == 0);
+
+    /* Calibrated gyro lands in the inertial trace accessors, null-safe */
+    push_gyro(0.11f, -0.22f, 0.33f);
+    tick(1, 0);
+    float gx = 0, gy = 0, gz = 0;
+    launch_detect_get_gyro_rads(&gx, &gy, &gz);
+    CHECK(fabsf(gx - 0.11f) < 1e-6f && fabsf(gy + 0.22f) < 1e-6f &&
+          fabsf(gz - 0.33f) < 1e-6f);
+    launch_detect_get_gyro_rads(NULL, NULL, NULL);
+
+    CHECK(launch_detect_imu_staleness_ms() == 1);   /* accel is 1 ms old */
+    now_ms += 250;
+    CHECK(launch_detect_imu_staleness_ms() == 251);
 }
 
 TEST(test_sensor_reset_reenables_reports)
@@ -270,21 +314,124 @@ TEST(test_gps_fallback_confirms_on_sustained_climb)
     reset_all();
     launch_detect_init();
 
-    CHECK(launch_detect_gps_fallback_update(1667.0f, 10) == false);  /* baseline */
-    CHECK(launch_detect_gps_fallback_update(1668.0f, 11) == false);  /* noise */
-    CHECK(launch_detect_gps_fallback_update(1717.0f, 12) == false);  /* climb 1 */
-    CHECK(launch_detect_gps_fallback_update(1718.0f, 13) == false);  /* climb 2 */
-    CHECK(launch_detect_gps_fallback_update(1600.0f, 14) == false);  /* dip resets */
-    CHECK(launch_detect_gps_fallback_update(1717.0f, 15) == false);  /* climb 1 */
-    CHECK(launch_detect_gps_fallback_update(1718.0f, 16) == false);  /* climb 2 */
-    CHECK(launch_detect_gps_fallback_update(1719.0f, 17) == true);   /* climb 3 */
+    /* Settle: the climb test only arms after LAUNCH_GPS_BASELINE_SETTLE_S
+     * of valid fixes at the pad. Baseline = running max = 1668 here. */
+    for (uint32_t t = 10; t <= 30; t++) {
+        CHECK(launch_detect_gps_fallback_update(1667.0f + (float)(t & 1), t)
+              == false);
+    }
+    CHECK(launch_detect_gps_fallback_update(1720.0f, 31) == false);  /* climb 1 */
+    CHECK(launch_detect_gps_fallback_update(1721.0f, 32) == false);  /* climb 2 */
+    CHECK(launch_detect_gps_fallback_update(1600.0f, 33) == false);  /* dip resets */
+    CHECK(launch_detect_gps_fallback_update(1720.0f, 34) == false);  /* climb 1 */
+    CHECK(launch_detect_gps_fallback_update(1721.0f, 35) == false);  /* climb 2 */
+    CHECK(launch_detect_gps_fallback_update(1722.0f, 36) == true);   /* climb 3 */
 
     /* Identical outcome to the IMU path: state + one-shot edge + timestamp */
     CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
-    CHECK(launch_detect_get_time_since_launch(20) == 3);
+    CHECK(launch_detect_get_time_since_launch(39) == 3);
     CHECK(launch_detect_is_launched() == true);
     CHECK(launch_detect_is_launched() == false);
-    CHECK(launch_detect_gps_fallback_update(2000.0f, 18) == false);  /* no refire */
+    CHECK(launch_detect_gps_fallback_update(2000.0f, 40) == false);  /* no refire */
+}
+
+TEST(test_gps_fallback_cold_start_low_baseline_no_false_launch)
+{
+    /* THE false-launch bug this redesign fixes: a GPS cold start reads
+     * ~80 m LOW, then corrects over the next seconds. The sustained +80 m
+     * "climb" back to truth confirmed a launch that never happened under
+     * the first-fix baseline. During settle the correction just feeds the
+     * max. */
+    reset_all();
+    launch_detect_init();
+
+    launch_detect_gps_fallback_update(1587.0f, 10);   /* cold: -80 low */
+    launch_detect_gps_fallback_update(1620.0f, 11);   /* correcting   */
+    launch_detect_gps_fallback_update(1650.0f, 12);   /* correcting   */
+    for (uint32_t t = 13; t <= 40; t++) {
+        CHECK(launch_detect_gps_fallback_update(1667.0f + (float)(t & 1), t)
+              == false);
+    }
+    /* 28 s at the true altitude: the correction was absorbed, no launch */
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_IDLE);
+}
+
+TEST(test_gps_fallback_cold_start_high_baseline_still_detects)
+{
+    /* Mirror image: first fix reads ~80 m HIGH then decays. The max
+     * baseline keeps the high-water mark, so a real launch needs +130 m
+     * of climb - comfortably inside any boost. */
+    reset_all();
+    launch_detect_init();
+
+    launch_detect_gps_fallback_update(1747.0f, 10);   /* cold: +80 high */
+    launch_detect_gps_fallback_update(1710.0f, 11);
+    launch_detect_gps_fallback_update(1680.0f, 12);
+    for (uint32_t t = 13; t <= 30; t++) {
+        CHECK(launch_detect_gps_fallback_update(1667.0f, t) == false);
+    }
+    CHECK(launch_detect_gps_fallback_update(1798.0f, 31) == false);  /* climb 1 */
+    CHECK(launch_detect_gps_fallback_update(1800.0f, 32) == false);  /* climb 2 */
+    CHECK(launch_detect_gps_fallback_update(1801.0f, 33) == true);   /* climb 3 */
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
+}
+
+TEST(test_gps_fallback_ignores_climb_before_arming)
+{
+    /* A launch inside the first 20 s of GPS life is the IMU's job; the
+     * fallback's climb test is disarmed until the baseline settles, so
+     * even a sustained +53 "climb" mid-settle can only feed the max. */
+    reset_all();
+    launch_detect_init();
+
+    launch_detect_gps_fallback_update(1667.0f, 10);
+    for (uint32_t t = 11; t <= 29; t++) {
+        CHECK(launch_detect_gps_fallback_update(1720.0f, t) == false);
+    }
+    CHECK(launch_detect_get_state() != LAUNCH_STATE_CONFIRMED);
+
+    /* The t=31 feed arms the test and ratchets baseline to 1770; the
+     * armed climb test then needs >= 1820 sustained. */
+    CHECK(launch_detect_gps_fallback_update(1770.0f, 31) == false);
+    CHECK(launch_detect_gps_fallback_update(1821.0f, 32) == false);  /* climb 1 */
+    CHECK(launch_detect_gps_fallback_update(1822.0f, 33) == false);  /* climb 2 */
+    CHECK(launch_detect_gps_fallback_update(1823.0f, 34) == true);   /* climb 3 */
+}
+
+TEST(test_gps_fallback_resettles_after_long_outage)
+{
+    /* A re-acquired fix after a long outage is a fresh cold start: the
+     * armed fallback would have counted its +67 m correction as climb.
+     * Any gap past the settle window disarms the climb test again. */
+    reset_all();
+    launch_detect_init();
+
+    launch_detect_gps_fallback_update(1667.0f, 10);
+    for (uint32_t t = 11; t <= 30; t++)
+        launch_detect_gps_fallback_update(1667.0f, t);              /* armed */
+
+    /* An hour of darkness, then a cold fix 67 m below baseline */
+    CHECK(launch_detect_gps_fallback_update(1600.0f, 3610) == false);
+    for (uint32_t t = 3611; t <= 3629; t++) {
+        CHECK(launch_detect_gps_fallback_update(1667.0f, t) == false);
+    }
+    CHECK(launch_detect_get_state() != LAUNCH_STATE_CONFIRMED);
+    /* Settle completes at first+20; climbs count again afterwards */
+    CHECK(launch_detect_gps_fallback_update(1718.0f, 3631) == false); /* climb 1 */
+}
+
+TEST(test_force_confirmed_flying_without_edge)
+{
+    /* The reboot-resume path parks the FSM at CONFIRMED but must NOT
+     * raise the is_launched() edge - firmware.ino would re-arm (erase)
+     * the resumed flight log otherwise. */
+    reset_all();
+    launch_detect_init();
+
+    launch_detect_force_confirmed(55);
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
+    CHECK(launch_detect_is_launched() == false);
+    CHECK(launch_detect_get_time_since_launch(60) == 5);
 }
 
 TEST(test_gps_fallback_ignores_pad_drift)
@@ -292,9 +439,11 @@ TEST(test_gps_fallback_ignores_pad_drift)
     reset_all();
     launch_detect_init();
 
-    launch_detect_gps_fallback_update(1667.0f, 10);  /* baseline */
-    /* Stationary GPS alt wanders tens of metres but must never sustain +50 */
-    for (int i = 1; i <= 20; i++) {
+    launch_detect_gps_fallback_update(1667.0f, 10);  /* baseline seed */
+    /* Stationary GPS alt wanders tens of metres but must never sustain
+     * +50 above the running max - even the upward wander just ratchets
+     * the baseline. */
+    for (int i = 1; i <= 40; i++) {
         float wander = 1667.0f + ((i % 2) ? 25.0f : -25.0f);
         CHECK(launch_detect_gps_fallback_update(wander, 10 + i) == false);
     }
@@ -306,11 +455,8 @@ TEST(test_landing_latches_on_quiet_and_stable)
     reset_all();
     launch_detect_init();
 
-    /* Get to CONFIRMED via the fallback path */
-    launch_detect_gps_fallback_update(1000.0f, 1);
-    launch_detect_gps_fallback_update(1100.0f, 2);
-    launch_detect_gps_fallback_update(1100.0f, 3);
-    CHECK(launch_detect_gps_fallback_update(1100.0f, 4) == true);
+    /* Straight to flying: the landing window is the unit under test */
+    launch_detect_force_confirmed(4);
 
     /* Quiet accel, altitude stable within +/-3 m for 60 s */
     total_accel = 0.5f;
@@ -327,10 +473,7 @@ TEST(test_landing_never_during_descent)
 {
     reset_all();
     launch_detect_init();
-    launch_detect_gps_fallback_update(1000.0f, 1);
-    launch_detect_gps_fallback_update(1100.0f, 2);
-    launch_detect_gps_fallback_update(1100.0f, 3);
-    launch_detect_gps_fallback_update(1100.0f, 4);  /* confirmed */
+    launch_detect_force_confirmed(4);
 
     /* Parachute descent: quiet accel (gravity removed) but alt falling 6 m/s
      * - the altitude-stability half of the test must keep it from firing. */
@@ -355,10 +498,7 @@ TEST(test_landing_requires_launch_and_valid_gps)
     }
 
     /* Launched, but GPS invalid: window must not accumulate */
-    launch_detect_gps_fallback_update(1000.0f, 100);
-    launch_detect_gps_fallback_update(1100.0f, 101);
-    launch_detect_gps_fallback_update(1100.0f, 102);
-    launch_detect_gps_fallback_update(1100.0f, 103);  /* confirmed */
+    launch_detect_force_confirmed(103);
     for (uint32_t t = 200; t < 270; t++) {
         CHECK(landing_detect_update(0.0f, false, t) == false);
     }
@@ -375,10 +515,7 @@ TEST(test_landing_survives_canopy_multipath_glitches)
      * reset the window; sustained out-of-window readings still must. */
     reset_all();
     launch_detect_init();
-    launch_detect_gps_fallback_update(1000.0f, 1);
-    launch_detect_gps_fallback_update(1100.0f, 2);
-    launch_detect_gps_fallback_update(1100.0f, 3);
-    launch_detect_gps_fallback_update(1100.0f, 4);  /* confirmed */
+    launch_detect_force_confirmed(4);
 
     total_accel = 0.5f;
     uint32_t t = 500;
@@ -397,10 +534,7 @@ TEST(test_landing_survives_canopy_multipath_glitches)
      * is still sliding/rolling and the window really does restart. */
     reset_all();
     launch_detect_init();
-    launch_detect_gps_fallback_update(1000.0f, 1);
-    launch_detect_gps_fallback_update(1100.0f, 2);
-    launch_detect_gps_fallback_update(1100.0f, 3);
-    launch_detect_gps_fallback_update(1100.0f, 4);
+    launch_detect_force_confirmed(4);
 
     total_accel = 0.5f;
     landed = false;
@@ -425,12 +559,18 @@ int main(void)
 {
     run_test_init_success();
     run_test_rotvec_enable_failure_warns_but_init_succeeds();
+    run_test_gyro_enable_failure_is_advisory();
     run_test_init_failures();
     run_test_launch_detection_happy_path();
     run_test_false_alarm_drops_to_idle();
     run_test_sensor_event_draining_and_accessors();
     run_test_sensor_reset_reenables_reports();
     run_test_gps_fallback_confirms_on_sustained_climb();
+    run_test_gps_fallback_cold_start_low_baseline_no_false_launch();
+    run_test_gps_fallback_cold_start_high_baseline_still_detects();
+    run_test_gps_fallback_ignores_climb_before_arming();
+    run_test_gps_fallback_resettles_after_long_outage();
+    run_test_force_confirmed_flying_without_edge();
     run_test_gps_fallback_ignores_pad_drift();
     run_test_landing_latches_on_quiet_and_stable();
     run_test_landing_never_during_descent();

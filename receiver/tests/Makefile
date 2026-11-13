@@ -16,14 +16,15 @@
 
 CC       ?= gcc
 CFLAGS   := -std=gnu11 -Wall -Wextra -g -O0 \
-            -Istubs -I. -I../firmware/inc
+            -Istubs -I. -I../firmware/inc \
+            -I../firmware/lib/STM32CubeF4/Middlewares/Third_Party/FatFs/src
 LDFLAGS  := -lm
 
 BUILD    := build
 SRC_DIR  := ../firmware/src
 
 # Modules with a matching test_<module>.c and $(SRC_DIR)/<module>.c
-MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass
+MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass i2c_bus jogpad eink sd_diskio
 BINS     := $(addprefix $(BUILD)/test_,$(MODULES)) \
             $(BUILD)/test_navigation_mode $(BUILD)/test_preflight_mode
 
