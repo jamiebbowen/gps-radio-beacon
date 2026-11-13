@@ -16,7 +16,10 @@ typedef enum {
 
 // Function prototypes
 void launch_detect_init(void);
-void launch_detect_update(uint32_t system_time_seconds, uint32_t ms_counter);
+/* The millisecond timestamps used internally come from millis(), NOT the
+ * firmware.ino ms_counter (which is a 0-999 phase within the current
+ * second) - the parameter was removed so nobody can wire the wrong clock. */
+void launch_detect_update(uint32_t system_time_seconds);
 
 /**
  * ONE-SHOT edge trigger: returns true exactly once after launch is confirmed,

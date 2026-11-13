@@ -150,7 +150,7 @@ static void push_rotvec(float w, float i, float j, float k)
 static void tick(uint32_t ms)
 {
     now_ms += ms;
-    launch_detect_update((uint32_t)(now_ms/1000), (uint32_t)(now_ms%1000));
+    launch_detect_update((uint32_t)(now_ms/1000));
     nav_predict();
 }
 
@@ -175,7 +175,7 @@ static const uint8_t* tick_and_fused_tx(uint32_t ms)   /* returns the flags byte
 static void feed_gps(float lat, float lon, float alt)
 {
     refill_idle_sensors();
-    launch_detect_update((uint32_t)(now_ms/1000), (uint32_t)(now_ms%1000));
+    launch_detect_update((uint32_t)(now_ms/1000));
     nav_update_from_gps(lat, lon, alt, 8, 1);
 }
 

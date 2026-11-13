@@ -110,7 +110,7 @@ static void push_gyro(float x, float y, float z)
 static void tick(uint32_t ms, uint32_t sys_s)
 {
     now_ms += ms;
-    launch_detect_update(sys_s, now_ms);
+    launch_detect_update(sys_s);
 }
 
 /* ------------------------------------------------------------------ */

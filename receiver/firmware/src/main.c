@@ -601,7 +601,8 @@ int main(void)
     char err_buf[24];
     snprintf(err_buf, sizeof(err_buf), "Stat:%d CMD0:0x%02X", sd_status, sd_dbg.cmd0_response);
     Display_DrawTextRowCol(3, 0, err_buf);
-    snprintf(err_buf, sizeof(err_buf), "FS:%lu DET:%d", sd_dbg.write_errors, sd_dbg.detect_pin_state);
+    snprintf(err_buf, sizeof(err_buf), "FS:%lu DET:%d",
+             (unsigned long)sd_dbg.write_errors, (int)sd_dbg.detect_pin_state);
     Display_DrawTextRowCol(4, 0, err_buf);
     Display_Update();
     HAL_Delay(3000);

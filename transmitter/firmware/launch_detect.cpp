@@ -145,7 +145,7 @@ void launch_detect_init(void) {
 /**
  * Update launch detection state machine (call regularly from main loop)
  */
-void launch_detect_update(uint32_t system_time_seconds, uint32_t ms_counter) {
+void launch_detect_update(uint32_t system_time_seconds) {
     if (!imu_initialized) {
         return;  // Can't detect if IMU isn't working
     }

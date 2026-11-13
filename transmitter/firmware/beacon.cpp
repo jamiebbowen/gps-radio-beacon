@@ -26,6 +26,7 @@ static_assert(ROCKET_ID != 255, "ROCKET_ID 255 is reserved (RX unbound sentinel)
  * @return 1 if transmission was successful, 0 if coordinates were invalid
  */
 uint8_t beacon_transmit_gps_data(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast) {
+    (void)system_time_seconds; /* kept in the signature for parity with heartbeat/T0 senders */
     char packet[256];  // LoRa packet buffer (plenty of room)
     int pos = 0;
     
@@ -158,6 +159,7 @@ uint8_t beacon_transmit_gps_data(const GPSCoordinates_t* coords, uint32_t system
  * @return 1 if transmission was successful, 0 if coordinates were invalid
  */
 uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast) {
+    (void)system_time_seconds; /* API parity with the ASCII variant; binary packets carry GPS time */
     // Perform all the same validation checks as ASCII version
     if (!coords->valid || (coords->lat[0] == '0' && strlen(coords->lat) == 1)) {
         Serial.print(F("[Beacon] Rejecting GPS - valid="));

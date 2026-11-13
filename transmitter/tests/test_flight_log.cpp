@@ -221,7 +221,7 @@ static int flash_data_area_erased(void)
 
 static const flog_rec_t *state_marker(void)
 {
-    return (const flog_rec_t *)FLOG_STATE_ADDR;
+    return (const flog_rec_t *)(uintptr_t)FLOG_STATE_ADDR;
 }
 
 TEST(arm_erases_full_region_then_arms)

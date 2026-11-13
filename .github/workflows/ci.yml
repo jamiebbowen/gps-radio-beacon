@@ -11,7 +11,7 @@ jobs:
   host-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Run receiver unit tests
         run: make -C receiver/tests test
@@ -42,7 +42,7 @@ jobs:
     env:
       CUBE_TAG: v1.28.2
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install ARM toolchain
         run: |
@@ -51,7 +51,7 @@ jobs:
 
       - name: Cache STM32CubeF4
         id: cache-cube
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: receiver/firmware/lib/STM32CubeF4
           key: stm32cubef4-${{ env.CUBE_TAG }}
@@ -74,10 +74,10 @@ jobs:
   transmitter-firmware:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install arduino-cli
-        uses: arduino/setup-arduino-cli@v2
+        uses: arduino/setup-arduino-cli@v3
 
       - name: Install board core and libraries
         run: |

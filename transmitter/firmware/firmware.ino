@@ -288,7 +288,7 @@ void loop() {
     last_millis = current_millis;
     
     // Update launch detection system (also drains IMU samples)
-    launch_detect_update(system_time_seconds, ms_counter);
+    launch_detect_update(system_time_seconds);
 
     // Run the EKF predict step against whatever IMU data just arrived.
     // Safe to call every loop iteration; dt is computed internally.
