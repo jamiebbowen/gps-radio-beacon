@@ -12,7 +12,9 @@
 #define LAUNCH_DEBOUNCE_TIME_MS         200   // 200ms debounce time for launch detection
 
 // Set to 1 for testing mode, 0 for production mode
+#ifndef TESTING_MODE
 #define TESTING_MODE 0
+#endif
 
 /* Minimum seconds between heartbeat packets when a beacon TX was requested
  * but no transmittable GPS fix exists (flight / battery-save states). On the

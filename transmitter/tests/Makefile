@@ -152,7 +152,15 @@ $(BUILD)/altconfig_nofusion.o: test_mainloop.cpp ../firmware/firmware.ino \
             stubs/Adafruit_BNO08x.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) -Istubs -DIMU_FUSION_ENABLED=0 -c -o $@ $<
 
-test: $(BINS) $(BUILD)/altconfig_nofusion.o
+# Same idea for the other field-used config variant: TESTING_MODE swaps
+# the cadence/callsign constants - a build that only ever compiles the
+# production branch could let that path rot unnoticed.
+$(BUILD)/altconfig_testing.o: test_mainloop.cpp ../firmware/firmware.ino \
+            ../firmware/include/config.h stubs/Arduino.h stubs/Wire.h \
+            stubs/Adafruit_BNO08x.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) -Istubs -DTESTING_MODE=1 -c -o $@ $<
+
+test: $(BINS) $(BUILD)/altconfig_nofusion.o $(BUILD)/altconfig_testing.o
 	@rc=0; for b in $(BINS); do \
 	    echo "== $$b =="; ./$$b || rc=1; \
 	done; exit $$rc
