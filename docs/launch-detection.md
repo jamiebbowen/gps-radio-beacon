@@ -276,15 +276,58 @@ The code uses **linear acceleration** (gravity removed by sensor fusion):
 **Alternative (raw acceleration):**
 Would need to subtract gravity manually and handle orientation changes. Linear acceleration is better for this application.
 
+## GPS-Altitude Fallback
+
+The IMU path above is primary, but it is not the only path: a dead or
+wedged BNO085 must not strand launch detection, or the beacon stays at
+pad cadence for the entire flight. Once per second, when a valid GPS
+fix (quality ≥ 1) exists, the loop also feeds
+`launch_detect_gps_fallback_update(altitude, t)`:
+
+- **Baseline**: the running *maximum* of pad altitude (upward multipath
+  wander ratchets the baseline rather than accumulating toward the
+  threshold).
+- **Arming**: after `LAUNCH_GPS_BASELINE_SETTLE_S` (20 s) with
+  `LAUNCH_GPS_BASELINE_MIN_FIXES` (5) fixes, the climb test arms.
+- **Trigger**: `LAUNCH_GPS_ALT_CLIMB_M` (50 m) above baseline sustained
+  for `LAUNCH_GPS_ALT_CLIMB_SAMPLES` (3) consecutive 1 Hz samples.
+- **Outage**: a gap longer than the settle window disarms the climb test
+  and re-settles, but keeps the max baseline.
+- **Corrupt input**: a non-finite altitude (a `nan`/`inf` NMEA field
+  parses literally through `atof`) is rejected at the function
+  boundary - one bad sample cannot poison the baseline or seed a false
+  window.
+
+Same confirmation contract as the IMU path: `LAUNCH_STATE_CONFIRMED`,
+one-shot edge, `launch_time_seconds` timestamp.
+
+## Landing Detection
+
+Post-launch, `landing_detect_update()` runs on the same 1 Hz feed and
+latches when the rocket has come to rest:
+
+- **Quiet**: linear acceleration below `LAND_ACCEL_QUIET_MS2` (1.5 m/s²)
+  - parachute descent still moves enough air/frame that this fails
+    mid-flight, so descent cannot false-trigger.
+- **Stable**: GPS altitude min/max spread within `LAND_ALT_WINDOW_M`
+  (10 m) over the window. A single outlier is tolerated (trees and
+  gullies throw 20-30 m resting spikes); *two consecutive* outliers
+  reset the window - genuinely still sliding.
+- **Sustained**: both hold for `LAND_QUIET_S` (60 s), then the state
+  latches and the beacon drops to battery-save cadence.
+
+The same non-finite-input guard applies: a corrupt altitude reads as
+no-fix and breaks the window rather than seeding it with NaN (which
+would read "stable" forever and risk a mid-flight false landing).
+
 ## Future Enhancements
 
 With the BNO085, you could add:
 
 1. **Apogee Detection**: Detect when acceleration goes to zero
-2. **Landing Detection**: Detect impact/touchdown
-3. **Rotation Monitoring**: Use gyro data for spin rate
-4. **Tilt Sensing**: Verify vertical launch
-5. **Flight Phases**: Detect boost/coast/descent automatically
+2. **Rotation Monitoring**: Use gyro data for spin rate
+3. **Tilt Sensing**: Verify vertical launch
+4. **Flight Phases**: Detect boost/coast/descent automatically
 
 These would require additional code but the hardware supports it!
 
