@@ -84,8 +84,11 @@ jobs:
           arduino-cli config init --additional-urls \
             https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
           arduino-cli core update-index
-          arduino-cli core install adafruit:samd
-          arduino-cli lib install RadioLib "Adafruit BNO08x"
+          # Pinned: RadioLib 8.x replaced SX1268::begin(8 args) with
+          # begin(ConfigLoRa_t) - the dev environment runs 7.1.2, and an
+          # unpinned install silently floats to an incompatible API.
+          arduino-cli core install adafruit:samd@1.7.17
+          arduino-cli lib install RadioLib@7.1.2 "Adafruit BNO08x@1.2.5"
 
       - name: Build transmitter firmware
         run: make -C transmitter/firmware compile

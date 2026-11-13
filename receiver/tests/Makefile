@@ -15,9 +15,11 @@
 # exercise defensive guards on internal helpers and reach 100% coverage.
 
 CC       ?= gcc
+# No STM32CubeF4 -I: host CI never checks out the vendor tree (1+ GB), so
+# FatFs headers are stubbed in stubs/ like the HAL ones - the test surface
+# stays identical locally and in CI.
 CFLAGS   := -std=gnu11 -Wall -Wextra -g -O0 \
-            -Istubs -I. -I../firmware/inc \
-            -I../firmware/lib/STM32CubeF4/Middlewares/Third_Party/FatFs/src
+            -Istubs -I. -I../firmware/inc
 LDFLAGS  := -lm
 
 BUILD    := build
