@@ -121,6 +121,25 @@ TEST(test_gps_gating)
     CHECK(nav_is_valid() == true);
 }
 
+TEST(test_polar_latitude_rejected)
+{
+    /* |lat| > 85 is format-valid NMEA but physically impossible here, and
+     * anchoring there collapses 111320*cos(lat) to ~0 - every metre offset
+     * explodes. The gate must sit before candidate seeding too. */
+    nav_init();
+    nav_update_from_gps(89.9f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    nav_update_from_gps(-89.9f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    now_ms += 1000;
+    nav_update_from_gps(89.9f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    CHECK(nav_is_valid() == false);
+
+    /* Boundary itself is accepted: 85.0 anchors, garbage does not. */
+    nav_update_from_gps(85.0f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    now_ms += 1000;
+    nav_update_from_gps(85.0f, ANCHOR_LON, ANCHOR_ALT, 8, 1);
+    CHECK(nav_is_valid() == true);
+}
+
 TEST(test_anchor_requires_two_agreeing_fixes)
 {
     nav_init();
@@ -670,6 +689,7 @@ int main(void)
 {
     run_test_invalid_until_anchored();
     run_test_gps_gating();
+    run_test_polar_latitude_rejected();
     run_test_anchor_requires_two_agreeing_fixes();
     run_test_anchor_candidate_expires();
     run_test_anchor_and_roundtrip();

@@ -173,6 +173,11 @@ void nav_update_from_gps(float lat_deg, float lon_deg, float alt_m,
      * permanently (x += K*NaN propagates forever). Boundary-check any
      * upstream garbage here, same contract as the sats/fix gates. */
     if (!isfinite(lat_deg) || !isfinite(lon_deg) || !isfinite(alt_m)) return;
+    /* Polar bound: the tangent plane divides by 111320*cos(lat); past 85deg
+     * that factor collapses toward zero and every metre offset explodes.
+     * |lat|>85 is format-valid NMEA but physically impossible here, so a
+     * glitch fix claiming it must not anchor (or re-anchor) the frame. */
+    if (lat_deg > 85.0f || lat_deg < -85.0f) return;
 
     if (!s_anchored) {
         /* Anchor on two CONSECUTIVE fixes that agree: a single glitch fix
