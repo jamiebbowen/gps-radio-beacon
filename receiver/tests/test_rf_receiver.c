@@ -104,6 +104,8 @@ uint8_t LoRa_ReadPacket(LoRa_Packet_t *pkt)
     fake_pkt_pending = 0;
     if (fake_crc_error) {
         fake_crc_error = 0;
+        *pkt = fake_pkt;   /* corrupt frames still carry their bytes - the
+                            * receiver's crc_dump forensics rely on them */
         return LORA_CRC_ERROR;
     }
     *pkt = fake_pkt;
@@ -715,6 +717,15 @@ TEST(test_flight_contact_latch_sources)
     CHECK(RF_Receiver_FlightContactLatched() == 1);
     RF_Receiver_ClearFlightContactLatch();
 
+    /* A V3 fused packet carrying FUSED_FLAG_LAUNCH_DETECTED latches -
+     * the flag lives at byte 17 on V3 (byte 18 is the rocket_id). */
+    inject_fused_packet(39.95, -105.10, OUR_ROCKET_ID);
+    fake_pkt.data[17] = FUSED_FLAG_GPS_FRESH | FUSED_FLAG_IMU_HEALTHY |
+                        FUSED_FLAG_LAUNCH_DETECTED | FUSED_FLAG_V3;
+    run_for(500, 250);
+    CHECK(RF_Receiver_FlightContactLatched() == 1);
+    RF_Receiver_ClearFlightContactLatch();
+
     /* Foreign flight traffic must NOT latch: it isn't our launch */
     inject_flight_event(FOREIGN_ROCKET_ID, FLIGHT_EVENT_APOGEE, 900);
     run_for(500, 250);
@@ -723,6 +734,52 @@ TEST(test_flight_contact_latch_sources)
                             0x03 | FLAG_LAUNCH_DETECTED);
     run_for(500, 250);
     CHECK(RF_Receiver_FlightContactLatched() == 0);
+}
+
+TEST(test_crc_dump_captures_corrupt_head)
+{
+    /* Consume any packet the latch tests left pending - the read gate
+     * won't accept new frames while rf_packet_ready is set. */
+    GPS_Data _g;
+    (void)RF_Receiver_GetGPSData(&_g);
+
+    /* A heard-but-corrupt frame banks its first 8 bytes plus the on-air
+     * length for the main-loop forensics row. */
+    memset(&fake_pkt, 0xC7, sizeof(fake_pkt));
+    fake_pkt.data[0] = PACKET_TYPE_GPS;          /* looks like ours... */
+    fake_pkt.length = 20;                        /* ...at GPS size */
+    fake_crc_error = 1;
+    fake_pkt_pending = 1;
+    run_for(200, 250);
+    CHECK(RF_Receiver_GetCrcErrors() >= 1);
+
+    uint8_t dump[8] = {0}, total = 0;
+    uint8_t n = RF_Receiver_TakeCrcDump(dump, sizeof(dump), &total);
+    CHECK(n == 8);
+    CHECK(total == 20);
+    CHECK(dump[0] == PACKET_TYPE_GPS && dump[1] == 0xC7);
+    CHECK(RF_Receiver_TakeCrcDump(dump, sizeof(dump), &total) == 0);  /* one-shot */
+
+    /* Short corrupt frame: dump length tracks the on-air length, and the
+     * pending slot must be free again for the next corrupt frame. */
+    memset(&fake_pkt, 0x33, sizeof(fake_pkt));
+    fake_pkt.length = 4;
+    fake_crc_error = 1;
+    fake_pkt_pending = 1;
+    run_for(200, 250);
+    uint8_t small[8];
+    CHECK(RF_Receiver_TakeCrcDump(small, sizeof(small), &total) == 4);
+    CHECK(total == 4 && small[0] == 0x33);
+
+    /* NULL/zero guards return 0 without consuming nothing-pending */
+    CHECK(RF_Receiver_TakeCrcDump(NULL, 8, NULL) == 0);
+    memset(&fake_pkt, 0x99, sizeof(fake_pkt));
+    fake_pkt.length = 3;
+    fake_crc_error = 1;
+    fake_pkt_pending = 1;
+    run_for(200, 250);
+    CHECK(RF_Receiver_TakeCrcDump(small, 0, NULL) == 0);
+    CHECK(RF_Receiver_TakeCrcDump(small, sizeof(small), NULL) == 3);
 }
 
 TEST(test_imu_trace_and_launch_t0)
@@ -1273,10 +1330,13 @@ TEST(test_noise_sweep_per_channel)
     (void)LoRa_SetChannel(5);
 
     int16_t out[LORA_CHANNEL_COUNT] = {0};
+    uint32_t sweep_at = HAL_GetTick();
     CHECK(RF_Receiver_NoiseSweep(out) == LORA_CHANNEL_COUNT);
     for (uint8_t ch = 0; ch < LORA_CHANNEL_COUNT; ch++) {
         CHECK(out[ch] == floors[ch]);
+        CHECK(RF_Receiver_GetSweepTick(ch) == sweep_at);
     }
+    CHECK(RF_Receiver_GetSweepTick(LORA_CHANNEL_COUNT) == 0);   /* bounds */
     CHECK(LoRa_GetChannel() == 5);           /* restored */
 
     fake_rssi_use_table = 0;                 /* restore scalar default */
@@ -2262,6 +2322,7 @@ int main(void)
     run_test_maxima_and_hello_dispatch();
     run_test_flight_contact_latch_blocks_auto_rescan();
     run_test_flight_contact_latch_sources();
+    run_test_crc_dump_captures_corrupt_head();
     run_test_imu_trace_foreign_id_dropped();
     run_test_two_way_ack_lifecycle();
     run_test_two_way_foreign_ack_dropped();

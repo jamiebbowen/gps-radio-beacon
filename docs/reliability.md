@@ -414,6 +414,18 @@ coverage, RX lowest modules are `sd_card` (92%) and `compass` (94%).
   termination, both CSD sector-count formulas, write-token rejection,
   busy timeouts, the full speed ladder, and per-transaction prescaler
   reassertion - the highest-risk, previously untested driver.
+- **Fused launch flag read from the wrong byte** (`rf_receiver.c`):
+  `flight_contact_latch` checked `data[18]` for
+  `FUSED_FLAG_LAUNCH_DETECTED` unconditionally. On V3 fused packets
+  (the current wire format) byte 18 is the `rocket_id`, so a fused
+  launch flag could never latch unless `rocket_id >= 128`. Now reads
+  the version-correct index (V3 flags at [17], V1/V2 at [18]) -
+  same discrimination the parser uses. Found by a coverage-driven
+  regression test.
+- **Coverage closed**: every RX module under test is now at 100% line
+  coverage except `sd_card.c` (~93% - the LittleFS-fault recovery
+  ladder is defensive code the RAM block device can't drive
+  faithfully; documented in `test_sd_card.c`).
 
 ### Tooling
 

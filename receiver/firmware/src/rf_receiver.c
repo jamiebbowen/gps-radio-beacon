@@ -524,9 +524,15 @@ uint8_t RF_Receiver_DataAvailable(void)
           rf_packet_ready = 1;
           rf_header_matches++;
           last_packet_time = HAL_GetTick();
-          if (last_packet.length == FUSED_PACKET_SIZE &&
-              (last_packet.data[18] & FUSED_FLAG_LAUNCH_DETECTED)) {
-            flight_contact_latch = 1;
+          /* Launch evidence in the flags byte - index is version-
+           * dependent: V3 flags at [17] (id at [18]), V1/V2 flags at
+           * [18] (same discrimination as the parser). */
+          {
+            uint8_t flags_idx = ((last_packet.length == FUSED_PACKET_SIZE) &&
+                                 (last_packet.data[17] & FUSED_FLAG_V3)) ? 17 : 18;
+            if (last_packet.data[flags_idx] & FUSED_FLAG_LAUNCH_DETECTED) {
+              flight_contact_latch = 1;
+            }
           }
         }
       } else if ((last_packet.length == IMU_TRACE_PACKET_SIZE

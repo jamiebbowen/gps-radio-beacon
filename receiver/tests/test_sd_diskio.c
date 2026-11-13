@@ -45,6 +45,8 @@ static struct {
     uint8_t  data_resp;        /* data-response token on writes         */
     uint8_t  busy_forever;     /* write busy never lifts                */
     uint8_t  stuck_busy;       /* permanently busy, survives CS toggle  */
+    uint8_t  prewrite_busy;    /* busy after CMD24/25 resp, before token */
+    uint8_t  never_idle;       /* ACMD41/CMD1 always answer "idle"      */
     uint32_t busy_writes;      /* busy bytes armed on write completion  */
     uint32_t busy_left;        /* busy bytes remaining                  */
     uint32_t arg_lba;          /* block address of in-flight write      */
@@ -119,8 +121,11 @@ static void card_handle_command(void)
     switch (cmd) {
     case 0:  card_push1(0x01); card.initialized = 0; break;   /* GO_IDLE    */
     case 1:                                                    /* OP_COND   */
-        if (card.mmc) { card_push1(0x00); card.initialized = 1; }
-        else          card_push1(0x05);
+        if (card.mmc && !card.never_idle) {
+            card_push1(0x00); card.initialized = 1;
+        }
+        else if (card.mmc) card_push1(0x01);
+        else               card_push1(0x05);
         break;
     case 8:                                                    /* IF_COND   */
         if (card.cmd8_succeeds) {
@@ -155,6 +160,8 @@ static void card_handle_command(void)
     case 41:                                                   /* APP_OP    */
         if (card.mmc || !app_cmd) {
             card_push1(0x05);
+        } else if (card.never_idle) {
+            card_push1(0x01);
         } else if (card.acmd41_warmup) {
             card.acmd41_warmup--; card_push1(0x01);
         } else {
@@ -186,6 +193,7 @@ static void card_handle_command(void)
         card.rx_need = 0;
         card.arg_lba = lba;
         card.multi_write = (cmd == 25);
+        if (card.prewrite_busy) card.busy_left = 0xFFFFFFFFu;
         break;
     default:
         card_push1(0x05);                                      /* illegal   */
@@ -434,6 +442,20 @@ TEST(init_hal_error_retries_and_recovers)
     CHECK(spi_init_calls > 0);
 }
 
+TEST(init_v1_card_never_leaves_idle_times_out)
+{
+    /* v1 card (CMD8 illegal) that answers ACMD41 "still idle" forever:
+     * the 1000-poll wait loop must burn its budget and give up - not
+     * declare a card that never finished initializing. */
+    reset_all();
+    card.cmd8_succeeds = 0;
+    card.never_idle = 1;
+    Test_SetTickAutoAdvance(1);
+    CHECK(SD_initialize(0) == STA_NOINIT);
+    Test_SetTickAutoAdvance(0);
+    CHECK(SD_Type == 0);                 /* loop expired: ty cleared    */
+}
+
 /* ------------------------------------------------------------------ */
 /* Block reads / writes                                                */
 /* ------------------------------------------------------------------ */
@@ -544,6 +566,23 @@ TEST(command_prewait_times_out_when_card_stays_busy)
     Test_SetTickAutoAdvance(1);
     CHECK(SD_read(0, buf, 0, 1) == RES_ERROR);
     CHECK(card.reads == 0);              /* pre-wait aborted the command */
+}
+
+TEST(write_prewrite_busy_wait_times_out)
+{
+    /* Card takes the write command, then holds MISO low instead of going
+     * ready: the pre-data wait must hit its 500 ms deadline and flag the
+     * diagnostic, not send the data token into a deaf card. */
+    reset_all();
+    init_card();
+    card.prewrite_busy = 1;
+    uint8_t buf[512];
+    memset(buf, 0xAA, sizeof(buf));
+    Test_SetTickAutoAdvance(1);
+    CHECK(SD_write(0, buf, 0, 1) == RES_ERROR);
+    Test_SetTickAutoAdvance(0);
+    CHECK(sd_diag_wait_fail == 1);
+    CHECK(card.writes == 0);             /* payload never left the host */
 }
 
 TEST(write_rejected_token_fails_with_diagnostics)
@@ -716,6 +755,17 @@ TEST(set_fast_speed_all_rungs_fail_falls_back_to_16)
 /* Direct-register byte pump semantics                                 */
 /* ------------------------------------------------------------------ */
 
+TEST(acmd_bit_prefix_sends_cmd55_then_command)
+{
+    /* Template vestige: a command OR'd with 0x80 gets the CMD55 prefix
+     * auto-sent. No production caller uses it (app commands go out as
+     * explicit CMD55+CMD pairs), but pin the behavior so the path stays
+     * correct if it ever is used. */
+    reset_all();
+    init_card();
+    CHECK(SD_SendCmd((uint8_t)(41 | 0x80), 0, 0xFF, SD_RESPONSE_IN_IDLE) == 0);
+}
+
 TEST(direct_pump_flags_and_timeout)
 {
     reset_all();
@@ -746,6 +796,7 @@ int main(void)
     run_init_v1_card_takes_the_legacy_path();
     run_init_mmc_card_uses_cmd1();
     run_init_acmd41_warmup_retries_then_succeeds();
+    run_init_v1_card_never_leaves_idle_times_out();
     run_init_hal_error_retries_and_recovers();
     run_read_single_block_roundtrip();
     run_read_multi_block_streams_until_cmd12();
@@ -755,6 +806,7 @@ int main(void)
     run_write_no_busy_pulse_succeeds();
     run_card_idle_at_0xca_still_counted_ready();
     run_command_prewait_times_out_when_card_stays_busy();
+    run_write_prewrite_busy_wait_times_out();
     run_write_rejected_token_fails_with_diagnostics();
     run_write_busy_timeout_fails();
     run_ioctl_reports_sector_count();
@@ -768,5 +820,6 @@ int main(void)
     run_apply_speed_programs_every_rung();
     run_set_fast_speed_all_rungs_fail_falls_back_to_16();
     run_direct_pump_flags_and_timeout();
+    run_acmd_bit_prefix_sends_cmd55_then_command();
     return TEST_SUMMARY();
 }

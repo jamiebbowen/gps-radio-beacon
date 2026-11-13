@@ -154,6 +154,21 @@ TEST(init_hal_failure_goes_offline_not_hang)
     CHECK(I2CBus_IsOnline() == 0);
 }
 
+TEST(init_probe_ok_on_bno085_addresses)
+{
+    /* bus_probe_ok short-circuits on the jogpad (0x5A) - a bus where only
+     * the compass answers exercises the BNO085 primary and alt probes. */
+    reset_all();
+    ready_addrs[0] = 0x28;              /* BNO085 primary only */
+    I2CBus_Init();
+    CHECK(I2CBus_IsOnline() == 1);
+
+    reset_all();
+    ready_addrs[0] = 0x29;              /* BNO085 alt only */
+    I2CBus_Init();
+    CHECK(I2CBus_IsOnline() == 1);
+}
+
 /* ------------------------------------------------------------------ */
 /* Error streak -> slow -> offline -> probe recovery                   */
 /* ------------------------------------------------------------------ */
@@ -316,6 +331,7 @@ int main(void)
     run_init_fast_fail_falls_back_to_100k();
     run_init_slow_probe_ok_online_100k();
     run_init_hal_failure_goes_offline_not_hang();
+    run_init_probe_ok_on_bno085_addresses();
     run_error_streak_drops_bus_to_100k();
     run_offline_probe_recovers_when_bus_acks();
     run_wedged_state_reinits_before_probe();

@@ -908,6 +908,10 @@ TEST(test_big_sync_burst_logged_once)
     char big[4096];
     CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
     CHECK(strstr(big, "SD sync burst") != NULL);
+
+    /* TakeSyncCount returns syncs-since-last-call and clears */
+    CHECK(SD_Card_TakeSyncCount() == 1);
+    CHECK(SD_Card_TakeSyncCount() == 0);
 }
 
 int main(void)

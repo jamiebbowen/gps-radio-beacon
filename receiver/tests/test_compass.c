@@ -704,6 +704,93 @@ TEST(test_selftest)
     present_28 = 1;
 }
 
+TEST(test_selftest_error_paths)
+{
+    /* Init with the fusion stream off fails, but not before memset'ing
+     * s_bno - which leaves rv_count = 0 for the SelfTest check below.
+     * (rv_count is cumulative, so this is the only deterministic route
+     * to "alive but no fusion data" once any init has succeeded.) */
+    fake_reset();
+    stream_off = 1;
+    compass_cal_restored = 0;
+    Test_SetTickAutoAdvance(5);
+    (void)Compass_Init();
+    Test_SetTickAutoAdvance(0);
+
+    /* Hub answers the probe and polls clean, yet no RVs were counted. */
+    CHECK(Compass_SelfTest() == COMPASS_ERROR);
+    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_ID_CHECK);
+
+    /* SHTP reads NAK while the address probe ACKs: read-data fault. */
+    stream_off = 0;
+    nak_rx = 1;
+    CHECK(Compass_SelfTest() == COMPASS_ERROR);
+    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_READ_DATA);
+    nak_rx = 0;
+}
+
+TEST(test_calibrate_mag_guidance_variants)
+{
+    /* The mag_cal digit tracks RV accuracy (SH-2 reports mag cal on the
+     * RV report's accuracy byte). Drive the 0/3 and 2/3 guidance rows
+     * the partial-calibration test skips. */
+    fresh_init();
+    Compass_Data d = {0};
+
+    rv_acc = 0;
+    for (int i = 0; i < 4; i++) {
+        Test_SetTick(HAL_GetTick() + 50);
+        (void)Compass_Update(&d);
+    }
+    CHECK(Compass_Calibrate() == COMPASS_ERROR);
+    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "figure 8") != NULL);
+
+    rv_acc = 2;
+    for (int i = 0; i < 4; i++) {
+        Test_SetTick(HAL_GetTick() + 50);
+        (void)Compass_Update(&d);
+    }
+    CHECK(Compass_Calibrate() == COMPASS_ERROR);
+    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "almost done") != NULL);
+}
+
+TEST(test_debug_getters_and_heading_failure)
+{
+    fresh_init();
+    Compass_Data d = {0};
+    Test_SetTick(HAL_GetTick() + 50);
+    CHECK(Compass_Update(&d) == COMPASS_OK);
+
+    /* debug message 0 carries the Cal: line; timestamp advances on update */
+    CHECK(strstr(Compass_GetDebugMessage(), "Cal:") != NULL);
+    CHECK(Compass_GetDebugTimestamp() == HAL_GetTick());
+
+    /* Dead bus: GetHeading falls back to 0.0f */
+    present_28 = 0;
+    CHECK_NEAR(Compass_GetHeading(), 0.0f, 0.001);
+    present_28 = 1;
+}
+
+TEST(test_display_i2c_scan_multi_device)
+{
+    fresh_init();
+
+    /* Five devices on the bus exercises both display rows, the
+     * devices_found>1 ternary, and all four debug address slots. */
+    extra_addrs[0] = 0x40; extra_addrs[1] = 0x41;
+    extra_addrs[2] = 0x42; extra_addrs[3] = 0x60;
+    extra_addr_count = 4;
+
+    disp_nlines = 0;
+    CHECK(Compass_DisplayI2CScan() == 5);
+    int saw_line3 = 0;
+    for (int i = 0; i < disp_nlines; i++) {
+        if (strstr(disp_lines[i], "0x60") != NULL) saw_line3 = 1;
+    }
+    CHECK(saw_line3);
+    extra_addr_count = 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Host calibration offsets: NOT SUPPORTED on the BNO085               */
 /* ------------------------------------------------------------------ */
@@ -858,10 +945,14 @@ int main(void)
 
     run_test_calibrate_fully_calibrated();
     run_test_calibrate_partial_guidance();
+    run_test_calibrate_mag_guidance_variants();
     run_test_selftest();
+    run_test_selftest_error_paths();
     run_test_cal_data_unsupported_contract();
     run_test_accessors();
+    run_test_debug_getters_and_heading_failure();
     run_test_display_i2c_scan();
+    run_test_display_i2c_scan_multi_device();
     run_test_recover_failure_paths();
 
     return TEST_SUMMARY();
