@@ -16,7 +16,7 @@ Tested on a Mach-0.99 / 2 km AGL flight with a 37 dB link margin — see
 +-------------------------+                                 +-------------------------+
   - ItsyBitsy M4 (SAMD51)                                     - STM32F401 Black Pill
   - u-blox GPS (UART)                                         - NEO-6M GPS (UART)
-  - BNO085 IMU (I2C) - launch detect                          - BNO055 IMU (I2C) - compass
+  - BNO085 IMU (I2C) - launch detect                          - BNO085 IMU (I2C) - compass
   - E22-400M33S LoRa (SPI)                                    - E22 LoRa (SPI)
   - Power: 3.3 V + LiPo                                       - SSD1309 OLED (I2C)
                                                               - microSD log (SPI, littlefs)
