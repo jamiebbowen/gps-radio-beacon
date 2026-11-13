@@ -135,6 +135,11 @@ Before deploying, verify:
   Arm: any launch-detect confirmation (~250 ms erases, radio-quiet already).
   Dump: plug USB with the beacon alive after recovery, the Serial monitor
   prints CSV on the console when told 'DUMP' (see boot banner).
+  A watchdog/brown-out reset in flight no longer strands the beacon: a
+  state-marker row on the reserved last 8 KB flash row survives the reset,
+  so a reboot that finds it still FLYING resumes the airborne cadence,
+  keeps the surviving log (no re-erase), and emits an ANOM_REBOOT event
+  packet for the receiver's anomaly list.
 
 ## Benefits of LoRa
 
