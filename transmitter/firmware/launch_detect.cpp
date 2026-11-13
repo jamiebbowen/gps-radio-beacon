@@ -290,6 +290,10 @@ uint32_t imu_last_rotvec_ms(void) { return last_rotvec_ms; }
  */
 bool launch_detect_gps_fallback_update(float alt_m, uint32_t system_time_seconds) {
     if (current_state == LAUNCH_STATE_CONFIRMED) return false;  /* already flying */
+    /* A corrupt NMEA altitude parses via atof() into NaN/Inf; one bad
+     * sample would poison gf_baseline_alt permanently (every comparison
+     * against NaN fails, so the fallback could never fire). */
+    if (!isfinite(alt_m)) return false;
 
     if (!gf_baseline_set) {
         gf_baseline_alt = alt_m;   /* first seed for the max-tracked baseline */
@@ -356,6 +360,11 @@ bool landing_detect_update(float alt_m, bool gps_valid, uint32_t system_time_sec
     if (landed) return true;
     if (current_state != LAUNCH_STATE_CONFIRMED) return false;
     if (!imu_initialized) return false;   /* need the accel-quiet evidence */
+    /* A corrupt NMEA altitude parses via atof() into NaN/Inf. NaN seeds
+     * land_window_min/max and (NaN-NaN) > window is always false, so
+     * every later sample would read "stable" - a false LANDING could
+     * latch mid-flight. Treat as a no-fix sample (breaks the window). */
+    if (gps_valid && !isfinite(alt_m)) gps_valid = false;
 
     bool quiet = (total_accel < LAND_ACCEL_QUIET_MS2);
 

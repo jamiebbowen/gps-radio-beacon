@@ -165,12 +165,35 @@ TEST(test_ascii_invalid_coordinates_rejected) {
     CHECK(RF_Parser_ParseAsciiPacket("3999.99999,-10407.38970,100") == RF_PARSER_ERROR);
     /* Coordinate string too short to be DDMM.MM */
     CHECK(RF_Parser_ParseAsciiPacket("123.45,-10407.38970,100") == RF_PARSER_ERROR);
+    /* atof() parses "nan"/"inf" literally - they must not survive as
+     * coordinates (NaN slips every range check; the (int) cast inside
+     * nmea_to_decimal_degrees would be UB on it). */
+    CHECK(RF_Parser_ParseAsciiPacket("nan,-10407.38970,100") == RF_PARSER_ERROR);
+    CHECK(RF_Parser_ParseAsciiPacket("inf,-10407.38970,100") == RF_PARSER_ERROR);
+    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-nan,100") == RF_PARSER_ERROR);
 
     uint32_t ok = 0, attempts = 0, fails = 0;
     RF_Parser_GetDiagnostics(&attempts, &ok, &fails);
-    CHECK(attempts == 5);
+    CHECK(attempts == 8);
     CHECK(ok == 0);
-    CHECK(fails == 5);
+    CHECK(fails == 8);
+}
+
+TEST(test_ascii_nan_altitude_clamped_not_stored) {
+    RF_Parser_Reset();
+    GPS_Data gps;
+
+    /* A corrupt altitude field must not reach GPS_Data as NaN - the wire
+     * packet's lat/lon stay usable; altitude degrades to "unknown". */
+    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,nan,8") == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.altitude == 0.0f);
+    CHECK(gps.altitude == gps.altitude);   /* explicitly: not NaN */
+
+    RF_Parser_Reset();
+    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,inf,8") == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.altitude == 0.0f);
 }
 
 TEST(test_ascii_last_packet_bookkeeping) {
@@ -785,6 +808,7 @@ int main(void) {
     run_test_ascii_callsign_packet();
     run_test_ascii_insufficient_fields_rejected();
     run_test_ascii_invalid_coordinates_rejected();
+    run_test_ascii_nan_altitude_clamped_not_stored();
     run_test_ascii_last_packet_bookkeeping();
     run_test_binary_valid_packet();
     run_test_binary_negative_altitude();

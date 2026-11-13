@@ -818,6 +818,18 @@ TEST(test_declination_loader)
     deg = -999.0f;
     CHECK(SD_Card_LoadDeclination(&deg) == SD_CARD_ERROR);
     CHECK(deg == -999.0f);
+
+    /* "nan" parses successfully (endp advances) and slips the range check
+     * since NaN comparisons are false - must be rejected explicitly. */
+    wipe_card();
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+    CHECK(lfs_file_opencfg(&lfs, &f, "DECLIN.TXT", LFS_O_WRONLY | LFS_O_CREAT,
+                           &adhoc_file_cfg) == 0);
+    lfs_file_write(&lfs, &f, "nan", 3);
+    lfs_file_close(&lfs, &f);
+    deg = -999.0f;
+    CHECK(SD_Card_LoadDeclination(&deg) == SD_CARD_ERROR);
+    CHECK(deg == -999.0f);
 }
 
 TEST(test_io_error_streak_steps_bus_down)

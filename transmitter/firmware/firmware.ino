@@ -521,12 +521,17 @@ void loop() {
             if (c->valid) {
                 float lat_d = gps_nmea_to_decimal(c->lat, c->lat_dir);
                 float lon_d = gps_nmea_to_decimal(c->lon, c->lon_dir);
-                int16_t alt_m = (int16_t)lroundf(atof(c->altitude));
-                flight_log_gps(millis(),
-                               (int32_t)lroundf(lat_d * 10000000.0f),
-                               (int32_t)lroundf(lon_d * 10000000.0f),
-                               alt_m,
-                               (uint8_t)atoi(c->satellites), c->fix_quality);
+                float alt_f = atof(c->altitude);
+                /* Corrupt fields can parse as NaN/Inf; lroundf() on a
+                 * non-finite value is UB - skip the record instead. */
+                if (isfinite(lat_d) && isfinite(lon_d) && isfinite(alt_f)) {
+                    int16_t alt_m = (int16_t)lroundf(alt_f);
+                    flight_log_gps(millis(),
+                                   (int32_t)lroundf(lat_d * 10000000.0f),
+                                   (int32_t)lroundf(lon_d * 10000000.0f),
+                                   alt_m,
+                                   (uint8_t)atoi(c->satellites), c->fix_quality);
+                }
             }
             last_transmission_time = system_time_seconds;
         } else if (beacon_state == BEACON_STATE_TURN_ON ||

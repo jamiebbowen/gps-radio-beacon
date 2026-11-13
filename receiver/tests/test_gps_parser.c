@@ -142,6 +142,31 @@ TEST(test_gga_southern_western_hemisphere) {
     CHECK_NEAR(gps.longitude, -FIX_LON, 1e-4);
 }
 
+TEST(test_gga_nan_fields_never_reach_gps_data) {
+    /* atof() parses "nan"/"inf" literally - a checksum-valid corrupt field
+     * must degrade to "unknown" (0), never NaN inside GPS_Data. "nan.5"
+     * keeps a '.' at idx>=3 so it reaches the converter's atof path and
+     * would hit the UB (int) cast without the isfinite guard. */
+    GPS_Data gps;
+    char s[128];
+    memset(&gps, 0, sizeof(gps));
+
+    make_sentence(s, sizeof(s),
+        "$GPGGA,123519,4807.038,N,01131.000,E,1,08,nan,nan.5,M,46.9,M,,");
+    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_OK);
+    CHECK(gps.hdop == 0.0f && gps.hdop == gps.hdop);      /* not NaN */
+    CHECK(gps.altitude == 0.0f && gps.altitude == gps.altitude);
+
+    /* NaN coordinate: converts to 0.0, flagged, rejected by validation. */
+    memset(&gps, 0, sizeof(gps));
+    uint32_t errs_before = gps_invalid_coordinate_errors;
+    make_sentence(s, sizeof(s),
+        "$GPGGA,123519,nan.5,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_ERROR);
+    CHECK(gps.latitude == gps.latitude);                  /* not NaN */
+    CHECK(gps_invalid_coordinate_errors > errs_before);
+}
+
 TEST(test_gga_no_fix_rejected) {
     GPS_Data gps;
     char s[128];
@@ -395,6 +420,7 @@ int main(void) {
     run_test_gga_valid_sentence();
     run_test_gga_accepts_gn_talker();
     run_test_gga_southern_western_hemisphere();
+    run_test_gga_nan_fields_never_reach_gps_data();
     run_test_gga_no_fix_rejected();
     run_test_rmc_valid_sentence();
     run_test_rmc_void_status_rejected();

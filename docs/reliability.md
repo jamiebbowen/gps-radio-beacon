@@ -438,6 +438,20 @@ coverage, RX lowest modules are `sd_card` (92%) and `compass` (94%).
   fusion-convergence or reset-recovery transient amplified accel up to
   4x; degenerate samples coast that predict step. Regression tests in
   `test_nav.cpp`/`test_beacon.cpp`.
+- **NaN in the launch/landing state machines**: the same `atof("nan")`
+  hazard applied to `c->altitude` fed into `launch_detect_gps_fallback_
+  update`/`landing_detect_update`. A NaN first fix permanently poisoned
+  `gf_baseline_alt` (every comparison fails, so the GPS-altitude launch
+  fallback could never fire), and a NaN altitude seeded the landing
+  min/max window such that every later sample read "stable" - a false
+  LANDING could latch mid-flight and drop the beacon to battery-save
+  cadence. Both functions now reject/coerce non-finite input at their
+  API boundary (guarded inside `launch_detect.cpp`, so any caller is
+  protected), and the flight-log record path skips non-finite fields
+  before the `lroundf`/`int16_t` casts. Regression tests in
+  `test_launch_detect.cpp`. The RX-side `SD_Card_LoadDeclination`
+  `strtof` had the same class of hole: `"nan"` parses "successfully"
+  and slips the +-30 deg range check; now rejected with `isfinite`.
 - **Parser fuzzing** (`test_fuzz_parsers.c`, TX `test_fuzz_nmea.c`):
   seeded xorshift mutates a corpus of real wire packets/NMEA sentences
   through the real parsers under ASan+UBSan. 30M+ iterations across

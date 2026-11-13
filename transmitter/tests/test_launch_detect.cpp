@@ -450,6 +450,31 @@ TEST(test_gps_fallback_ignores_pad_drift)
     CHECK(launch_detect_get_state() == LAUNCH_STATE_IDLE);
 }
 
+TEST(test_gps_fallback_nan_sample_does_not_poison_baseline)
+{
+    reset_all();
+    launch_detect_init();
+
+    /* atof() parses "nan"/"inf" literally - one corrupt altitude field as
+     * the first sample would seed gf_baseline_alt with NaN; every later
+     * comparison then fails and the fallback is silently dead forever. */
+    float nan_f = 0.0f / 0.0f;
+    CHECK(launch_detect_gps_fallback_update(nan_f, 10) == false);
+    CHECK(launch_detect_gps_fallback_update(1.0f / 0.0f, 11) == false);
+
+    /* Real fixes still seed + arm the baseline (20 s, >=5 fixes). */
+    for (uint32_t t = 12; t <= 32; t++) {
+        CHECK(launch_detect_gps_fallback_update(1667.0f, t) == false);
+    }
+    /* NaN mid-stream is ignored too - baseline and arming survive. */
+    CHECK(launch_detect_gps_fallback_update(nan_f, 33) == false);
+
+    CHECK(launch_detect_gps_fallback_update(1720.0f, 34) == false);  /* climb 1 */
+    CHECK(launch_detect_gps_fallback_update(1721.0f, 35) == false);  /* climb 2 */
+    CHECK(launch_detect_gps_fallback_update(1722.0f, 36) == true);   /* climb 3 */
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
+}
+
 TEST(test_landing_latches_on_quiet_and_stable)
 {
     reset_all();
@@ -467,6 +492,30 @@ TEST(test_landing_latches_on_quiet_and_stable)
     CHECK(landing_detect_update(500.0f, true, 160) == true);
     CHECK(launch_detect_has_landed() == true);
     CHECK(landing_detect_update(500.0f, true, 161) == true);  /* latched */
+}
+
+TEST(test_landing_nan_alt_breaks_window)
+{
+    reset_all();
+    launch_detect_init();
+    launch_detect_force_confirmed(4);
+    total_accel = 0.5f;
+
+    /* 30 s of stable-altitude accumulation... */
+    for (uint32_t t = 100; t < 130; t++) {
+        CHECK(landing_detect_update(500.0f, true, t) == false);
+    }
+    /* ...then a NaN altitude tagged "valid fix": treated as no-fix, so the
+     * window breaks. Without the guard NaN would seed min/max and every
+     * later sample would read "stable" - a false landing 60 s on. */
+    CHECK(landing_detect_update(0.0f / 0.0f, true, 130) == false);
+
+    /* The window restarts at t=131: 59 more stable seconds must not latch. */
+    for (uint32_t t = 131; t < 191; t++) {
+        CHECK(landing_detect_update(500.0f, true, t) == false);
+    }
+    CHECK(landing_detect_update(500.0f, true, 191) == true);
+    CHECK(launch_detect_has_landed() == true);
 }
 
 TEST(test_landing_never_during_descent)
@@ -572,7 +621,9 @@ int main(void)
     run_test_gps_fallback_resettles_after_long_outage();
     run_test_force_confirmed_flying_without_edge();
     run_test_gps_fallback_ignores_pad_drift();
+    run_test_gps_fallback_nan_sample_does_not_poison_baseline();
     run_test_landing_latches_on_quiet_and_stable();
+    run_test_landing_nan_alt_breaks_window();
     run_test_landing_never_during_descent();
     run_test_landing_requires_launch_and_valid_gps();
     run_test_landing_survives_canopy_multipath_glitches();

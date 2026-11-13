@@ -68,7 +68,10 @@ static float nmea_to_decimal_degrees(const char* nmea_coord) {
   
   /* Validate that we have a reasonable NMEA value */
   /* Should be at least 100.0 for valid DDMM.MMMMM format */
-  if (nmea_value < 100.0) {
+  /* isfinite first: atof() parses "nan"/"inf" literally - the (int) cast
+   * below is UB on non-finite input, and a NaN result would slip every
+   * range check since NaN comparisons are all false. */
+  if (!isfinite(nmea_value) || nmea_value < 100.0) {
     return 0.0f; /* Invalid NMEA format */
   }
   
@@ -201,7 +204,12 @@ uint8_t RF_Parser_ParseAsciiPacket(const char *packet) {
         break;
         
       case 2: /* Altitude */
-        parsed_gps_data.altitude = atof(token);
+        {
+          float a = atof(token);
+          /* atof("nan")/"inf" is legal C and lands NaN in the packet -
+           * clamp to "unknown" rather than persist it to BEACON.TXT. */
+          parsed_gps_data.altitude = isfinite(a) ? a : 0.0f;
+        }
         break;
         
       case 3: /* Satellites (optional - only in full packets) */

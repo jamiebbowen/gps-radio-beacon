@@ -34,6 +34,13 @@ static uint8_t GPS_ValidateChecksum(const char* nmea_sentence);
 static uint8_t GPS_ValidateCoordinates(float latitude, float longitude);
 static float GPS_NMEAStringToDecimalDegrees(const char* nmea_coord);
 
+/* atof() parses "nan"/"inf" literally; a corrupt field must not put NaN
+ * into GPS_Data where it persists into logs/displays. 0 = "unknown". */
+static float nmea_atof_finite(const char *s) {
+  float v = s ? (float)atof(s) : 0.0f;
+  return isfinite(v) ? v : 0.0f;
+}
+
 /**
  * @brief Parse NMEA sentence
  * @param nmea_sentence NMEA sentence string
@@ -216,11 +223,11 @@ static uint8_t GPS_ParseGPRMC(const char* nmea_sentence, GPS_Data *gps_data)
         break;
         
       case 7: /* Speed over ground in knots */
-        gps_data->speed = atof(token) * 1.852f; /* Convert knots to km/h */
+        gps_data->speed = nmea_atof_finite(token) * 1.852f; /* knots -> km/h */
         break;
         
       case 8: /* Course over ground in degrees */
-        gps_data->course = atof(token);
+        gps_data->course = nmea_atof_finite(token);
         break;
         
       case 9: /* Date (DDMMYY) */
@@ -316,11 +323,11 @@ static uint8_t GPS_ParseGPGGA(const char* nmea_sentence, GPS_Data *gps_data)
         break;
 
       case 8: /* HDOP - geometry quality, separates "few sats" from "bad geometry" */
-        gps_data->hdop = atof(token);
+        gps_data->hdop = nmea_atof_finite(token);
         break;
 
       case 9: /* Altitude */
-        gps_data->altitude = atof(token);
+        gps_data->altitude = nmea_atof_finite(token);
         break;
     }
     
@@ -367,8 +374,10 @@ static float GPS_NMEAStringToDecimalDegrees(const char* nmea_coord)
     /* Convert the entire string to a float */
     float nmea_value = atof(nmea_coord);
     
-    /* Check for obviously invalid values */
-    if (nmea_value == 0.0f) {
+    /* Check for obviously invalid values. isfinite first: atof() parses
+     * "nan"/"inf" literally (NaN != 0.0f slips the old check), and the
+     * (int) cast below is UB on non-finite input. */
+    if (!isfinite(nmea_value) || nmea_value == 0.0f) {
       gps_invalid_coordinate_errors++;
       return 0.0f;
     }

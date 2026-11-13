@@ -36,6 +36,7 @@ uint8_t SD_FastSpeedEnabled(void);
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 /* Private defines -----------------------------------------------------------*/
 #define SD_CARD_LOG_BUFFER_SIZE     256
@@ -996,7 +997,12 @@ SD_Card_Status SD_Card_LoadDeclination(float *deg)
 
     char *endp;
     float v = strtof(buf, &endp);
-    if (endp == buf || v < -30.0f || v > 30.0f) return SD_CARD_ERROR;
+    /* strtof("nan") succeeds (endp advances) and NaN slips the range test
+     * since both comparisons are false - reject non-finite explicitly so
+     * a corrupt DECLIN.TXT can't poison heading math. */
+    if (endp == buf || !isfinite(v) || v < -30.0f || v > 30.0f) {
+        return SD_CARD_ERROR;
+    }
     *deg = v;
     return SD_CARD_OK;
 }
