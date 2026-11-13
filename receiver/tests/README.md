@@ -33,8 +33,11 @@ make clean
 | `navigation_mode.c` — L/O/D arrow, state decay | `test_navigation_mode.c` | (UI-critical only) |
 | `preflight_mode.c` — go/no-go verdicts incl. battery veto | `test_preflight_mode.c` | (UI-critical only) |
 | display_modes/ small pages — channel/RFstats/GPS/SD/RF/compass/I2C/SPI/IMU/pattern | `test_display_modes.c` | (layout contract) |
+| `rf_parser.c` + `gps_parser.c` — fuzz over mutated real packets | `test_fuzz_parsers.c` | (sanitizer) |
 
-(The transmitter's EKF is tested separately in `transmitter/tests/`, ~100%.)
+(The transmitter's EKF is tested separately in `transmitter/tests/`, ~100%;
+its `nmea_fields.c` helpers get the same fuzz treatment in
+`test_fuzz_nmea.c`.)
 
 The remaining ~7% of `sd_card.c` is the LittleFS-fault recovery ladder
 (mount-after-format, mid-session write errors, self-test readback
@@ -70,6 +73,16 @@ decoding, and regression guards for two subtle behaviors:
 helper, so sentences can never fail due to a hand-computed checksum typo.
 Note `gps_parser.c` keeps static jump-filter state with no reset API, so
 all valid-fix fixtures use the same geographic area.
+
+`test_fuzz_parsers.c` runs a structure-aware fuzzer over the RF/ASCII/NMEA
+parsers: a seeded xorshift mutates a corpus of real wire packets (every
+version of every packet type, plus valid NMEA/callsign strings) through
+the real parser sources, built with `-fsanitize=address,undefined
+-fno-sanitize-recover=all`. Any UB/OOB aborts with the printed seed for
+reproduction. The default 200k iterations run in ~0.1 s inside `make
+test`; soak runs use `FUZZ_ITERS`/`FUZZ_SEED` (30M+ iterations across
+seeds are clean as of this writing). The binary skips `COVFLAGS` because
+gcov and sanitizer instrumentation don't mix.
 
 `test_sd_diskio.c` is the largest new suite: a scripted virtual SD card
 behind fake SPI registers exercises SDv2-HC / SDv1 / MMC init, ACMD41

@@ -426,6 +426,13 @@ coverage, RX lowest modules are `sd_card` (92%) and `compass` (94%).
   coverage except `sd_card.c` (~93% - the LittleFS-fault recovery
   ladder is defensive code the RAM block device can't drive
   faithfully; documented in `test_sd_card.c`).
+- **Parser fuzzing** (`test_fuzz_parsers.c`, TX `test_fuzz_nmea.c`):
+  seeded xorshift mutates a corpus of real wire packets/NMEA sentences
+  through the real parsers under ASan+UBSan. 30M+ iterations across
+  seeds are clean; `FUZZ_ITERS`/`FUZZ_SEED` drive soak runs. Complements
+  line coverage - it hunts crash/UB-class bugs on inputs nobody wrote
+  down, exactly the class marginal RF links and brown-out GPS modules
+  produce.
 
 ### Tooling
 

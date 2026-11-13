@@ -27,7 +27,7 @@ BINS     := $(BUILD)/test_ekf $(BUILD)/test_nmea_fields $(BUILD)/test_beacon \
             $(BUILD)/test_flight_profile $(BUILD)/test_flight_cadence \
             $(BUILD)/test_flight_events $(BUILD)/test_flight_maxima \
             $(BUILD)/test_airlink_roundtrip $(BUILD)/test_mainloop \
-            $(BUILD)/test_flight_log
+            $(BUILD)/test_flight_log $(BUILD)/test_fuzz_nmea
 
 .PHONY: all test coverage clean
 
@@ -41,6 +41,13 @@ $(BUILD)/test_ekf: test_ekf.cpp ../firmware/ekf.cpp | $(BUILD)
 
 $(BUILD)/test_nmea_fields: test_nmea_fields.c ../firmware/nmea_fields.c | $(BUILD)
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $(filter %.cpp %.c %.ino,$^) $(LDFLAGS)
+
+# NMEA-helper fuzz: mutates real sentences through the field/checksum/coord
+# parsers under ASan+UBSan. Skips COVFLAGS (gcov+sanitizer don't mix).
+# Soak with FUZZ_ITERS=2000000.
+FUZZ_SAN := -fsanitize=address,undefined -fno-sanitize-recover=all
+$(BUILD)/test_fuzz_nmea: test_fuzz_nmea.c ../firmware/nmea_fields.c | $(BUILD)
+	$(CC) $(CFLAGS) $(FUZZ_SAN) -o $@ $(filter %.cpp %.c %.ino,$^) $(LDFLAGS)
 
 # beacon.cpp is #included by the test (static access + Arduino stub);
 # stubs/Arduino.h shadows the real core. flight_maxima.cpp is a real
