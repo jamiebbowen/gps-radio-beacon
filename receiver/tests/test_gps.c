@@ -340,6 +340,16 @@ TEST(test_error_callback_rearms_after_ore_teardown)
     CHECK(huart_gps.RxState == 0x22);        /* stub marks BUSY_RX */
     CHECK(huart_gps.ErrorCode == HAL_UART_ERROR_NONE);
 
+    /* Re-arm failure marks 0xF3 - distinct from the 0xF2 callback site */
+    huart_gps.RxState = HAL_UART_STATE_READY;
+    huart_gps.ErrorCode = 0x08;
+    fake_receive_it_fail = 1;
+    HAL_UART_ErrorCallback(&huart_gps);
+    uint8_t raw[4];
+    GPS_GetRawBytes(raw);
+    CHECK(raw[0] == 0xF3);
+    fake_receive_it_fail = 0;
+
     /* Non-ORE path: the armed transfer survives (RxState stays BUSY_RX),
      * so the callback must NOT disturb it */
     huart_gps.RxState = 0x22;
