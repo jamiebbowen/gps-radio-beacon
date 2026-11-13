@@ -444,6 +444,25 @@ TEST(test_beacon_persistence_validation)
     lfs_file_close(&lfs, &f);
     CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_ERROR);
 
+    /* sscanf %f parses "nan": all three fields must be finite-checked
+     * (NaN slips the lat/lon range checks; alt has no range check) */
+    CHECK(lfs_file_opencfg(&lfs, &f, BEACON_FILENAME,
+                           LFS_O_WRONLY | LFS_O_TRUNC, &adhoc_file_cfg) == 0);
+    lfs_file_write(&lfs, &f, "nan,39.5,1655.0", 15);
+    lfs_file_close(&lfs, &f);
+    lat = lon = alt = 0.0f;
+    CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_ERROR);
+    CHECK(lfs_file_opencfg(&lfs, &f, BEACON_FILENAME,
+                           LFS_O_WRONLY | LFS_O_TRUNC, &adhoc_file_cfg) == 0);
+    lfs_file_write(&lfs, &f, "39.5,-105.2,nan", 15);
+    lfs_file_close(&lfs, &f);
+    CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_ERROR);
+    CHECK(lfs_file_opencfg(&lfs, &f, BEACON_FILENAME,
+                           LFS_O_WRONLY | LFS_O_TRUNC, &adhoc_file_cfg) == 0);
+    lfs_file_write(&lfs, &f, "39.5,-105.2,inf", 15);
+    lfs_file_close(&lfs, &f);
+    CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_ERROR);
+
     /* Out-of-range coordinates rejected */
     CHECK(SD_Card_SaveLastBeacon(99.0f, 0.5f, 100.0f) == SD_CARD_OK);
     CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_ERROR);

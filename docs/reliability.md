@@ -452,6 +452,10 @@ coverage, RX lowest modules are `sd_card` (92%) and `compass` (94%).
   `test_launch_detect.cpp`. The RX-side `SD_Card_LoadDeclination`
   `strtof` had the same class of hole: `"nan"` parses "successfully"
   and slips the +-30 deg range check; now rejected with `isfinite`.
+  `SD_Card_LoadLastBeacon` (`sscanf %f` on `BEACON.TXT`) completed the
+  family: `%f` parses `"nan"`, NaN slips the lat/lon range checks, and
+  altitude had no check at all - all three fields are now finite-gated
+  before use so a torn or legacy card can't restore a NaN position.
 - **Integer-field saturation at uint8_t boundaries**: the adjacent
   integer-wrap class - a corrupt-but-checksum-valid sats field like
   `"999"` survived all parse gates then wrapped modulo 256 at the

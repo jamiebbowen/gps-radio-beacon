@@ -886,6 +886,10 @@ SD_Card_Status SD_Card_LoadLastBeacon(float *lat, float *lon, float *alt)
 
     float pl, po, pa;
     if (sscanf(buf, "%f,%f,%f", &pl, &po, &pa) != 3) return SD_CARD_ERROR;
+    /* sscanf %f parses "nan"/"inf"; NaN slips the range checks below (all
+     * comparisons false) and pa has no range check at all, so gate finite
+     * first - a torn or legacy BEACON.TXT must not restore a NaN position. */
+    if (!isfinite(pl) || !isfinite(po) || !isfinite(pa)) return SD_CARD_ERROR;
     if (pl < -90.0f || pl > 90.0f || po < -180.0f || po > 180.0f) return SD_CARD_ERROR;
     *lat = pl; *lon = po; *alt = pa;
     return SD_CARD_OK;
