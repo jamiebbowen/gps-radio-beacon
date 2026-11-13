@@ -33,6 +33,9 @@ between them are cross-referenced where relevant.
   recovery walk, crowded channels, and post-flight log review.
 - [`bench-checklist.md`](bench-checklist.md) - Hardware power-up checks
   after flashing and before launch weekends.
+- [`bench-checklist-tx.md`](bench-checklist-tx.md) - Transmitter-side
+  bench checks: USB boot banner, GPS watchdog fault injection, IMU shake
+  test, flight-log DUMP, and mid-flight reboot resume.
 - [`sd-card-troubleshooting.md`](sd-card-troubleshooting.md) - Diagnostics
   for the receiver SD-card logger.
 - [`flight-analysis.md`](flight-analysis.md) - Using
