@@ -3,6 +3,7 @@
 A short power-up checklist for the receiver, focused on things that can only
 be verified on hardware. Run it after flashing new firmware and before every
 launch weekend. Total time: ~5 minutes with the beacon on the bench.
+Beacon-side checks live in `bench-checklist-tx.md`.
 
 Firmware verified by this checklist: display geometry fixes, compass error
 reporting, SD self-test, LED packet pulse, LoRa link.
