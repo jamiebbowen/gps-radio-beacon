@@ -28,7 +28,8 @@ SRC_DIR  := ../firmware/src
 # Modules with a matching test_<module>.c and $(SRC_DIR)/<module>.c
 MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass i2c_bus jogpad eink sd_diskio
 BINS     := $(addprefix $(BUILD)/test_,$(MODULES)) \
-            $(BUILD)/test_navigation_mode $(BUILD)/test_preflight_mode
+            $(BUILD)/test_navigation_mode $(BUILD)/test_preflight_mode \
+            $(BUILD)/test_display_modes
 
 # navigation_mode.c lives in display_modes/ and needs the real math_utils
 $(BUILD)/test_navigation_mode: test_navigation_mode.c \
@@ -44,6 +45,16 @@ $(BUILD)/test_preflight_mode: test_preflight_mode.c \
         $(SRC_DIR)/display_modes/preflight_mode.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< \
 	    $(SRC_DIR)/display_modes/preflight_mode.c $(LDFLAGS)
+
+# The small formatting pages: one test binary links all of them and stubs
+# every sensor/RF getter they read (row/col text capture is the oracle).
+MODE_SRCS := $(addprefix $(SRC_DIR)/display_modes/, \
+    channel_mode.c rf_stats_mode.c gps_mode.c sd_card_mode.c rf_mode.c \
+    compass_mode.c i2c_devices.c spi_test_mode.c imu_test_mode.c test_pattern.c)
+# -Wno-format: the mode sources print int32_t with %ld, which is correct on
+# the ARM ABI (int32_t = long) but warns on the host ABI.
+$(BUILD)/test_display_modes: test_display_modes.c $(MODE_SRCS) $(HEADERS) | $(BUILD)
+	$(CC) $(CFLAGS) $(COVFLAGS) -Wno-format -o $@ $< $(MODE_SRCS) $(LDFLAGS)
 
 # rf_receiver.c calls into the real parser, so its test links rf_parser.c
 # too (the LoRa driver + HAL are faked inside test_rf_receiver.c).

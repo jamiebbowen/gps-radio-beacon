@@ -1,7 +1,8 @@
 # Receiver Host-Side Unit Tests
 
 Unit tests for hardware-independent receiver firmware modules, compiled and
-run on the development machine (no STM32 hardware or ARM toolchain needed).
+run on the development machine (no STM32 hardware or ARM toolchain needed,
+and no STM32CubeF4 checkout - the FatFs headers are stubbed too).
 
 ## Running
 
@@ -13,19 +14,25 @@ make clean
 
 ## What is covered
 
-| Module | Test file | Line coverage (Sept 2026) |
+| Module | Test file | Line coverage (Nov 2026) |
 |---|---|---|
 | `rf_parser.c` — all 3 RF packet formats from the transmitter | `test_rf_parser.c` | 100% |
 | `gps_parser.c` — local NMEA parser (checksum, GGA/RMC, jump filter) | `test_gps_parser.c` | 100% |
 | `math_utils.c` — haversine distance, bearing, angle normalization | `test_math_utils.c` | 100% |
-| `rf_receiver.c` — scan/wedge/reacquisiton/blackout pacing | `test_rf_receiver.c` | 99.3% |
+| `rf_receiver.c` — scan/wedge/reacquisiton/blackout pacing | `test_rf_receiver.c` | 98.2% |
 | `button.c` — debounce/short/long-press policy | `test_button.c` | 100% |
 | `display.c` — SSD1309 driver incl. headless I2C fault ladder | `test_display.c` | 100% |
-| `gps.c` — sentence RX path, FIFO drop-oldest, watchdog | `test_gps.c` | 97.0% |
-| `sd_card.c` — LittleFS logging incl. dirty-card & IO-error throttle | `test_sd_card.c` | 87.1% |
+| `gps.c` — sentence RX path, FIFO drop-oldest, watchdog, rx stats | `test_gps.c` | 100% |
+| `sd_card.c` — LittleFS logging incl. dirty-card & IO-error throttle | `test_sd_card.c` | 92.0% |
 | `lora.c` — SX1268 driver incl. CAD/DC-DC regime | `test_lora.c` | 100% |
-| `compass.c` — BNO055 incl. declination lattice & quat-lock | `test_compass.c` | 100% |
-| `navigation_mode.c` — L/O/D arrow, state decay | `test_navigation_mode.c` | (not measured: UI-critical only) |
+| `compass.c` — BNO085 incl. declination lattice & quat-lock table | `test_compass.c` | 94.5% |
+| `i2c_bus.c` — shared-bus wedge ladder (streak → slow → offline → probe) | `test_i2c_bus.c` | 97.7% |
+| `jogpad.c` — 5-button I2C pad: wire-order remap + poll throttle | `test_jogpad.c` | 100% |
+| `eink.c` — SSD1680 framebuffer, refresh FSM, SPI speed pinning | `test_eink.c` | 100% |
+| `sd_diskio.c` — SD-over-SPI driver behind a scripted virtual card | `test_sd_diskio.c` | 97.6% |
+| `navigation_mode.c` — L/O/D arrow, state decay | `test_navigation_mode.c` | (UI-critical only) |
+| `preflight_mode.c` — go/no-go verdicts incl. battery veto | `test_preflight_mode.c` | (UI-critical only) |
+| display_modes/ small pages — channel/RFstats/GPS/SD/RF/compass/I2C/SPI/IMU/pattern | `test_display_modes.c` | (layout contract) |
 
 (The transmitter's EKF is tested separately in `transmitter/tests/`, ~100%.)
 
@@ -41,7 +48,8 @@ make clean
 airframe binding and foreign-beacon filtering (same-modem co-channel
 traffic), the sequential-rocket livelock breaker, over-the-horizon
 blackout/re-acquisition, fringe CRC-error forensics, 49.7-day tick
-wraparound, and receiver cold-boots mid-flight / mid-walk.
+wraparound, receiver cold-boots mid-flight / mid-walk, the in-link live
+noise-floor estimator, and the completed-deaf-window wedge report.
 
 Tests include NMEA→decimal-degree conversion accuracy, hemisphere signs,
 malformed/NULL/short packet rejection, coordinate range validation, flag
@@ -56,12 +64,21 @@ helper, so sentences can never fail due to a hand-computed checksum typo.
 Note `gps_parser.c` keeps static jump-filter state with no reset API, so
 all valid-fix fixtures use the same geographic area.
 
+`test_sd_diskio.c` is the largest new suite: a scripted virtual SD card
+behind fake SPI registers exercises SDv2-HC / SDv1 / MMC init, ACMD41
+warm-up retries, single- and multi-block reads and writes, CMD12
+termination, both CSD sector-count formulas, write-token rejection, busy
+timeouts, the fastest-first speed ladder, and the per-transaction
+prescaler reassertion that keeps the negotiated speed alive across
+shared-SPI1 display traffic.
+
 ## How it works
 
 `stubs/` contains minimal stand-ins for `stm32f4xx_hal.h` /
-`stm32f4xx_hal_uart.h` so the real firmware sources compile unmodified with
-the host `gcc`. Keep stubs behavior-free; tests must remain
-hardware-independent.
+`stm32f4xx_hal_uart.h` / `stm32f4xx_hal_spi.h` plus the FatFs `ff.h` /
+`diskio.h` surface, so the real firmware sources compile unmodified with
+the host `gcc` - no vendor trees required. Keep stubs behavior-free;
+tests must remain hardware-independent.
 
 ## Adding tests
 

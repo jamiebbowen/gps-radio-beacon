@@ -41,33 +41,33 @@ void DisplayMode_SDCard(void)
         
         /* Display storage information */
         if (sd_info.total_size_mb >= 1024) {
-            snprintf(buffer, sizeof(buffer), "Size: %luGB", sd_info.total_size_mb / 1024);
+            snprintf(buffer, sizeof(buffer), "Size: %luGB", (unsigned long)(sd_info.total_size_mb / 1024));
         } else if (sd_info.total_size_mb > 0) {
-            snprintf(buffer, sizeof(buffer), "Size: %luMB", sd_info.total_size_mb);
+            snprintf(buffer, sizeof(buffer), "Size: %luMB", (unsigned long)sd_info.total_size_mb);
         } else {
             snprintf(buffer, sizeof(buffer), "Size: ?");
         }
         Display_DrawTextRowCol(2, 0, buffer);
 
         if (sd_info.free_space_mb >= 1024) {
-            snprintf(buffer, sizeof(buffer), "Free: %luGB", sd_info.free_space_mb / 1024);
+            snprintf(buffer, sizeof(buffer), "Free: %luGB", (unsigned long)(sd_info.free_space_mb / 1024));
         } else {
-            snprintf(buffer, sizeof(buffer), "Free: %luMB", sd_info.free_space_mb);
+            snprintf(buffer, sizeof(buffer), "Free: %luMB", (unsigned long)sd_info.free_space_mb);
         }
         Display_DrawTextRowCol(3, 0, buffer);
         
         /* Display logging statistics */
-        snprintf(buffer, sizeof(buffer), "Files: %lu", sd_info.files_logged);
+        snprintf(buffer, sizeof(buffer), "Files: %lu", (unsigned long)sd_info.files_logged);
         Display_DrawTextRowCol(4, 0, buffer);
         
         /* Display bytes written this session */
         uint32_t bw = sd_info.bytes_written;
         if (bw >= 1024 * 1024) {
-            snprintf(buffer, sizeof(buffer), "Wr: %luMB", bw / (1024 * 1024));
+            snprintf(buffer, sizeof(buffer), "Wr: %luMB", (unsigned long)(bw / (1024 * 1024)));
         } else if (bw >= 1024) {
-            snprintf(buffer, sizeof(buffer), "Wr: %luKB", bw / 1024);
+            snprintf(buffer, sizeof(buffer), "Wr: %luKB", (unsigned long)(bw / 1024));
         } else {
-            snprintf(buffer, sizeof(buffer), "Wr: %luB", bw);
+            snprintf(buffer, sizeof(buffer), "Wr: %luB", (unsigned long)bw);
         }
         Display_DrawTextRowCol(5, 0, buffer);
     } else {
@@ -80,7 +80,7 @@ void DisplayMode_SDCard(void)
          *   91 = block-device init failed at card init (CMD0)
          *   92 = block-device init failed at geometry (CMD9)
          *   99 = other/unknown block-device failure */
-        snprintf(buffer, sizeof(buffer), "Err: %lu", sd_info.write_errors);
+        snprintf(buffer, sizeof(buffer), "Err: %lu", (unsigned long)sd_info.write_errors);
         Display_DrawTextRowCol(2, 0, buffer);
         
         /* Decode common errors */

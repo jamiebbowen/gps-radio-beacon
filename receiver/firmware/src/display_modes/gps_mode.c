@@ -47,20 +47,20 @@ void DisplayMode_GPS(GPS_Data *gps_data, GPS_Data *last_good_gps, uint8_t has_la
   int32_t lat_int = (int32_t)(display_gps->latitude * 100000);
   int32_t lat_dec = labs(lat_int % 100000);
   int32_t lat_whole = lat_int / 100000;
-  sprintf(buffer, "Lat: %ld.%05ld", lat_whole, lat_dec);
+  sprintf(buffer, "Lat: %ld.%05ld", (long)lat_whole, (long)lat_dec);
   Display_DrawTextRowCol(1, 0, buffer);
   
   int32_t lon_int = (int32_t)(display_gps->longitude * 100000);
   int32_t lon_dec = labs(lon_int % 100000);
   int32_t lon_whole = lon_int / 100000;
-  sprintf(buffer, "Lon: %ld.%05ld", lon_whole, lon_dec);
+  sprintf(buffer, "Lon: %ld.%05ld", (long)lon_whole, (long)lon_dec);
   Display_DrawTextRowCol(2, 0, buffer);
   
   /* Display altitude - use integer formatting to avoid float issues */
   int32_t alt_int = (int32_t)(display_gps->altitude * 10);
   int32_t alt_dec = labs(alt_int % 10);
   int32_t alt_whole = alt_int / 10;
-  sprintf(buffer, "Alt: %ld.%01ldm", alt_whole, alt_dec);
+  sprintf(buffer, "Alt: %ld.%01ldm", (long)alt_whole, (long)alt_dec);
   Display_DrawTextRowCol(3, 0, buffer);
   
   /* Display time */

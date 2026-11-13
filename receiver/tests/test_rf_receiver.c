@@ -85,7 +85,7 @@ uint8_t LoRa_GetRssiInst(int16_t *rssi)
                                     : fake_rssi_inst;
     if (fake_rssi_seq_len > 0) {
         uint32_t i = (fake_rssi_seq_idx < fake_rssi_seq_len)
-                   ? fake_rssi_seq_idx : (fake_rssi_seq_len - 1);
+                   ? fake_rssi_seq_idx : (uint32_t)(fake_rssi_seq_len - 1);
         v = fake_rssi_seq[i];
         fake_rssi_seq_idx++;
     }
@@ -1992,6 +1992,14 @@ static void inject_fused_ex(double lat_deg, double lon_deg, uint8_t rocket_id,
     fake_pkt_pending = 1;
 }
 
+static uint32_t soup_xorshift32(uint32_t *s)
+{
+    *s ^= *s << 13;
+    *s ^= *s >> 17;
+    *s ^= *s << 5;
+    return *s;
+}
+
 TEST(test_packet_soup_state_coherence)
 {
     /* Launch-day truth: GPS + fused + heartbeats + callsigns + foreign
@@ -2023,9 +2031,11 @@ TEST(test_packet_soup_state_coherence)
     uint32_t exp_drops = RF_Receiver_GetForeignDrops();
     uint32_t exp_crc   = RF_Receiver_GetCrcErrors();
 
-    /* Reproducible PRNG (no rand(): we want identical runs everywhere) */
+    /* Reproducible PRNG (no rand(): we want identical runs everywhere).
+     * Function call gives each xorshift step its own sequence point -
+     * the one-expression comma-chained x ^= form is unsequenced UB. */
     uint32_t rng = 0xC0FFEEu;
-    #define SOUP_RAND() (rng ^= rng << 13, rng ^= rng >> 17, rng ^= rng << 5, rng)
+    #define SOUP_RAND() soup_xorshift32(&rng)
 
     for (int iter = 0; iter < 500; iter++) {
         uint8_t pick = SOUP_RAND() % 9;
