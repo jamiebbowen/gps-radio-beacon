@@ -11,7 +11,7 @@ one of three layers:
 1. **Magnetic declination** at the site. (Now handled automatically by the
    CONUS declination grid, applied at first local GPS fix - this procedure
    measures what remains.)
-2. **Fixed mounting offset** of the BNO055 relative to the antenna face.
+2. **Fixed mounting offset** of the BNO085 relative to the antenna face.
 3. **Soft/hard-iron anomalies** around the case.
 
 Procedure is designed so residual #2 and #3 cancel their own signs over a

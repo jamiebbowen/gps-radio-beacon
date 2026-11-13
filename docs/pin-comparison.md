@@ -40,12 +40,12 @@
 
 | Function | **Transmitter** (ItsyBitsy M4) | **Receiver** (STM32F4 Black Pill) |
 |----------|-------------------------------|-----------------------------------|
-| **Sensor** | BNO085 (IMU) | BNO055 (Compass/IMU) |
+| **Sensor** | BNO085 (IMU) | BNO085 (Compass/IMU) |
 | **Purpose** | Launch detection | Heading/orientation |
 | **SDA** | SDA (hardware I2C) | PB7 (I2C1_SDA) |
 | **SCL** | SCL (hardware I2C) | PB6 (I2C1_SCL) |
 | **RESET** | Pin 10 | Not used |
-| **I2C Address** | 0x4A (BNO085) | 0x28 (BNO055) |
+| **I2C Address** | 0x4A (BNO085) | 0x28/0x29 (BNO085) |
 | **Power** | 3.3V | 3.3V |
 
 ---
@@ -127,7 +127,7 @@
 - ✅ GPS data acquisition (local position)
 - ✅ LoRa reception (remote position from transmitter)
 - ✅ Display modes (GPS, RF, Compass, Navigation, etc.)
-- ✅ Compass/heading (BNO055)
+- ✅ Compass/heading (BNO085)
 - ✅ SD card data logging
 - ✅ User input (mode button)
 - ✅ Distance/bearing calculations

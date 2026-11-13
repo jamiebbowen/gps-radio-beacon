@@ -16,7 +16,7 @@ bench checklist (`bench-checklist.md`) passed this weekend.
 
 ### Magnetic declination
 
-The BNO055 measures *magnetic* north; the arrow points along *true* north.
+The BNO085 measures *magnetic* north; the arrow points along *true* north.
 The receiver now self-corrects: after your local GPS first fixes, the
 CONUS declination grid gives the site value (Denver +8.5 deg, mid-Nevada
 +11.9 deg, ...) and applies it once. An explicit `DECLIN.TXT` on the card

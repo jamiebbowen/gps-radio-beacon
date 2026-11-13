@@ -37,8 +37,9 @@ Connect the beacon over USB and watch the first seconds of boot:
       `sd-card-troubleshooting.md` for decoding.
 - [ ] **Last Beacon**: if a previous flight saved a position, its lat/lon
       shows for 1.5 s and the nav screen has a bearing immediately.
-- [ ] **BNO055 Initialized**, with `Cal: Restored` if a calibration was
-      saved on the SD card previously.
+- [ ] **BNO085 Initialized**, with `Cal: dynamic (sens)` — the BNO085 keeps
+      calibration in-sensor (the `Cal: Restored`/`None saved` messages only
+      existed on the old BNO055 host-offset path).
 
 ## 2. LED (PC13)
 
@@ -58,21 +59,20 @@ Connect the beacon over USB and watch the first seconds of boot:
 ## 4. Compass / IMU
 
 - [ ] IMU test mode: real values updating; **deliberately induce an error**
-      once (e.g. hold BOOT and disconnect the BNO055 I2C wire briefly) and
+      once (e.g. hold BOOT and disconnect the BNO085 I2C wire briefly) and
       confirm the error line shows an actual message, not `No error` —
       this verifies the error-reporting path end-to-end.
 
       NOTE: only do the wire-pull test on the bench, never before a flight.
-- [ ] Compass heading mode: `Cal S_ G_ A_ M_` — wave figure-8 until `M3`,
-      then power-cycle and confirm `Cal: Restored` on boot.
+- [ ] Compass heading mode: `Cal S_ G_ A_ M_` — wave figure-8 until `M3`.
+      Power-cycle and confirm boot shows `Cal: dynamic (sens)` — there is
+      no SD-backed restore on the BNO085; `M` re-climbs after remotion.
 
-      IMPORTANT: after a restore the BNO055 still reports `S0 G0 A0 M0` until
-      fresh motion re-verifies — that is normal, NOT a lost calibration. The
-      cal row shows a trailing `R` when verified offsets are loaded, and the
-      heading is already trustworthy. `Cal: RESTORE FAILED` on the boot screen
-      means the read-back verification failed and the compass really is
-      uncalibrated. The saved calibration lives on the SD card - booting
-      without the card always starts uncalibrated.
+      IMPORTANT: after boot the BNO085 still reports `S0 G0 A0 M0` until
+      fresh motion re-verifies — that is normal, NOT a lost calibration.
+      The BNO085 calibrates dynamically in-sensor; there is no host restore
+      step and nothing stored on the SD card. Just keep the figure-8 habit:
+      accuracy digits climb back to `M3` within a minute of motion.
 - [ ] Heading sanity: point the antenna north, heading reads ~0°
       (declination is compiled for the Denver area — see
       `COMPASS_MAGNETIC_DECLINATION_DEG` in `compass.c` before travelling).
