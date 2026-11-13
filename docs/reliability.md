@@ -452,6 +452,15 @@ coverage, RX lowest modules are `sd_card` (92%) and `compass` (94%).
   `test_launch_detect.cpp`. The RX-side `SD_Card_LoadDeclination`
   `strtof` had the same class of hole: `"nan"` parses "successfully"
   and slips the +-30 deg range check; now rejected with `isfinite`.
+- **Integer-field saturation at uint8_t boundaries**: the adjacent
+  integer-wrap class - a corrupt-but-checksum-valid sats field like
+  `"999"` survived all parse gates then wrapped modulo 256 at the
+  `(uint8_t)atoi` cast (heartbeat would report 231 satellites), and
+  out-of-spec `fix_quality="9"` claimed a fix. TX uses a strtol-based
+  saturating `nmea_u8_field()` (atoi is UB out of int range) at all
+  three sats consumers; RX mirrors it in `gps_parser.c`/`rf_parser.c`.
+  Fix quality >8 now reads as no-fix on both sides rather than
+  saturating into "simulation" and still counting as valid.
 - **Parser fuzzing** (`test_fuzz_parsers.c`, TX `test_fuzz_nmea.c`):
   seeded xorshift mutates a corpus of real wire packets/NMEA sentences
   through the real parsers under ASan+UBSan. 30M+ iterations across
