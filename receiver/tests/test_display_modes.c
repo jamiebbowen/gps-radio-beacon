@@ -46,8 +46,10 @@ static uint32_t cap_updates = 0, cap_clears = 0;
 static uint32_t cap_lines = 0, cap_circles = 0, cap_texts = 0, cap_pixels = 0;
 static uint32_t cap_chars = 0;
 
+static char cap_text_log[512];           /* every DrawText string, '|'-joined */
 static void cap_clear(void)
 {
+    cap_text_log[0] = '\0';
     memset(cap, 0, sizeof(cap));
     cap_updates = cap_clears = cap_lines = cap_circles = 0;
     cap_texts = cap_pixels = cap_chars = 0;
@@ -73,7 +75,11 @@ void Display_DrawCircle(uint8_t x0, uint8_t y0, uint8_t r, uint8_t c)
 void Display_DrawChar(uint8_t x, uint8_t y, char c)
 { (void)x; (void)y; (void)c; cap_chars++; }
 void Display_DrawText(uint8_t x, uint8_t y, const char *t)
-{ (void)x; (void)y; (void)t; cap_texts++; }
+{
+    (void)x; (void)y; cap_texts++;
+    size_t l = strlen(cap_text_log);
+    snprintf(cap_text_log + l, sizeof(cap_text_log) - l, "%s|", t ? t : "");
+}
 
 static const char *row(int r) { return cap[r]; }
 
@@ -448,6 +454,44 @@ TEST(sd_card_mode_absent_and_error_decode)
     CHECK(strstr(row(3), "FORMAT_FAIL") != NULL);
 }
 
+TEST(sd_card_mode_small_sizes_and_every_error_code)
+{
+    /* MB / unknown size, MB free, KB and byte write counts */
+    reset_fakes();
+    fake_sd.is_present = 1;
+    fake_sd.is_initialized = 1;
+    fake_sd.is_mounted = 1;
+    fake_sd.total_size_mb = 512;
+    fake_sd.free_space_mb = 300;
+    fake_sd.bytes_written = 5u * 1024u + 7u;
+    cap_clear();
+    DisplayMode_SDCard();
+    CHECK(strstr(row(2), "Size: 512MB") != NULL);
+    CHECK(strstr(row(3), "Free: 300MB") != NULL);
+    CHECK(strstr(row(5), "Wr: 5KB") != NULL);
+    fake_sd.total_size_mb = 0;
+    fake_sd.bytes_written = 900;
+    cap_clear();
+    DisplayMode_SDCard();
+    CHECK(strstr(row(2), "Size: ?") != NULL);
+    CHECK(strstr(row(5), "Wr: 900B") != NULL);
+
+    /* Every init error code the sd_card.c path can leave behind */
+    static const struct { uint32_t code; const char *name; } t[] = {
+        { 1, "MOUNT_FAIL" }, { 91, "CARD_INIT(CMD0)" }, { 92, "GEOMETRY(CMD9)" },
+        { 99, "BD_UNKNOWN" }, { 84, "LFS_ERR" },
+    };
+    fake_sd.is_mounted = 0;
+    for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
+        fake_sd.write_errors = t[i].code;
+        cap_clear();
+        DisplayMode_SDCard();
+        CHECK(strstr(row(1), "Status: Error") != NULL);
+        CHECK(strstr(row(3), t[i].name) != NULL);
+        CHECK(strstr(row(4), "Files: N/A") != NULL);
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* rf_mode                                                             */
 /* ------------------------------------------------------------------ */
@@ -603,6 +647,41 @@ TEST(compass_visual_rose_and_invalid_heading)
     CHECK(cap_lines == 8);              /* ticks only, needle suppressed */
 }
 
+TEST(compass_visual_stale_and_uncalibrated)
+{
+    /* Comms down with a last-known heading: still drawn, flagged '*' */
+    reset_fakes();
+    memset(&cdata, 0, sizeof(cdata));
+    cdata.heading = 90.0f; cdata.heading_stale = 1; cdata.orientation_valid = 1;
+    fake_compass_update = COMPASS_ERROR;
+    cap_clear();
+    DisplayMode_CompassVisual(&cdata, &cd_heading);
+    CHECK(strstr(cap_text_log, "Hdg: 90d*") != NULL);
+
+    /* Held level but uncalibrated: CAL in the rose and on the heading line */
+    memset(&cdata, 0, sizeof(cdata));
+    cdata.orientation_valid = 1;
+    fake_compass_update = COMPASS_OK;
+    cap_clear();
+    DisplayMode_CompassVisual(&cdata, &cd_heading);
+    CHECK(strstr(cap_text_log, "CAL|") != NULL);
+    CHECK(strstr(cap_text_log, "Hdg: CAL?") != NULL);
+}
+
+TEST(rf_mode_packet_without_position)
+{
+    /* Packets arrive but none carried a position yet */
+    reset_fakes();
+    memset(&rf_gps, 0, sizeof(rf_gps));
+    rf_valid = 0; rf_has_last = 0;
+    Test_SetTick(5000);
+    rf_last_time = 3000;
+    DisplayMode_RF(&rf_gps, &rf_valid, &rf_last_time, &rf_count,
+                   &rf_last, rf_has_last);
+    CHECK(strstr(row(2), "No valid GPS data") != NULL);
+    CHECK(strstr(row(3), "in received packet") != NULL);
+}
+
 /* ------------------------------------------------------------------ */
 /* test_pattern                                                       */
 /* ------------------------------------------------------------------ */
@@ -631,6 +710,7 @@ int main(void)
     run_gps_mode_last_good_fallback();
     run_sd_card_mode_present_gb();
     run_sd_card_mode_absent_and_error_decode();
+    run_sd_card_mode_small_sizes_and_every_error_code();
     run_rf_mode_live_packet_layout();
     run_rf_mode_last_good_and_testing_star();
     run_rf_mode_no_gps_no_packets();
@@ -638,6 +718,8 @@ int main(void)
     run_compass_heading_stale_marker();
     run_compass_update_failure_no_response();
     run_compass_visual_rose_and_invalid_heading();
+    run_compass_visual_stale_and_uncalibrated();
+    run_rf_mode_packet_without_position();
     run_test_pattern_corner_layout();
     return TEST_SUMMARY();
 }
