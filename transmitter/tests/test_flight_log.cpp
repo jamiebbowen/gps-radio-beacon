@@ -6,8 +6,8 @@
  * in flight_log.cpp) and fakes the SAMD51 NVMCTRL register block so the
  * production erase/page-commit path runs unmodified:
  *   - arm: full-region block erase, erase address histogram, arm/rearm policy
- *   - append: records park in the page buffer until the 512 B page commits
- *     (power loss mid-page costs at most one page - the module's whole pitch)
+ *   - append: every record is programmed at once as two 16-byte quad words
+ *     (tail first, magic last: power loss costs at most the record in flight)
  *   - record layout: every payload field must survive the write stride
  *     (regression: the union's struct used to be 40 B wide while only 16 B
  *     per record was copied, so az/gyro/peak and the entire GPS payload
@@ -213,8 +213,6 @@ static void reset_all(void)
     nvm_reset();
     memset(G_FLASH, 0xFF, HOST_FLOG_BYTES);   /* blank NVM */
     flight_log_init();                         /* reinit: armed=0, wptr=0 */
-    page_fill = 0;                             /* statics outlive init; on  */
-    memset(page_buf, 0xFF, sizeof(page_buf));  /* target they die with RAM  */
     Serial.clear();
 }
 
@@ -331,21 +329,25 @@ TEST(rearm_while_armed_is_noop)
 
 #define RECS_PER_PAGE (FLOG_PAGE / FLOG_RECORD)
 
-TEST(subpage_records_stay_in_ram_until_commit)
+TEST(records_reach_flash_as_they_are_written)
 {
+    /* A shredded airframe keeps every record written before the hit: each
+     * is programmed at once as two 16-byte quad words (WQW), tail first so
+     * the head - with the magic - lands last. */
     reset_all();
     flight_log_arm();
-    const uint32_t n = RECS_PER_PAGE - 1;
-    for (uint32_t i = 0; i < n; i++)
-        flight_log_imu(1000 + i, 10, 20, 30, 40, 50, 60, 70);
-    CHECK(wptr == n * FLOG_RECORD);
-    CHECK(nvm_wp_count == 1);            /* the arm marker only - the     */
-    CHECK(flash_rec(0)->f.magic != FLOG_MAGIC);     /* power-loss envelope  */
-    /* ...but the page buffer holds them, byte-exact */
-    const flog_rec_t *buf0 = (const flog_rec_t *)page_buf;
-    CHECK(buf0->f.magic == FLOG_MAGIC);
-    CHECK(buf0->f.ms == 1000);
-    CHECK(buf0->f.kind == FLOG_KIND_IMU);
+    const uint32_t wqw0 = nvm_wqw_count, wp0 = nvm_wp_count;
+    flight_log_imu(1000, 10, 20, 30, 40, 50, 60, 70);
+    CHECK(nvm_wqw_count == wqw0 + 2);
+    CHECK(nvm_wp_count == wp0);                  /* no page writes */
+    CHECK(wptr == FLOG_RECORD);
+    const flog_rec_t *r0 = flash_rec(0);
+    CHECK(r0->f.magic == FLOG_MAGIC);
+    CHECK(r0->f.ms == 1000);
+    CHECK(r0->f.kind == FLOG_KIND_IMU);
+    CHECK(r0->f.p.imu.peak_mg == 70);
+    CHECK(flash_rec(1)->f.magic != FLOG_MAGIC);  /* nothing beyond it */
+    CHECK(nvm_stray == 0);
 }
 
 TEST(page_boundary_commit_is_byte_exact)
@@ -355,7 +357,7 @@ TEST(page_boundary_commit_is_byte_exact)
     for (uint32_t i = 0; i < RECS_PER_PAGE; i++)
         flight_log_imu(2000 + i, 100, -200, 300,
                        4000, -5000, 6000, 5000 + (int16_t)i);
-    CHECK(nvm_wp_count == 2);                    /* marker + 1 data page */
+    CHECK(nvm_wp_count == 1);                    /* the marker; data by WQW */
     CHECK(flash_all_erased() == 0);
     /* first and last record of the page decode to exactly what was sent */
     const flog_rec_t *r0 = flash_rec(0);
@@ -383,7 +385,7 @@ TEST(gps_record_persists_full_payload)
         flight_log_gps(3000 + i,
                        398900000 + (int32_t)i, -1048851712 - (int32_t)i,
                        1655, 8, 1);
-    CHECK(nvm_wp_count == 2);                    /* marker + 1 data page */
+    CHECK(nvm_wp_count == 1);                    /* the marker; data by WQW */
     /* The fields past the 16th byte are the point of this test. */
     const flog_rec_t *r0 = flash_rec(0);
     CHECK(r0->f.kind == FLOG_KIND_GPS);
@@ -469,12 +471,14 @@ TEST(region_never_wraps_past_end)
     for (uint32_t i = 0; i < cap; i++)
         flight_log_gps(i, 1000 + (int32_t)i, 2000, 300, 7, 1);
     CHECK(wptr == FLOG_DATA_BYTES);
-    CHECK(nvm_wp_count == FLOG_DATA_BYTES / FLOG_PAGE + 1 /* marker */);
+    CHECK(nvm_wp_count == 1 /* marker */);
+    CHECK(nvm_wqw_count == 2 * cap);              /* two quad words each */
+    CHECK(nvm_stray == 0);
     /* overflow record is held, not wrapped over offset 0 */
-    uint32_t wps = nvm_wp_count;
+    uint32_t wqws = nvm_wqw_count;
     flight_log_gps(99999, -1, -1, -1, 0, 0);
     CHECK(wptr == FLOG_DATA_BYTES);
-    CHECK(nvm_wp_count == wps);
+    CHECK(nvm_wqw_count == wqws);
     CHECK(flash_rec(0)->f.p.gps.lat_e7 == 1000);
     /* last data slot carries the last written record */
     const flog_rec_t *last = flash_rec(cap - 1);
@@ -509,8 +513,7 @@ TEST(dump_emits_csv_for_flushed_records_only)
         else
             flight_log_gps(1236 + i, 1, 1, 1, 1, 1);
     }
-    /* one more record sits in the (uncommitted) page buffer and must not
-     * appear in the dump */
+    /* a 17th record, mid-page: already in flash, so it is dumped too */
     flight_log_imu(7777, 9, 9, 9, 9, 9, 9, 9);
 
     Serial.clear();
@@ -527,14 +530,14 @@ TEST(dump_emits_csv_for_flushed_records_only)
     CHECK(strstr(Serial.log,
                  "1238,9,398812345,-1048987654,1655,123,-45,-2200,7")
           != nullptr);                                        /* fused row */
-    CHECK(strstr(Serial.log, "7777") == nullptr);            /* unflushed */
+    CHECK(strstr(Serial.log, "7777,1,9,9,9,9,9,9,9,3") != nullptr); /* mid-page */
     CHECK(strstr(Serial.log, "0x") == nullptr);
-    /* exactly the 3-line units note + header + the 16 flushed records +
-     * the FLYING marker row: erased space is skipped, the marker is a
-     * real record */
+    /* exactly the 3-line units note + header + the 17 records + the
+     * FLYING marker row: erased space is skipped, the marker is a real
+     * record */
     int lines = 0;
     for (const char *p = Serial.log; *p; p++) if (*p == '\n') lines++;
-    CHECK(lines == 3 + 1 + (int)RECS_PER_PAGE + 1);
+    CHECK(lines == 3 + 1 + (int)RECS_PER_PAGE + 1 + 1);
     CHECK(strstr(Serial.log, "0,10,1,0") != nullptr);      /* state row */
 
     /* The dump feeds the WDT once per record slot - without that the
@@ -589,30 +592,32 @@ TEST(resume_restores_append_point_without_erase)
 {
     reset_all();
     flight_log_arm();
-    /* three committed pages of GPS, then "power loss" mid-page: the
-     * 17th record sits in page_buf only and dies with the reset */
+    /* three pages of GPS, then one more record mid-page, then "power
+     * loss": every record written before the reset survives */
     for (uint32_t i = 0; i < 3 * RECS_PER_PAGE; i++)
         flight_log_gps(5000 + i, 1000 + (int32_t)i, 2000, 300, 7, 1);
-    flight_log_gps(9999, -1, -1, -1, 0, 0);        /* doomed RAM record   */
+    flight_log_gps(9999, -1, -1, -1, 0, 0);        /* mid-page, survives  */
     const uint32_t wp_before = nvm_wp_count;
+    const uint32_t wqw_before = nvm_wqw_count;
     const uint32_t eb_before = nvm_eb_count;
 
-    /* The reset: on target RAM dies with the chip; here init + page_fill
-     * model that. The FLYING marker is what survives. */
+    /* The reset: RAM state dies with the chip (init models it); flash and
+     * the FLYING marker survive. */
     flight_log_init();
-    page_fill = 0;
     CHECK(flight_log_prev_flying() == 1);
     CHECK(flight_log_resume() == 1);
     CHECK(armed == 1);
-    CHECK(wptr == 3 * FLOG_PAGE);                  /* first blank page    */
+    CHECK(wptr == 3 * FLOG_PAGE + FLOG_RECORD);    /* first blank slot    */
     CHECK(nvm_eb_count == eb_before);              /* NO erase happened   */
     CHECK(nvm_wp_count == wp_before);              /* nothing rewritten   */
+    CHECK(nvm_wqw_count == wqw_before);
 
     /* Appends continue exactly where the previous boot left off: the
      * next page commit lands at wptr and old records are untouched. */
     for (uint32_t i = 0; i < RECS_PER_PAGE; i++)
         flight_log_gps(6000 + i, -99 - (int32_t)i, 2000, 300, 7, 1);
-    const flog_rec_t *res = flash_rec(3 * RECS_PER_PAGE);
+    CHECK(flash_rec(3 * RECS_PER_PAGE)->f.ms == 9999);    /* survived */
+    const flog_rec_t *res = flash_rec(3 * RECS_PER_PAGE + 1);
     CHECK(res->f.magic == FLOG_MAGIC);
     CHECK(res->f.ms == 6000);
     CHECK(res->f.p.gps.lat_e7 == -99);
@@ -621,6 +626,25 @@ TEST(resume_restores_append_point_without_erase)
     CHECK(flash_rec(0)->f.p.gps.lat_e7 == 1000);
     CHECK(flash_rec(3 * RECS_PER_PAGE - 1)->f.p.gps.lat_e7 ==
           1000 + (int32_t)(3 * RECS_PER_PAGE - 1));
+}
+
+TEST(resume_skips_a_torn_record)
+{
+    /* Power died between a record's two quad words: the tail is
+     * programmed, the head (with the magic) never was. Programming only
+     * clears bits, so that slot can't be reused - resume appends after
+     * it - and DUMP skips it for lack of a magic. */
+    reset_all();
+    flight_log_arm();
+    for (uint32_t i = 0; i < 5; i++) flight_log_gps(100 + i, 1, 2, 3, 7, 1);
+    memset(G_FLASH + 5 * FLOG_RECORD + 16, 0x00, 16);   /* torn: tail only */
+    flight_log_init();
+    CHECK(flight_log_resume() == 1);
+    CHECK(wptr == 6 * FLOG_RECORD);
+    flight_log_gps(200, 9, 9, 9, 7, 1);
+    CHECK(flash_rec(6)->f.ms == 200);
+    CHECK(flash_rec(5)->f.magic != FLOG_MAGIC);
+    CHECK(flash_rec(4)->f.ms == 104);
 }
 
 TEST(resume_requires_the_flying_marker)
@@ -646,7 +670,7 @@ int main(void)
     run_unarmed_appends_are_dropped();
     run_arm_erases_full_region_then_arms();
     run_rearm_while_armed_is_noop();
-    run_subpage_records_stay_in_ram_until_commit();
+    run_records_reach_flash_as_they_are_written();
     run_page_boundary_commit_is_byte_exact();
     run_gps_record_persists_full_payload();
     run_event_record_persists_kind_and_time();
@@ -657,6 +681,7 @@ int main(void)
     run_arm_commit_reboot_notice_rearm();
     run_prev_flying_reads_the_marker_row();
     run_resume_restores_append_point_without_erase();
+    run_resume_skips_a_torn_record();
     run_resume_requires_the_flying_marker();
     return TEST_SUMMARY();
 }

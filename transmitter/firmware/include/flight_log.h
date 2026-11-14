@@ -61,8 +61,9 @@
  * the first FLOG_BYTES-8KB so a full data region can never clobber the
  * marker. The erase takes NVMCTL row-erase time per row (~20 ms each,
  * ~500 ms total), which happens once at T0 - on the pad the PAYOFF is
- * worth it. In flight the writes append with a 512B page commit; if power
- * dies mid-page, only that page is lost.
+ * worth it. In flight every record is programmed as it is logged (two
+ * 16-byte quad words, magic last), so a power loss costs at most the
+ * record being written.
  */
 
 void flight_log_init(void);

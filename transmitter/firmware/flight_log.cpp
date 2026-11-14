@@ -8,9 +8,10 @@
  * reads over the debug UART.
  *
  * Memory model: a flat append-only log at the back of the 512 KB on-chip
- * flash, laid out as 32-byte fixed records. Pages are written when full
- * (page-register buffer), so a power loss mid-write costs at most the
- * current page. The record layout is a PER-KIND payload union: the header
+ * flash, laid out as 32-byte fixed records. Each record is programmed as
+ * it is logged (two 16-byte quad-word writes, magic last), so a power
+ * loss mid-write costs at most the record being written. The record
+ * layout is a PER-KIND payload union: the header
  * (magic/ms/kind) plus the largest payload must fit inside FLOG_RECORD
  * bytes - flog_append_record only persists FLOG_RECORD per append, and the
  * host test static-asserts sizeof(flog_rec_t) == FLOG_RECORD so the
@@ -139,6 +140,25 @@ static bool nvm_write_page(uint32_t addr, const uint8_t *buf)
     return (NVMCTRL->INTFLAG.bit.PROGE == 0);
 }
 
+/* Program one 16-byte quad word (WQW) at addr: the SAMD51's smallest
+ * write, so a record reaches flash the moment it is logged. */
+static bool nvm_write_qword(uint32_t addr, const uint8_t *src16)
+{
+    nvm_wait_ready();
+    NVMCTRL->CTRLB.reg = NVMCTRL_CTRLB_CMDEX_KEY | NVMCTRL_CTRLB_CMD_PBC;
+    nvm_wait_ready();
+    volatile uint32_t *dst = (volatile uint32_t *)addr;
+    uint32_t w[4];
+    memcpy(w, src16, sizeof(w));
+    for (int i = 0; i < 4; i++) {
+        dst[i] = w[i];
+    }
+    NVMCTRL->ADDR.reg = addr;
+    NVMCTRL->CTRLB.reg = NVMCTRL_CTRLB_CMDEX_KEY | NVMCTRL_CTRLB_CMD_WQW;
+    nvm_wait_ready();
+    return (NVMCTRL->INTFLAG.bit.PROGE == 0);
+}
+
 /* ------------------------------------------------------------------ */
 /* Public API                                                           */
 /* ------------------------------------------------------------------ */
@@ -156,12 +176,6 @@ void flight_log_init(void)
         Serial.println(F("[FLOG] type 'DUMP' + Enter over USB CDC before rearm"));
     }
 }
-
-/* Page write buffer: records accumulate here and commit per NVM page.
- * Async-safety is deliberately NOT aimed at: the main loop calls the
- * append API on event edges only. */
-static uint8_t page_buf[FLOG_PAGE];
-static uint16_t page_fill = 0;
 
 /* Write the flight-state marker (kind 10) onto its reserved row. The row
  * is always erased first because state writes (FLYING -> LANDED) flip
@@ -203,16 +217,22 @@ uint8_t flight_log_resume(void)
 {
     if (armed || !flight_log_prev_flying()) return 0;
 
-    /* Find the append point: first page whose FIRST record lacks the
-     * magic. Power (or the reset) died with at most one partially-
-     * buffered page in RAM - every earlier page was committed. */
+    /* Find the append point: the first fully blank record slot. Records
+     * are written one by one, so every slot before it holds a record - or
+     * a torn one (power died between its two quad words: tail written,
+     * head with the magic not). A torn slot can't be reused, since
+     * programming only clears bits, so it is skipped; DUMP ignores it for
+     * lack of a magic. */
     wptr = 0;
     while (wptr < FLOG_DATA_BYTES) {
-        const flog_rec_t *r = (const flog_rec_t *)(FLOG_BASE + wptr);
-        if (r->f.magic != FLOG_MAGIC) break;
-        wptr += FLOG_PAGE;
+        const uint8_t *slot = (const uint8_t *)(FLOG_BASE + wptr);
+        bool blank = true;
+        for (uint32_t k = 0; k < FLOG_RECORD; k++) {
+            if (slot[k] != 0xFF) { blank = false; break; }
+        }
+        if (blank) break;
+        wptr += FLOG_RECORD;
     }
-    page_fill = 0;
     armed = 1;
     return 1;
 }
@@ -229,14 +249,15 @@ static void flog_append_record(const flog_rec_t *rec)
     if (wptr + FLOG_RECORD > FLOG_DATA_BYTES) return;  /* hold; state row
                                                         * is off-limits */
 
-    memcpy(page_buf + page_fill, rec, FLOG_RECORD);
-    page_fill += FLOG_RECORD;
+    /* Straight to flash, two quad words. Tail first: the head carries the
+     * magic, so a record is only ever visible once it is complete, and a
+     * shredded airframe loses at most the record being written (it used
+     * to lose up to 15 buffered in RAM - the last ~8-15 s of flight). */
+    const uint8_t *src = (const uint8_t *)rec;
+    uint32_t addr = FLOG_BASE + wptr;
+    (void)nvm_write_qword(addr + 16, src + 16);
+    (void)nvm_write_qword(addr, src);
     wptr += FLOG_RECORD;
-
-    if (page_fill >= FLOG_PAGE) {
-        (void)nvm_write_page(FLOG_BASE + wptr - FLOG_PAGE, page_buf);
-        page_fill = 0;
-    }
 }
 
 void flight_log_imu(uint32_t ms,
