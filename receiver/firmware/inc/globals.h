@@ -16,13 +16,11 @@ extern "C" {
 
 /* Global GPS data */
 extern GPS_Data local_gps_data;
-extern GPS_Data remote_gps_data;
 
 /* 0 = LoRa radio init failed (boot + periodic retries in main). Display
  * modes use this to show "RF DEAD" instead of the misleading "No signal". */
 extern uint8_t rf_initialized;
 extern uint8_t has_valid_local_gps;
-extern uint8_t has_valid_remote_gps;
 
 /* Global Compass data */
 extern Compass_Data compass_data;

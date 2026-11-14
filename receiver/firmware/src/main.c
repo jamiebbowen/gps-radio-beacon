@@ -39,6 +39,7 @@
 #include "rf_receiver.h"
 #include "display_modes.h"
 #include "preflight_eval.h"
+#include "beacon_track.h"
 #include "math_utils.h"
 #include "button.h"
 #include "sd_card.h"
@@ -85,9 +86,8 @@ static float compass_heading = 0.0f;
 
 /* Global variables defined in globals.h */
 GPS_Data local_gps_data = {0};        /* Initialize to zero to prevent garbage in date fields */
-GPS_Data remote_gps_data = {0};       /* Initialize to zero */
 GPS_Data last_good_local_gps = {0};   /* Store last known good local GPS data */
-GPS_Data last_good_remote_gps = {0};  /* Store last known good remote GPS data */
+static BeaconTrack_t beacon;          /* beacon position + age (beacon_track.c) */
 Compass_Data compass_data;
 
 /* Display mode control */
@@ -127,12 +127,8 @@ static uint32_t seg_start_cmp = 0;
 
 /* Flags and counters */
 uint8_t has_valid_local_gps = 0;
-uint8_t has_valid_remote_gps = 0;
 uint8_t has_last_good_local_gps = 0;  /* Flag for last known good local GPS */
-uint8_t has_last_good_remote_gps = 0; /* Flag for last known good remote GPS */
 uint8_t rf_initialized = 0;
-uint32_t last_rf_packet_time = 0;
-uint32_t rf_packet_count = 0;
 uint32_t last_good_gps_time = 0;  /* Time when we last had good GPS data */
 
 /* Navigation data */
@@ -277,19 +273,19 @@ static void Eink_MaybeRefreshSummary(uint32_t now_ms)
            (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)rssi);
   Eink_DrawText(4, 38, 1, buf, EINK_BLACK);
   snprintf(buf, sizeof(buf), "age %lus  pkts %lu",
-           (unsigned long)age_s, (unsigned long)rf_packet_count);
+           (unsigned long)age_s, (unsigned long)beacon.packet_count);
   Eink_DrawText(4, 50, 1, buf, EINK_BLACK);
 
-  if (has_valid_remote_gps || has_last_good_remote_gps) {
+  if (beacon.has_valid || beacon.has_last_good) {
     snprintf(buf, sizeof(buf), "lat %.5f",
-             (double)last_good_remote_gps.latitude);
+             (double)beacon.last_good.latitude);
     Eink_DrawText(4, 62, 1, buf, EINK_BLACK);
     snprintf(buf, sizeof(buf), "lon %.5f",
-             (double)last_good_remote_gps.longitude);
+             (double)beacon.last_good.longitude);
     Eink_DrawText(4, 74, 1, buf, EINK_BLACK);
     if (distance_to_tx >= 0.0f) {
       snprintf(buf, sizeof(buf), "alt %.0fm  dist %.2fkm",
-               (double)last_good_remote_gps.altitude, (double)distance_to_tx);
+               (double)beacon.last_good.altitude, (double)distance_to_tx);
       Eink_DrawText(4, 86, 1, buf, EINK_BLACK);
     }
   } else {
@@ -356,14 +352,7 @@ int main(void)
 #define IWDG_FEED() (IWDG->KR = 0xAAAA)
   
   /* Initialize remote GPS data structure with safe default values */
-  memset(&remote_gps_data, 0, sizeof(GPS_Data));
-  /* Set default coordinates far away from any likely location (0,0 is in the ocean) */
-  remote_gps_data.latitude = 0.0f;
-  remote_gps_data.longitude = 0.0f;
-  remote_gps_data.fix = 0;
-  strcpy(remote_gps_data.fix_str, "0");
-  remote_gps_data.satellites = 0;
-  strcpy(remote_gps_data.satellites_str, "0");
+  BeaconTrack_Init(&beacon);
   
   /* Display is now fixed in 90° orientation */
   
@@ -537,16 +526,7 @@ int main(void)
     /* Load last known beacon location so navigation works immediately on boot */
     float saved_lat = 0.0f, saved_lon = 0.0f, saved_alt = 0.0f;
     if (SD_Card_LoadLastBeacon(&saved_lat, &saved_lon, &saved_alt) == SD_CARD_OK) {
-      remote_gps_data.latitude       = saved_lat;
-      remote_gps_data.longitude      = saved_lon;
-      remote_gps_data.altitude       = saved_alt;
-      remote_gps_data.fix            = 1;
-      has_valid_remote_gps           = 1;
-      last_good_remote_gps.latitude  = saved_lat;
-      last_good_remote_gps.longitude = saved_lon;
-      last_good_remote_gps.altitude  = saved_alt;
-      last_good_remote_gps.fix       = 1;
-      has_last_good_remote_gps       = 1;
+      BeaconTrack_Restore(&beacon, saved_lat, saved_lon, saved_alt);
 
       Display_Clear();
       Display_DrawTextRowCol(2, 0, "Last Beacon");
@@ -741,7 +721,7 @@ int main(void)
     /* Deferred SD sync at write-idle moments (see SD_Card_ServiceSync): the
      * commit+compaction burst prefers moments the RF link went quiet for a
      * beat; hard row/time caps keep it honest during flight-dense traffic. */
-    SD_Card_ServiceSync((HAL_GetTick() - last_rf_packet_time) >= 150u);
+    SD_Card_ServiceSync((HAL_GetTick() - beacon.pos_tick) >= 150u);
 
     /* Main-loop iteration time tracking: the quiet forensic signal for
      * blocking bugs (SD commit stalls, radio wedges, display churn) that
@@ -836,9 +816,7 @@ int main(void)
       uint8_t after = RF_Receiver_NextChannel();
       if (after != before) {
         /* Everything received so far belongs to the previous rocket */
-        has_valid_remote_gps = 0;
-        has_last_good_remote_gps = 0;
-        last_rf_packet_time = 0;
+        BeaconTrack_NewContext(&beacon);
         if (sd_card_ok) {
           char ch_msg[48];
           snprintf(ch_msg, sizeof(ch_msg), "RF manual CH%u %.2fMHz",
@@ -1288,18 +1266,15 @@ int main(void)
          * the beacon that far, so the saved point is stale-then-wrong.
          * Discard it - arrow would otherwise aim at another state until
          * fresh RF/pad traffic lands. */
-        if (has_last_good_local_gps && has_last_good_remote_gps) {
+        if (has_last_good_local_gps && beacon.has_last_good) {
           static uint8_t cross_checked = 0;
           if (!cross_checked) {
             cross_checked = 1;
-            if (saved_beacon_implausibly_far(last_good_remote_gps.latitude,
-                                             last_good_remote_gps.longitude,
+            if (saved_beacon_implausibly_far(beacon.last_good.latitude,
+                                             beacon.last_good.longitude,
                                              gps_data.latitude,
                                              gps_data.longitude)) {
-              last_good_remote_gps.fix = 0;
-              has_valid_remote_gps     = 0;
-              has_last_good_remote_gps = 0;
-              remote_gps_data.fix      = 0;
+              BeaconTrack_Forget(&beacon);
               if (sd_card_ok)
                 SD_Card_LogEvent("Last-beacon self-loc far from beacon - discarded");
             }
@@ -1466,35 +1441,16 @@ int main(void)
       if (rf_initialized && RF_Receiver_DataAvailable()) {
         uint8_t status = RF_Receiver_GetGPSData(&rf_gps_data); 
         if (status == RF_OK) {
-          /* Validate remote GPS data before marking as valid */
-          if (rf_gps_data.latitude != 0.0f && rf_gps_data.longitude != 0.0f && 
-              rf_gps_data.latitude >= -90.0f && rf_gps_data.latitude <= 90.0f &&
-              rf_gps_data.longitude >= -180.0f && rf_gps_data.longitude <= 180.0f) {
-            /* Valid remote GPS data - copy it and save as last known good */
-            memcpy(&remote_gps_data, &rf_gps_data, sizeof(GPS_Data));
-            memcpy(&last_good_remote_gps, &rf_gps_data, sizeof(GPS_Data));
-            has_valid_remote_gps = 1;
-            has_last_good_remote_gps = 1;
-
+          /* Position ownership, age and the BEACON.TXT rate limit live in
+           * beacon_track.c (host-tested); this block does the SD work. */
+          uint8_t track = BeaconTrack_OnPacket(&beacon, &rf_gps_data, HAL_GetTick());
+          if (track & BEACON_TRACK_NAV_ROW) {
             /* Persist beacon location and log navigation data point */
             if (sd_card_ok) {
-              /* Rate-limit BEACON.TXT persistence. A save is a full
-               * littlefs close/commit cycle (can block ~100 ms+ during flash
-               * GC). Post-launch packets arrive at ~2 s cadence, so doing
-               * this on every packet starves the main loop and the display
-               * updates in delayed bursts. BEACON.TXT is only read at boot
-               * for last-known-position recovery; staleness of 10 s is
-               * harmless. */
-              static uint32_t last_beacon_save_ms = 0;
-              uint32_t now_ms = HAL_GetTick();
-              /* A held (dead-reckoned) fused packet carries no new
-               * position: never persist it as the last beacon fix. */
-              if (!rf_gps_data.fused_position_held &&
-                  now_ms - last_beacon_save_ms >= 10000U) {
+              if (track & BEACON_TRACK_SAVE) {
                 SD_Card_SaveLastBeacon(rf_gps_data.latitude,
                                        rf_gps_data.longitude,
                                        rf_gps_data.altitude);
-                last_beacon_save_ms = now_ms;
               }
 
               /* Get RSSI of this packet */
@@ -1534,17 +1490,7 @@ int main(void)
                                     compass_heading, compass_data.pitch,
                                     compass_data.roll, pkt_rssi, pkt_snr);
             }
-          } else {
-            /* Invalid coordinates despite receiving a packet */
-            has_valid_remote_gps = 0;
           }
-          /* Position age: a held (dead-reckoned) fused packet carries no
-           * new position, so "Last:" keeps counting from the last real
-           * fix. The link itself is the beacon-heard tick (any packet). */
-          if (!rf_gps_data.fused_position_held) {
-            last_rf_packet_time = HAL_GetTick();
-          }
-          rf_packet_count++;
           /* LED pulse handled at top of loop from the beacon-heard tick */
           
           /* Log the transmitting rocket's ID once per change: the beacon's
@@ -1589,7 +1535,7 @@ int main(void)
     /* (Stale-RF invalidation happens in the every-loop check below.) */
 
     /* Calculate distance and direction if we have valid GPS data (current or last known good) and remote GPS */
-    if ((has_valid_local_gps || has_last_good_local_gps) && has_valid_remote_gps) {
+    if ((has_valid_local_gps || has_last_good_local_gps) && beacon.has_valid) {
       /* One shared solution (math_utils.c Nav_Compute, the same one the
        * navigation page uses): from the live local fix if there is one,
        * else from the last good one. Unusable coordinates keep the last
@@ -1598,7 +1544,7 @@ int main(void)
                                                      : &last_good_local_gps;
       Nav_Solution_t nav_sol;
       Nav_Compute(nav_base->latitude, nav_base->longitude, has_valid_local_gps,
-                  remote_gps_data.latitude, remote_gps_data.longitude,
+                  beacon.current.latitude, beacon.current.longitude,
                   compass_heading, &nav_sol);
       if (nav_sol.valid) {
         distance_to_tx = nav_sol.distance_km;
@@ -1644,9 +1590,9 @@ int main(void)
   }
 
   /* Check if RF data is stale (no updates for more than 180 seconds) */
-  if (last_rf_packet_time > 0 && current_time - last_rf_packet_time > 180000) {
-    has_valid_remote_gps = 0; /* Mark remote GPS as invalid if too old */
-    
+  if (BeaconTrack_Age(&beacon, current_time)) {
+    /* (beacon.has_valid dropped: remote GPS invalid when too old) */
+
     /* With stale data, we should still update the relative direction based on compass heading,
        but we should NOT add 180 degrees - that would point the arrow in the wrong direction */
     if (direction_to_tx >= 0.0f && direction_to_tx <= 360.0f && 
@@ -1674,28 +1620,19 @@ int main(void)
    * preflight_eval.h): the quiet pad sends a heartbeat a minute and a
    * position only every 10 minutes. The beacon's GPS is judged from the
    * newer of its last heartbeat and its last position packet. */
-  uint32_t pf_link_age_s = (heard_tick > 0) ? (current_time - heard_tick) / 1000 : 0;
   HeartbeatPacket_t own_hb;
   memset(&own_hb, 0, sizeof(own_hb));
   uint32_t own_hb_age_ms = 0;
   uint8_t own_hb_valid = RF_Receiver_GetLastHeartbeat(&own_hb, &own_hb_age_ms);
   Preflight_Inputs_t pf_in = {
-    .link_heard      = (heard_tick > 0),
-    .link_age_s      = pf_link_age_s,
-    .pos_valid       = (last_rf_packet_time > 0),
-    .pos_age_s       = (last_rf_packet_time > 0)
-                       ? (current_time - last_rf_packet_time) / 1000 : 0,
-    .pos_fix         = remote_gps_data.fix,
-    .pos_sats        = (uint8_t)remote_gps_data.satellites,
-    .hb_valid        = own_hb_valid,
-    .hb_age_s        = own_hb_age_ms / 1000,
-    .hb_fix          = own_hb.fix_quality,
-    .hb_sats         = own_hb.satellites,
     .rx_fix_ok       = has_valid_local_gps,
     .compass_ok      = compass_data.heading_valid && !compass_data.heading_stale,
     .rx_vdd_mv       = (uint16_t)sys_vdd_mv,
     .testing_suspect = RF_Receiver_TestingBuildSuspect(),
   };
+  BeaconTrack_FillPreflight(&beacon, current_time, heard_tick, own_hb_valid,
+                            own_hb_age_ms, own_hb.fix_quality,
+                            own_hb.satellites, &pf_in);
   Preflight_Result_t pf_result;
   Preflight_Evaluate(&pf_in, &pf_result);
 
@@ -1713,14 +1650,14 @@ int main(void)
       break;
       
     case DISPLAY_MODE_RF:
-      DisplayMode_RF(&remote_gps_data, &has_valid_remote_gps, &last_rf_packet_time, &rf_packet_count,
-                     &last_good_remote_gps, has_last_good_remote_gps);
+      DisplayMode_RF(&beacon.current, &beacon.has_valid, &beacon.pos_tick, &beacon.packet_count,
+                     &beacon.last_good, beacon.has_last_good);
       break;
       
     case DISPLAY_MODE_NAVIGATION:
-      DisplayMode_Navigation(has_valid_local_gps, has_valid_remote_gps,
-                                &local_gps_data, &remote_gps_data, compass_heading,
-                                last_rf_packet_time, rf_packet_count, &pf_result);
+      DisplayMode_Navigation(has_valid_local_gps, beacon.has_valid,
+                                &local_gps_data, &beacon.current, compass_heading,
+                                beacon.pos_tick, beacon.packet_count, &pf_result);
       break;
       
     case DISPLAY_MODE_SD_CARD:
@@ -1748,10 +1685,10 @@ int main(void)
         pf_hb_state = HB_GPS_STATE(own_hb.gps_health);
       }
 
-      DisplayMode_Preflight(pf_result.link_ok, pf_link_age_s, pf_rssi,
+      DisplayMode_Preflight(pf_result.link_ok, pf_in.link_age_s, pf_rssi,
                             pf_result.tx_fix, pf_result.tx_sats,
                             pf_hb_state,
-                            remote_gps_data.fused_sensor_degraded,
+                            beacon.current.fused_sensor_degraded,
                             has_valid_local_gps, (uint8_t)local_gps_data.satellites,
                             compass_data.heading_valid && !compass_data.heading_stale,
                             sd_card_ok, (uint16_t)sys_vdd_mv, &pf_result);
