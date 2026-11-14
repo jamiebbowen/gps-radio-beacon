@@ -71,6 +71,12 @@ Connect the beacon over USB and watch the first seconds of boot:
       cover the beacon's GPS antenna. The receiver's target stays at the
       touchdown fix, nav row 7 reads `LANDED DR`, `Last:` keeps counting,
       and BEACON.TXT still holds the touchdown fix after a receiver reboot.
+- [ ] Beacon power-cycled on the pad: switch it off and on twice within two
+      minutes. PRE-FLIGHT never shows `TST *...*` / `NOT READY - TST BUILD!`
+      and the SD log has no "testing-build cadence" ERROR row.
+- [ ] Receiver rebooted on the pad: with the beacon past its turn-on minute
+      (PRE_LAUNCH), reboot the receiver. It locks within ~62 s on the
+      channel it last used (`RF scan locked CHn`), not minutes later.
 
 ## 4. Compass / IMU
 
