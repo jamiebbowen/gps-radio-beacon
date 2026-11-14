@@ -77,7 +77,7 @@ for section in ("== Boot / reset ==", "== RF link ==", "== TX GPS health",
 expect("scan/channel at 0:08", out)                       # RF scan lock
 expect("LOST (5 min silence) at 15:00", out)              # blackout marker
 expect("2 heartbeats: SILENT=1  acq=1", out)              # EVENT-prefixed HBs parse
-expect("max rst=1  <-- TX had to cold-restart its GPS", out)
+expect("max rst=1  <-- TX GPS watchdog had to recover it (reset ladder)", out)
 expect("RF bound rocket_id=3", out)                       # binding breadcrumbs
 expect("RF bound rocket_id=7", out)
 expect("FOREIGN TRAFFIC: 25:00..26:00", out)              # foreign drop window
@@ -90,6 +90,22 @@ boot_idx = out.index("== Boot / reset ==")
 rf_idx = out.index("== RF link ==")
 boot_section = out[boot_idx:rf_idx]
 expect("OK - no watchdog resets", boot_section)
+
+# Watchdog resets are ERROR rows (current single-row wording and the older
+# two-row build). The summary used to look for them only in EVENT rows and
+# reported "OK - no watchdog resets" for every real log.
+WD_LOG = """Timestamp,Type,Data
+0.000,ERROR,RESET src=IWDG vdd=3300mV (firmware hang)
+5.000,EVENT,RF scan locked CH0 433.00MHz
+600.000,ERROR,Boot after IWDG watchdog reset (firmware hang)
+""".strip() + "\n"
+wd_out = run_report(WD_LOG)
+wd_boot = wd_out[wd_out.index("== Boot / reset =="):wd_out.index("== RF link ==")]
+expect("IWDG watchdog reset logged at 0:00", wd_boot)
+expect("IWDG watchdog reset logged at 10:00", wd_boot)
+CHECKED += 1
+if "OK - no watchdog resets" in wd_boot:
+    FAILURES.append("watchdog resets present but the boot section says OK")
 
 if FAILURES:
     for f in FAILURES:
