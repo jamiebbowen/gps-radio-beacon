@@ -86,6 +86,9 @@ USB serial at 115200 prints boot banners (reset cause, watchdog or
 brown-out recovery), state changes and radio results. Typing `DUMP` + Enter
 prints the on-chip flight log as CSV (refused while airborne). The first
 lines describe the IMU units; IMU rows end with a format byte (3 = V3).
+Save that output to a file and run `python3 tools/flight_log_dump.py
+capture.txt` for the last known position, the flight timeline (boot causes,
+launch, events, landing) and the maxima.
 
 ## GPS watchdog
 
