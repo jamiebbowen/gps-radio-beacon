@@ -111,6 +111,12 @@ Uses a flat-Earth ENU projection centered on the pad -- good to ~0.1 m for
 the few-km scales typical of an amateur flight. Ground track is the
 integrated path length, not straight-line displacement.
 
+FUS rows with the DR bit (0x02) in `FusedFlags` were dead-reckoned by the
+beacon: since RX-16 the receiver holds the last GPS-backed position for
+them, so their lat/lon/alt and velocity repeat that fix rather than the
+packet's coast estimate (until the receiver has no GPS-backed position at
+all, e.g. booted mid-outage).
+
 ### RF link
 
 Pre-launch cadence is 5 s across packet types while range-testing (dense);

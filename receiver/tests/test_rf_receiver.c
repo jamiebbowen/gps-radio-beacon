@@ -2348,8 +2348,6 @@ TEST(test_packet_soup_state_coherence)
     uint8_t exp_sats = 9;
     uint8_t exp_is_fused = 0;
     char    exp_cs[RF_PARSER_MAX_CALLSIGN_LEN] = "";
-    uint32_t last_raw_ms = now_ms;               /* freshness of last RAW fix */
-    uint8_t  check_adv = 1;                      /* 0 = dead-zone: skip pos asserts */
     uint32_t exp_drops = RF_Receiver_GetForeignDrops();
     uint32_t exp_crc   = RF_Receiver_GetCrcErrors();
 
@@ -2372,7 +2370,6 @@ TEST(test_packet_soup_state_coherence)
             exp_lat = lat; exp_lon = lon; exp_alt = 100.0f;
             exp_fix = 0x03; exp_sats = 9; exp_is_fused = 0;
             run_for(400, 200);
-            last_raw_ms = now_ms;
             CHECK(RF_Receiver_DataAvailable() == 1);
             break;
         case 2:                                            /* own fused, FRESH */
@@ -2383,23 +2380,15 @@ TEST(test_packet_soup_state_coherence)
             run_for(400, 200);
             CHECK(RF_Receiver_DataAvailable() == 1);
             break;
-        case 3:                                            /* own fused, STALE */
+        case 3:                                            /* own fused, DR */
             inject_fused_ex(lat, lon, OUR_ROCKET_ID,
                             FUSED_FLAG_DEAD_RECKONING, vn, ve);
             exp_is_fused = 1;
             run_for(400, 200);
             CHECK(RF_Receiver_DataAvailable() == 1);
-            /* Override semantics: within RF_FUSED_STALE_OVERRIDE_MS of a
-             * raw fix, position+velocity stay exactly as displayed (oracle
-             * leaves exp_* untouched). Without a recent raw, fused owns all
-             * of it. The 1 s dead zone around the 10 s boundary keeps the
-             * oracle away from parse-vs-check tick quantization. */
-            if (now_ms - last_raw_ms > 11000UL) {
-                exp_lat = lat; exp_lon = lon; exp_alt = 1650.0f;
-                exp_vn = vn * 0.01f; exp_ve = ve * 0.01f;
-            } else if (now_ms - last_raw_ms > 9000UL) {
-                check_adv = 0;               /* dead zone: skip pos asserts */
-            }
+            /* A dead-reckoned packet never moves a GPS-backed position
+             * (the raw fix seeded above): position and velocity stay
+             * exactly as displayed, however long the raw stream is quiet. */
             break;
         case 4:                                            /* foreign GPS */
             inject_gps_packet(36.20, -115.40, FOREIGN_ROCKET_ID);
@@ -2458,20 +2447,11 @@ TEST(test_packet_soup_state_coherence)
         GPS_Data cur;
         char heard[RF_PARSER_MAX_CALLSIGN_LEN] = "";
         CHECK(RF_Receiver_GetParsedData(&cur, heard, sizeof(heard), NULL) == 1);
-        if (check_adv) {
-            CHECK_NEAR(cur.latitude, exp_lat, 2e-5);
-            CHECK_NEAR(cur.longitude, exp_lon, 2e-5);
-            CHECK_NEAR(cur.altitude, exp_alt, 0.3f);
-            CHECK_NEAR(cur.v_north, exp_vn, 0.005f);
-            CHECK_NEAR(cur.v_east, exp_ve, 0.005f);
-        } else {
-            /* Boundary iteration: re-sync the oracle from what the parser
-             * actually did, so following iterations check real state */
-            exp_lat = cur.latitude; exp_lon = cur.longitude;
-            exp_alt = cur.altitude;
-            exp_vn = cur.v_north; exp_ve = cur.v_east;
-        }
-        check_adv = 1;
+        CHECK_NEAR(cur.latitude, exp_lat, 2e-5);
+        CHECK_NEAR(cur.longitude, exp_lon, 2e-5);
+        CHECK_NEAR(cur.altitude, exp_alt, 0.3f);
+        CHECK_NEAR(cur.v_north, exp_vn, 0.005f);
+        CHECK_NEAR(cur.v_east, exp_ve, 0.005f);
         CHECK(cur.fix == exp_fix);
         CHECK(cur.satellites == exp_sats);
         CHECK(cur.is_fused == exp_is_fused);

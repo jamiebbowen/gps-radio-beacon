@@ -52,6 +52,10 @@ typedef struct {
   uint8_t fused_gate_reject;   /* 1 if TX-side EKF gate rejected a fix since
                                  * last fused packet (delta, not latched)     */
   uint8_t fused_landed;      /* 1 if FUSED_FLAG_LANDED was set (latched)   */
+  uint8_t fused_position_held; /* 1: this fused packet's position was NOT
+                                * applied (dead-reckoned or stale against a
+                                * GPS-backed one) - position/velocity are
+                                * the last real fix's; 0 otherwise           */
   uint8_t fused_age_ds;      /* Deciseconds since TX-side last fix (0..255)   */
   float   v_north;           /* Velocity north, m/s (fused packets only)      */
   float   v_east;            /* Velocity east,  m/s                           */

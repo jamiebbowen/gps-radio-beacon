@@ -24,6 +24,9 @@ static char last_valid_packet[RF_PARSER_BUFFER_SIZE] = {0};
  * kept landing next to it). */
 static uint32_t last_raw_gps_ms = 0;
 #define RF_FUSED_STALE_OVERRIDE_MS  10000UL
+/* 1 once a position backed by a real TX-side fix (a raw GPS packet, or a
+ * fused one without DEAD_RECKONING) has been applied since init. */
+static uint8_t have_gps_backed_pos = 0;
 
 /*  Diagnostic counters */
 static uint32_t parse_attempts = 0;
@@ -44,6 +47,7 @@ uint8_t RF_Parser_Init(void)
   memset(parsed_callsign, 0, sizeof(parsed_callsign));
   parsed_data_ready = 0;
   last_raw_gps_ms = 0;
+  have_gps_backed_pos = 0;
   
   /* Initialize diagnostic counters */
   parse_attempts = 0;
@@ -258,7 +262,9 @@ uint8_t RF_Parser_ParseBinaryPacket(const uint8_t *data, uint16_t length) {
   parsed_gps_data.fused_imu_healthy     = 0;
   parsed_gps_data.fused_sensor_degraded = 0;
   parsed_gps_data.fused_gate_reject     = 0;
+  parsed_gps_data.fused_position_held   = 0;
   last_raw_gps_ms                       = HAL_GetTick();
+  have_gps_backed_pos                   = 1;
   /* (fused_landed is deliberately NOT zeroed here: raw GPS packets carry
    * their own FLAG_LANDED, parsed above, so both streams drive it.) */
   parsed_gps_data.fused_age_ds      = 0;
@@ -334,18 +340,27 @@ uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length)
     return RF_PARSER_ERROR;
   }
 
-  /* Stale-fused override: when the fused packet admits its TX-side GPS is
-   * stale (GPS_FRESH clear) - i.e. the position is pure dead-reckoning -
-   * and a raw GPS position landed within RF_FUSED_STALE_OVERRIDE_MS, the
-   * raw stream's view of position wins. Field log 2026-09-11: a diverged
-   * DR state dragged the reported track 22 km off while honest raw packets
-   * printed the real one; the nav page flicker "fixed itself" whenever a
-   * GPS packet arrived. Position AND velocity stay untouched in that case;
-   * the fused_* metadata still updates so the DR/SNS chips report truth. */
+  /* Held positions. Position AND velocity stay untouched (the fused_*
+   * metadata below still updates, so the DR/SNS chips report truth) when:
+   *  - the packet is dead-reckoned (FUSED_FLAG_DEAD_RECKONING: no TX-side
+   *    fix for NAV_DR_TIMEOUT_S) and a GPS-backed position exists. The TX
+   *    coast state drifts without bound - after touchdown with the
+   *    beacon's GPS lost it walked the target 1.8 km in 10 minutes - and
+   *    in flight the TX sends no raw GPS packets at all, so nothing else
+   *    would ever pull it back. Before any GPS-backed position (a receiver
+   *    booted mid-outage) the DR estimate is shown, tagged DR;
+   *  - the TX-side GPS is merely stale (GPS_FRESH clear) and a raw GPS
+   *    position landed within RF_FUSED_STALE_OVERRIDE_MS: the raw stream's
+   *    view wins (field log 2026-09-11: a diverged DR state dragged the
+   *    track 22 km off while honest raw packets printed the real one). */
   uint8_t fused_stale = (flags & FUSED_FLAG_GPS_FRESH) == 0;
-  uint8_t override_position = fused_stale && last_raw_gps_ms != 0 &&
-      (HAL_GetTick() - last_raw_gps_ms) < RF_FUSED_STALE_OVERRIDE_MS;
+  uint8_t fused_dr = (flags & FUSED_FLAG_DEAD_RECKONING) != 0;
+  uint8_t override_position = (fused_dr && have_gps_backed_pos) ||
+      (fused_stale && last_raw_gps_ms != 0 &&
+       (HAL_GetTick() - last_raw_gps_ms) < RF_FUSED_STALE_OVERRIDE_MS);
+  parsed_gps_data.fused_position_held = override_position;
   if (!override_position) {
+    if (!fused_dr) have_gps_backed_pos = 1;
     parsed_gps_data.latitude  = (float)lat;
     parsed_gps_data.longitude = (float)lon;
     /* quarter-meters above the -500 m MSL floor -> meters */
