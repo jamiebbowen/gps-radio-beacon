@@ -1758,6 +1758,40 @@ TEST(test_beacon_heard_tick_counts_every_own_packet)
     CHECK(RF_Receiver_SetChannel(0) == RF_OK);
 }
 
+TEST(test_scan_from_saved_channel_outwaits_a_pad_heartbeat)
+{
+    /* Receiver reboot on the pad: the beacon (quiet pad) sends one packet
+     * a minute. Starting on the last-locked channel with a 62 s dwell
+     * catches it; a 6.5 s dwell lap over 8 channels mostly would not. */
+    fake_mode = 5;
+    RF_Receiver_StopScan();
+    RF_Receiver_StartScanFrom(5);
+    CHECK(RF_Receiver_IsScanning() == 1);
+    CHECK(RF_Receiver_GetChannel() == 5);
+    CHECK(RF_Receiver_GetBoundRocketId() == 0xFF);      /* new context */
+    for (int i = 0; i < 232; i++) {                     /* 58 s */
+        run_for(250, 250);
+        CHECK(RF_Receiver_ScanUpdate() == 0);
+    }
+    CHECK(RF_Receiver_GetChannel() == 5);
+    inject_heartbeat(OUR_ROCKET_ID, 5, 9, 300);
+    run_for(250, 250);
+    CHECK(RF_Receiver_ScanUpdate() == 1);
+    CHECK(RF_Receiver_GetChannel() == 5);
+
+    /* Nothing there for the whole long dwell: the normal lap takes over */
+    RF_Receiver_StartScanFrom(5);
+    for (int i = 0; i < 252; i++) {                     /* 63 s */
+        run_for(250, 250);
+        (void)RF_Receiver_ScanUpdate();
+    }
+    CHECK(RF_Receiver_GetChannel() == 6);
+    CHECK(scan_dwell_len_ms == RF_SCAN_DWELL_MS);
+
+    RF_Receiver_StopScan();
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+}
+
 TEST(test_manual_pick_holds_after_prolonged_silence)
 {
     /* Our beacon went quiet 6 min ago (switched off, or another airframe
@@ -2630,6 +2664,7 @@ int main(void)
     run_test_live_noise_floor_min_samples_and_min_pick();
     run_test_auto_rescan_after_prolonged_silence();
     run_test_beacon_heard_tick_counts_every_own_packet();
+    run_test_scan_from_saved_channel_outwaits_a_pad_heartbeat();
     run_test_manual_pick_holds_after_prolonged_silence();
     run_test_foreign_beacon_filter();
     run_test_foreign_chatter_does_not_suppress_auto_rescan();

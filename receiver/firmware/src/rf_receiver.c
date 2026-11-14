@@ -15,13 +15,13 @@
 /* Private defines */
 #define RF_ASCII_BUFFER_SIZE       128
 
-/* Channel-scan dwell time. Exceeds the current 5 s pad cadence
- * (range-testing dense mode), so any beacon on the air is caught
- * deterministically inside one ~52 s worst-case lap. If the flight-prep
- * variant goes back to 30 s pad spacing the lock becomes statistical
- * again - see the git history for the analysis. Lock always fires on the
- * first CRC-valid packet from any channel, and the re-acquire path's 62 s
- * sticky dwell covers up to the 60 s battery-save cadence. */
+/* Channel-scan dwell time. Exceeds the beacon's 5 s turn-on heartbeat, so a
+ * beacon in its first minute is caught inside one ~52 s worst-case lap. Its
+ * quiet pad sends one packet a minute, which a lap catches only ~1 time in
+ * 8: so the boot scan starts with a 62 s dwell on the last-locked channel
+ * (RF_Receiver_StartScanFrom) - the same sticky dwell the re-acquire path
+ * uses for the 60 s battery-save cadence. Lock fires on the first
+ * CRC-valid packet from any channel. */
 #define RF_SCAN_DWELL_MS           6500U
 
 /* CAD fast-scan phase: sniff each channel for a LoRa preamble (~20 ms per
@@ -1353,6 +1353,21 @@ void RF_Receiver_StartScan(void)
   scan_cad_phase_start = scan_dwell_start;
   scan_cad_state = RF_CAD_IDLE;
   scan_cad_strikes = 0;
+}
+
+/**
+ * @brief Boot scan from a remembered channel (see rf_receiver.h)
+ */
+void RF_Receiver_StartScanFrom(uint8_t channel)
+{
+  if (channel >= LORA_CHANNEL_COUNT || RF_SetChannelCtx(channel, 1) != RF_OK) {
+    RF_Receiver_StartScan();
+    return;
+  }
+  RF_Receiver_StartScan();                 /* fresh scan state, this channel */
+  scan_dwell_len_ms = RF_SCAN_REACQ_DWELL_MS;   /* outwait a pad heartbeat */
+  scan_cad_phase = 0;                      /* listen, don't sniff */
+  (void)LoRa_SetReceiveMode();
 }
 
 /**
