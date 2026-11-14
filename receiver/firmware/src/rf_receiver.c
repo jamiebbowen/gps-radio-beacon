@@ -936,6 +936,9 @@ static uint8_t RF_SetChannelCtx(uint8_t channel, uint8_t new_context)
      * re-acquire on their behalf. Contact on this channel re-arms both. */
     last_identified_ms = 0;
     foreign_lock_streak = 0;
+    /* ...and so does everything parsed from it: a dead-reckoned packet
+     * from the new beacon must not be held against the old one's fix */
+    RF_Parser_NewContext();
   }
   return RF_OK;
 }
@@ -1343,8 +1346,10 @@ uint32_t RF_Receiver_GetSweepTick(uint8_t ch)
 void RF_Receiver_StartScan(void)
 {
   /* Operator-initiated sweep ("find me a rocket"): new airframe context -
-   * the binding belongs to whatever channel we were parked on. */
+   * the binding, and what was parsed under it, belong to whatever channel
+   * we were parked on. */
   bound_rocket_id = RF_ROCKET_UNBOUND;
+  RF_Parser_NewContext();
   scan_active = 1;
   scan_dwell_start = HAL_GetTick();
   scan_dwell_pkt_count = rf_lora_packets_received;
@@ -1386,6 +1391,7 @@ static void RF_Scan_StartReacquire(void)
   if (foreign_lock_streak >= RF_FOREIGN_LIVELOCK_UNLOCK_AFTER) {
     foreign_lock_streak = 0;
     bound_rocket_id = RF_ROCKET_UNBOUND;
+    RF_Parser_NewContext();          /* the next ID heard is a new airframe */
   }
   scan_active = 1;
   scan_dwell_start = HAL_GetTick();

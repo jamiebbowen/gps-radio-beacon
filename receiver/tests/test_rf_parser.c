@@ -602,6 +602,31 @@ TEST(test_stale_not_dr_fused_applies_without_recent_raw) {
     Test_SetTick(0);
 }
 
+TEST(test_new_context_resets_position_ownership) {
+    /* After a channel change the next airframe's first DR packet is a cold
+     * start, not a drift to hold against the previous beacon's fix */
+    parser_reset();
+    Test_SetTick(600000);
+    uint8_t fresh[FUSED_PACKET_SIZE], dr[FUSED_PACKET_SIZE];
+    build_fused_packet(fresh, 39.89, -105.11, 2400, 0, 0, 0, 0,
+                       FUSED_FLAG_GPS_FRESH);
+    build_fused_packet(dr, 36.20, -115.40, 2400, 0, 0, 0, 255,
+                       FUSED_FLAG_DEAD_RECKONING);
+    CHECK(RF_Parser_ParseFusedPacket(fresh, sizeof(fresh)) == RF_PARSER_OK);
+    uint32_t attempts = parse_attempts, successes = parse_successes;
+
+    RF_Parser_NewContext();
+    GPS_Data gps;
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 0);  /* nothing yet */
+    CHECK(parse_attempts == attempts && parse_successes == successes);
+
+    CHECK(RF_Parser_ParseFusedPacket(dr, sizeof(dr)) == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK_NEAR(gps.latitude, 36.20, 1e-4);
+    CHECK(gps.fused_position_held == 0);
+    Test_SetTick(0);
+}
+
 TEST(test_fresh_fused_always_updates_position) {
     /* Sibling contract: a fused packet WITH GPS_FRESH holds priority, as
      * before - the override above only arms for self-admitted staleness. */
@@ -748,6 +773,7 @@ int main(void) {
     run_test_dr_fused_never_moves_a_gps_backed_target();
     run_test_cold_start_dr_position_is_shown();
     run_test_stale_not_dr_fused_applies_without_recent_raw();
+    run_test_new_context_resets_position_ownership();
     run_test_fresh_fused_always_updates_position();
     run_test_fused_landed_flag_both_streams();
     run_test_fused_layouts_and_malformed();
