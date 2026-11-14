@@ -228,22 +228,6 @@ SD_Card_Status SD_Card_SelfTest(void);
 void SD_Card_GetSelfTestError(uint8_t *step, uint8_t *fres);
 
 /**
- * @brief Save BNO055 compass calibration to COMPCAL.BIN
- * @param data  22-byte buffer from Compass_GetCalibrationData()
- * @param len   Must be >= 22
- * @retval SD_Card_Status
- */
-SD_Card_Status SD_Card_SaveCompassCal(const uint8_t *data, uint8_t len);
-
-/**
- * @brief Load BNO055 compass calibration from COMPCAL.BIN
- * @param data  Output buffer, at least 22 bytes
- * @param len   Must be >= 22
- * @retval SD_CARD_OK on success, SD_CARD_ERROR if file missing or corrupt
- */
-SD_Card_Status SD_Card_LoadCompassCal(uint8_t *data, uint8_t len);
-
-/**
  * @brief Persist the BNO055 quaternion-heading convention lock (1-8)
  * @retval SD_Card_Status
  */

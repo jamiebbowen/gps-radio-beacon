@@ -125,6 +125,10 @@ static Compass_Debug_t compass_debug = {0};
 static uint8_t found_i2c_addresses[128] = {0};
 
 static float heading_offset = 0.0f;
+/* Latched once the magnetometer reports accuracy >= 1 this power cycle;
+ * deliberately survives a Compass_Init() re-init (calibration lives
+ * in-sensor and outlasts an I2C recovery). */
+static uint8_t compass_cal_proven = 0;
 
 static uint8_t decl_location_applied = 0;
 
@@ -145,7 +149,6 @@ uint8_t Compass_UpdateLocation(float lat_deg, float lon_deg)
 
 /* Kept for API compatibility: always 0 on the BNO085 - the sensor holds
  * its dynamic calibration internally, there are no host-loadable offsets. */
-static uint8_t compass_cal_restored = 0;
 
 /* Runtime I2C recovery: same ladder as the BNO055 build (streak ->
  * bounded re-init, rate-limited). */
@@ -217,28 +220,6 @@ static void Compass_SetError(uint8_t error_code, const char *error_msg, uint8_t 
  * effects makes the main.c boot/persist paths no-ops instead of writing
  * garbage to SD.
  * ----------------------------------------------------------------------- */
-
-uint8_t Compass_HasHostCalOffsets(void)
-{
-  return 0;  /* BNO085: calibration lives in-sensor */
-}
-
-uint8_t Compass_GetCalibrationData(uint8_t *data, uint8_t len)
-{
-  (void)data; (void)len;
-  return COMPASS_ERROR;
-}
-
-uint8_t Compass_SetCalibrationData(const uint8_t *data, uint8_t len)
-{
-  (void)data; (void)len;
-  return COMPASS_ERROR;
-}
-
-uint8_t Compass_WasCalRestored(void)
-{
-  return compass_cal_restored;
-}
 
 /**
  * @brief Lightweight runtime recovery for a wedged BNO085/bus segment.
@@ -354,7 +335,6 @@ uint8_t Compass_Init(void)
    * field tuning (a stale BNO055-era QUATLOCK value rotates the arrow -
    * delete it along with the old cal file on first BNO085 boot). */
   quat_conv_locked = COMPASS_BNO085_DEFAULT_CONV;
-  compass_cal_restored = 0;
   decl_location_applied = 0;
   compass_i2c_error_streak = 0;
 
@@ -381,8 +361,6 @@ uint8_t Compass_Init(void)
  */
 uint8_t Compass_Update(Compass_Data *compass_data_ptr)
 {
-  /* Latched once calibration is PROVEN this session (RV accuracy >= 1). */
-  static uint8_t compass_cal_proven = 0;
   uint32_t current_time = HAL_GetTick();
   float dt = 0.0f;
 
@@ -407,7 +385,7 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
      * Both wire faults AND a wedged (ACKing but silent) hub feed the
      * ladder: the recovery re-init fixes both. */
     compass_data_ptr->heading_stale =
-        (compass_cal_proven || compass_cal_restored) ? 1 : 0;
+        compass_cal_proven ? 1 : 0;
     compass_data_ptr->heading_valid = 0;
     if (compass_i2c_error_streak < 250) compass_i2c_error_streak++;
     if (compass_i2c_error_streak >= COMPASS_ERROR_STREAK_RECOVER &&
@@ -505,7 +483,7 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
    * good - so we trust the latch, not the live digit. */
   if (mag_cal >= 1) compass_cal_proven = 1;
   compass_data_ptr->heading_valid =
-      ((compass_cal_proven || compass_cal_restored)
+      (compass_cal_proven
        && compass_data_ptr->orientation_valid) ? 1 : 0;
   compass_data_ptr->heading_stale = 0;  /* live data */
   compass_data_ptr->mag_cal = mag_cal;

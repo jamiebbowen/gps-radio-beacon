@@ -722,32 +722,12 @@ int main(void)
         SD_Card_LogEvent(dmsg);
       }
     }
-    /* BNO085 initialized successfully - restore saved calibration only on
-     * sensors that accept host offsets. The BNO085 does not (calibration
-     * is dynamic in-sensor), so on this hardware we just report that. */
-    if (sd_card_ok && Compass_HasHostCalOffsets()) {
-      uint8_t cal_data[BNO055_CAL_DATA_LEN];
-      if (SD_Card_LoadCompassCal(cal_data, sizeof(cal_data)) == SD_CARD_OK) {
-        Display_Clear();
-        Display_DrawTextRowCol(1, 1, "BNO085 Initialized");
-        if (Compass_SetCalibrationData(cal_data, sizeof(cal_data)) == COMPASS_OK) {
-          Display_DrawTextRowCol(2, 1, "Cal: Restored");
-        } else {
-          Display_DrawTextRowCol(2, 1, "Cal: RESTORE FAILED");
-        }
-        Display_Update();
-      } else {
-        Display_Clear();
-        Display_DrawTextRowCol(1, 1, "BNO085 Initialized");
-        Display_DrawTextRowCol(2, 1, "Cal: None saved");
-        Display_Update();
-      }
-    } else {
-      Display_Clear();
-      Display_DrawTextRowCol(1, 1, "BNO085 Initialized");
-      Display_DrawTextRowCol(2, 1, "Cal: dynamic (sens)");
-      Display_Update();
-    }
+    /* BNO085 calibrates dynamically in-sensor: there are no host offsets
+     * to restore, just report that. */
+    Display_Clear();
+    Display_DrawTextRowCol(1, 1, "BNO085 Initialized");
+    Display_DrawTextRowCol(2, 1, "Cal: dynamic (sens)");
+    Display_Update();
     HAL_Delay(1000);
   }
   
@@ -1441,28 +1421,6 @@ int main(void)
       }
     }
     
-    /* Persist compass calibration as soon as it is "good enough" (mag_cal >= 2),
-     * and re-save whenever calibration quality improves. Only latch on a
-     * successful save so transient SD errors are retried. Skipped entirely
-     * on the BNO085: it exposes no host-loadable calibration offsets. */
-    if (sd_card_ok && Compass_HasHostCalOffsets()) {
-      static uint8_t best_mag_cal_saved = 0; /* 0 = nothing persisted yet */
-      static uint32_t last_cal_save_ms = 0;
-
-      uint8_t sys_cal, gyro_cal, accel_cal, mag_cal;
-      if (Compass_GetCalibrationStatus(&sys_cal, &gyro_cal, &accel_cal, &mag_cal) == COMPASS_OK
-          && mag_cal >= 2
-          && mag_cal > best_mag_cal_saved
-          && (HAL_GetTick() - last_cal_save_ms) > 2000) {
-        uint8_t cal_data[BNO055_CAL_DATA_LEN];
-        if (Compass_GetCalibrationData(cal_data, sizeof(cal_data)) == COMPASS_OK
-            && SD_Card_SaveCompassCal(cal_data, sizeof(cal_data)) == SD_CARD_OK) {
-          best_mag_cal_saved = mag_cal;
-        }
-        last_cal_save_ms = HAL_GetTick();
-      }
-    }
-
     /* Persist the quat->heading convention lock the first time it forms in
      * any session: later boots get tilt-immunity immediately instead of
      * waiting for a level+calibrated moment. Log it too, so the field log

@@ -41,11 +41,6 @@ uint8_t SD_FastSpeedEnabled(void);
 /* Private defines -----------------------------------------------------------*/
 #define SD_CARD_LOG_BUFFER_SIZE     256
 
-#define COMPCAL_FILENAME    "COMPCAL.BIN"
-#define COMPCAL_MAGIC_0     0xB0
-#define COMPCAL_MAGIC_1     0x55
-#define COMPCAL_DATA_LEN    22
-#define COMPCAL_FILE_LEN    25
 
 /* Quaternion-heading convention lock (compass.c). Hardware-shaped, not
  * session-shaped: persisted so later boots reuse the field-verified
@@ -120,7 +115,7 @@ static struct lfs_file_config log_file_cfg = {
     .attr_count = 0,
 };
 
-/* Shared ad-hoc file config for short-lived opens (BEACON.TXT, COMPCAL.BIN,
+/* Shared ad-hoc file config for short-lived opens (BEACON.TXT, QLOCK.BIN,
  * self-test file). Safe because we never open two of these concurrently; the
  * log file has its own dedicated cache above. Under LFS_NO_MALLOC every file
  * open must supply its own cache buffer, so lfs_file_opencfg is the only
@@ -898,50 +893,6 @@ SD_Card_Status SD_Card_LoadLastBeacon(float *lat, float *lon, float *alt)
 /* ========================================================================= */
 /* Compass calibration persistence                                           */
 /* ========================================================================= */
-
-SD_Card_Status SD_Card_SaveCompassCal(const uint8_t *data, uint8_t len)
-{
-    if (!data || len < COMPCAL_DATA_LEN) return SD_CARD_ERROR;
-    if (!sd_initialized || !lfs_mounted) return SD_CARD_ERROR;
-
-    uint8_t buf[COMPCAL_FILE_LEN];
-    buf[0] = COMPCAL_MAGIC_0;
-    buf[1] = COMPCAL_MAGIC_1;
-    memcpy(&buf[2], data, COMPCAL_DATA_LEN);
-    uint8_t csum = 0;
-    for (uint8_t i = 0; i < COMPCAL_DATA_LEN; i++) csum ^= data[i];
-    buf[COMPCAL_FILE_LEN - 1] = csum;
-
-    lfs_file_t f;
-    int err = LFS_OPEN(&lfs, &f, COMPCAL_FILENAME,
-                       LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC);
-    if (err) return SD_CARD_ERROR;
-
-    lfs_ssize_t w = lfs_file_write(&lfs, &f, buf, COMPCAL_FILE_LEN);
-    int close_err = lfs_file_close(&lfs, &f);
-    return (w == COMPCAL_FILE_LEN && close_err == 0) ? SD_CARD_OK : SD_CARD_ERROR;
-}
-
-SD_Card_Status SD_Card_LoadCompassCal(uint8_t *data, uint8_t len)
-{
-    if (!data || len < COMPCAL_DATA_LEN) return SD_CARD_ERROR;
-    if (!sd_initialized || !lfs_mounted) return SD_CARD_ERROR;
-
-    lfs_file_t f;
-    int err = LFS_OPEN(&lfs, &f, COMPCAL_FILENAME, LFS_O_RDONLY);
-    if (err) return SD_CARD_ERROR;
-
-    uint8_t buf[COMPCAL_FILE_LEN];
-    lfs_ssize_t r = lfs_file_read(&lfs, &f, buf, COMPCAL_FILE_LEN);
-    lfs_file_close(&lfs, &f);
-    if (r != COMPCAL_FILE_LEN) return SD_CARD_ERROR;
-    if (buf[0] != COMPCAL_MAGIC_0 || buf[1] != COMPCAL_MAGIC_1) return SD_CARD_ERROR;
-    uint8_t csum = 0;
-    for (uint8_t i = 0; i < COMPCAL_DATA_LEN; i++) csum ^= buf[2 + i];
-    if (csum != buf[COMPCAL_FILE_LEN - 1]) return SD_CARD_ERROR;
-    memcpy(data, &buf[2], COMPCAL_DATA_LEN);
-    return SD_CARD_OK;
-}
 
 SD_Card_Status SD_Card_SaveQuatLock(uint8_t conv)
 {

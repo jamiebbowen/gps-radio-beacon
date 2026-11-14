@@ -98,16 +98,6 @@ float Compass_DeclinationFromLocation(float lat_deg, float lon_deg);
 uint8_t Compass_GetQuatLockConv(void);
 uint8_t Compass_SetQuatLockConv(uint8_t conv);
 
-/* Calibration persistence: the BNO085 does not expose host-managed
- * offsets (dynamic in-sensor calibration; DCD is unimplemented), so
- * Compass_Get/SetCalibrationData always return COMPASS_ERROR and
- * main.c skips the SD save/restore via Compass_HasHostCalOffsets(). */
-#define BNO055_CAL_DATA_LEN  22  /* legacy buffer size kept for SD file compat */
-uint8_t Compass_GetCalibrationData(uint8_t *data, uint8_t len);
-uint8_t Compass_SetCalibrationData(const uint8_t *data, uint8_t len);
-uint8_t Compass_WasCalRestored(void);
-/** 1 if the sensor supports host offset save/restore (BNO085: 0). */
-uint8_t Compass_HasHostCalOffsets(void);
 /** Rotation-vector samples received since init (bring-up diagnostics). */
 uint32_t Compass_GetRvSampleCount(void);
 

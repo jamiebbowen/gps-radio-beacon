@@ -288,7 +288,7 @@ void Display_Update(void) {}
 void HAL_Delay(uint32_t ms) { Test_SetTick(HAL_GetTick() + ms); }
 
 /* Include the module under test (statics reachable: compass_cal_proven via
- * rub of ordering, compass_cal_restored, heading_offset, etc.) */
+ * rub of ordering, compass_cal_proven, heading_offset, etc.) */
 #include "../firmware/src/compass.c"
 
 /* ------------------------------------------------------------------ */
@@ -304,7 +304,7 @@ static void fresh_init(void)
 {
     fake_reset();
     /* Reset cross-test statics via direct access */
-    compass_cal_restored = 0;
+    compass_cal_proven = 0;
     heading_offset = 0.0f;
     decl_location_applied = 0;
     quat_conv_locked = 0;
@@ -335,7 +335,7 @@ TEST(test_init_alternate_address)
     fake_reset();
     present_28 = 0;
     present_29 = 1;
-    compass_cal_restored = 0;
+    compass_cal_proven = 0;
     CHECK(Compass_Init() == COMPASS_OK);
     CHECK(compass_debug.active_addr == 0x29);
 }
@@ -366,7 +366,7 @@ TEST(test_init_hub_never_confirms_reset)
     /* Hub ACKs and probes OK, but the reset-complete packet never comes */
     fake_reset();
     reset_dies = 1;
-    compass_cal_restored = 0;
+    compass_cal_proven = 0;
     CHECK(Compass_Init() == COMPASS_ERROR);
     CHECK(Compass_GetErrorCode() == COMPASS_ERROR_ID_CHECK);
     CHECK(strstr(Compass_GetErrorMessage(), "no fusion data") != NULL);
@@ -378,7 +378,7 @@ TEST(test_init_no_fusion_stream)
      * ever arrives -> init must fail noisily, not 'succeed' silently. */
     fake_reset();
     stream_off = 1;
-    compass_cal_restored = 0;
+    compass_cal_proven = 0;
     Test_SetTickAutoAdvance(5);   /* Diagnostic loop spins on Poll() + tick */
     CHECK(Compass_Init() == COMPASS_ERROR);
     Test_SetTickAutoAdvance(0);
@@ -391,7 +391,7 @@ TEST(test_init_tx_failure)
     /* Every wire transaction NAKs from the start: SHTP handshake fails */
     fake_reset();
     nak_tx = 1;
-    compass_cal_restored = 0;
+    compass_cal_proven = 0;
     CHECK(Compass_Init() == COMPASS_ERROR);
     CHECK(Compass_GetErrorCode() == COMPASS_ERROR_I2C_INIT);
     nak_tx = 0;
@@ -537,12 +537,12 @@ TEST(test_heading_valid_via_restored_cal_flag)
     fresh_init();
     /* Runs while the proven latch is still clear, so validity can only
      * come from the restored-calibration flag (test static poke). */
-    compass_cal_restored = 1;
+    compass_cal_proven = 1;
     Compass_Data d = {0};
     rv_acc = 0;
     CHECK(Compass_Update(&d) == COMPASS_OK);
     CHECK(d.heading_valid == 1);
-    compass_cal_restored = 0;
+    compass_cal_proven = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -552,7 +552,7 @@ TEST(test_heading_valid_via_restored_cal_flag)
 TEST(test_vertical_orientation_invalid)
 {
     fresh_init();
-    compass_cal_restored = 1;              /* calibrated, so cal is NOT why */
+    compass_cal_proven = 1;              /* calibrated, so cal is NOT why */
     Compass_Data d = {0};
 
     /* 90 deg about Y: device +X points straight up - heading undefined */
@@ -566,7 +566,7 @@ TEST(test_vertical_orientation_invalid)
     CHECK(Compass_Update(&d) == COMPASS_OK);
     CHECK(d.orientation_valid == 1);
     CHECK(d.heading_valid == 1);
-    compass_cal_restored = 0;
+    compass_cal_proven = 0;
 }
 
 TEST(test_quat_lock_get_set_for_persistence)
@@ -584,7 +584,7 @@ TEST(test_quat_lock_get_set_for_persistence)
 TEST(test_fusion_stall_flagged)
 {
     fresh_init();
-    compass_cal_restored = 1;
+    compass_cal_proven = 1;
     Compass_Data d = {0};
 
     /* Streamed fine... */
@@ -599,12 +599,13 @@ TEST(test_fusion_stall_flagged)
     CHECK(d.heading_valid == 0);
     CHECK(d.heading_stale == 1);
     stream_off = 0;
-    compass_cal_restored = 0;
+    compass_cal_proven = 0;
 }
 
 TEST(test_i2c_error_streak_recovers)
 {
     fresh_init();
+    compass_cal_proven = 1;   /* cal proven earlier this power cycle */
     Compass_Data d = {0};
 
     /* The report reads NAK (cable noise): 12 polls at the 5 Hz cadence */
@@ -613,7 +614,7 @@ TEST(test_i2c_error_streak_recovers)
         Test_SetTick(HAL_GetTick() + 200);
         CHECK(Compass_Update(&d) == COMPASS_ERROR);
         CHECK(d.heading_valid == 0);
-        CHECK(d.heading_stale == 1);   /* cal was proven in an earlier test */
+        CHECK(d.heading_stale == 1);   /* proven cal: last heading kept */
     }
 
     /* One more single-shot NAK with the wire otherwise healthy: the poll
@@ -632,7 +633,7 @@ TEST(test_i2c_error_streak_recovers)
 TEST(test_stale_heading_flagged_on_comm_loss)
 {
     fresh_init();
-    compass_cal_restored = 1;              /* trustworthy heading exists */
+    compass_cal_proven = 1;              /* trustworthy heading exists */
     Compass_Data d = {0};
     set_quat(0.7071f, 0.0f, 0.0f, 0.7071f);    /* yaw 90 -> raw 0 deg */
 
@@ -652,7 +653,7 @@ TEST(test_stale_heading_flagged_on_comm_loss)
     CHECK(Compass_Update(&d) == COMPASS_OK);
     CHECK(d.heading_valid == 1);
     CHECK(d.heading_stale == 0);
-    compass_cal_restored = 0;
+    compass_cal_proven = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -682,17 +683,6 @@ TEST(test_display_i2c_scan_multi_device)
 /* ------------------------------------------------------------------ */
 /* Host calibration offsets: NOT SUPPORTED on the BNO085               */
 /* ------------------------------------------------------------------ */
-
-TEST(test_cal_data_unsupported_contract)
-{
-    fresh_init();
-    uint8_t buf[BNO055_CAL_DATA_LEN];
-
-    CHECK(Compass_HasHostCalOffsets() == 0);
-    CHECK(Compass_GetCalibrationData(buf, sizeof(buf)) == COMPASS_ERROR);
-    CHECK(Compass_SetCalibrationData(buf, sizeof(buf)) == COMPASS_ERROR);
-    CHECK(Compass_WasCalRestored() == 0);
-}
 
 /* ------------------------------------------------------------------ */
 /* Accessors / misc                                                    */
@@ -813,7 +803,6 @@ int main(void)
     run_test_i2c_error_streak_recovers();
     run_test_stale_heading_flagged_on_comm_loss();
 
-    run_test_cal_data_unsupported_contract();
     run_test_accessors();
     run_test_display_i2c_scan();
     run_test_display_i2c_scan_multi_device();

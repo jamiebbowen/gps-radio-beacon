@@ -402,7 +402,6 @@ TEST(test_apis_reject_when_uninitialized)
 
     GPS_Data gps; memset(&gps, 0, sizeof(gps));
     float lat, lon, alt;
-    uint8_t cal[22] = {0};
 
     CHECK(SD_Card_LogGPS(&gps, LOG_TYPE_GPS_LOCAL) == SD_CARD_ERROR);
     CHECK(SD_Card_LogRFPacket("x", 1, 0) == SD_CARD_ERROR);
@@ -414,8 +413,6 @@ TEST(test_apis_reject_when_uninitialized)
     CHECK(SD_Card_Flush() == SD_CARD_ERROR);
     CHECK(SD_Card_SaveLastBeacon(1, 2, 3) == SD_CARD_ERROR);
     CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_ERROR);
-    CHECK(SD_Card_SaveCompassCal(cal, 22) == SD_CARD_ERROR);
-    CHECK(SD_Card_LoadCompassCal(cal, 22) == SD_CARD_ERROR);
     CHECK(SD_Card_SelfTest() == SD_CARD_ERROR);
 
     uint8_t step, fres;
@@ -472,56 +469,6 @@ TEST(test_beacon_persistence_validation)
                            LFS_O_WRONLY | LFS_O_TRUNC, &adhoc_file_cfg) == 0);
     lfs_file_close(&lfs, &f);
     CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_ERROR);
-}
-
-TEST(test_compass_cal_persistence)
-{
-    wipe_card();
-    CHECK(SD_Card_Init() == SD_CARD_OK);
-
-    uint8_t cal[COMPCAL_DATA_LEN];
-    for (int i = 0; i < COMPCAL_DATA_LEN; i++) cal[i] = (uint8_t)(i * 3);
-
-    CHECK(SD_Card_SaveCompassCal(NULL, COMPCAL_DATA_LEN) == SD_CARD_ERROR);
-    CHECK(SD_Card_SaveCompassCal(cal, 5) == SD_CARD_ERROR);   /* too short */
-    CHECK(SD_Card_LoadCompassCal(cal, COMPCAL_DATA_LEN) == SD_CARD_ERROR); /* none yet */
-
-    CHECK(SD_Card_SaveCompassCal(cal, COMPCAL_DATA_LEN) == SD_CARD_OK);
-
-    uint8_t out[COMPCAL_DATA_LEN];
-    CHECK(SD_Card_LoadCompassCal(NULL, COMPCAL_DATA_LEN) == SD_CARD_ERROR);
-    CHECK(SD_Card_LoadCompassCal(out, 5) == SD_CARD_ERROR);
-    CHECK(SD_Card_LoadCompassCal(out, COMPCAL_DATA_LEN) == SD_CARD_OK);
-    CHECK(memcmp(out, cal, COMPCAL_DATA_LEN) == 0);
-
-    /* Flip one payload byte: checksum must reject */
-    lfs_file_t f;
-    uint8_t raw[COMPCAL_FILE_LEN];
-    CHECK(lfs_file_opencfg(&lfs, &f, COMPCAL_FILENAME, LFS_O_RDONLY,
-                           &adhoc_file_cfg) == 0);
-    CHECK(lfs_file_read(&lfs, &f, raw, COMPCAL_FILE_LEN) == COMPCAL_FILE_LEN);
-    lfs_file_close(&lfs, &f);
-    raw[4] ^= 0xFF;
-    CHECK(lfs_file_opencfg(&lfs, &f, COMPCAL_FILENAME,
-                           LFS_O_WRONLY | LFS_O_TRUNC, &adhoc_file_cfg) == 0);
-    lfs_file_write(&lfs, &f, raw, COMPCAL_FILE_LEN);
-    lfs_file_close(&lfs, &f);
-    CHECK(SD_Card_LoadCompassCal(out, COMPCAL_DATA_LEN) == SD_CARD_ERROR);
-
-    /* Bad magic rejected */
-    raw[4] ^= 0xFF; raw[0] = 0x00;
-    CHECK(lfs_file_opencfg(&lfs, &f, COMPCAL_FILENAME,
-                           LFS_O_WRONLY | LFS_O_TRUNC, &adhoc_file_cfg) == 0);
-    lfs_file_write(&lfs, &f, raw, COMPCAL_FILE_LEN);
-    lfs_file_close(&lfs, &f);
-    CHECK(SD_Card_LoadCompassCal(out, COMPCAL_DATA_LEN) == SD_CARD_ERROR);
-
-    /* Truncated file rejected */
-    CHECK(lfs_file_opencfg(&lfs, &f, COMPCAL_FILENAME,
-                           LFS_O_WRONLY | LFS_O_TRUNC, &adhoc_file_cfg) == 0);
-    lfs_file_write(&lfs, &f, raw, 10);
-    lfs_file_close(&lfs, &f);
-    CHECK(SD_Card_LoadCompassCal(out, COMPCAL_DATA_LEN) == SD_CARD_ERROR);
 }
 
 TEST(test_quatlock_persistence)
@@ -958,7 +905,6 @@ int main(void)
     run_test_raw_nav_row_flags_carry_beacon_fix_type();
     run_test_apis_reject_when_uninitialized();
     run_test_beacon_persistence_validation();
-    run_test_compass_cal_persistence();
     run_test_quatlock_persistence();
     run_test_deferred_sync_powercut_staleness_bound();
     run_test_format_wipes_everything();

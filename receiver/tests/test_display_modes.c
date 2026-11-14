@@ -219,7 +219,6 @@ SD_Card_Status SD_Card_GetInfo(SD_Card_Info *info)
 
 static uint8_t  fake_compass_update = COMPASS_OK;
 static uint8_t  fake_cal[4] = {3, 3, 3, 3};
-static uint8_t  fake_cal_restored = 0;
 static uint32_t fake_rv_count = 0;
 static uint8_t  fake_sys = 5, fake_self = 0x0F, fake_syserr = 0;
 static const char *fake_errmsg = "none";
@@ -241,7 +240,6 @@ uint8_t Compass_GetSystemStatus(uint8_t *s, uint8_t *st, uint8_t *e)
     if (e)  *e  = fake_syserr;
     return COMPASS_OK;
 }
-uint8_t Compass_WasCalRestored(void)      { return fake_cal_restored; }
 uint32_t Compass_GetRvSampleCount(void)   { return fake_rv_count; }
 const char* Compass_GetErrorMessage(void) { return fake_errmsg; }
 uint8_t Compass_GetErrorCode(void)        { return fake_errcode; }
@@ -264,7 +262,7 @@ static void reset_fakes(void)
     fake_sd_status = SD_CARD_OK;
     fake_compass_update = COMPASS_OK;
     fake_cal[0] = fake_cal[1] = fake_cal[2] = fake_cal[3] = 3;
-    fake_cal_restored = 0; fake_rv_count = 0;
+    fake_rv_count = 0;
     fake_sys = 5; fake_self = 0x0F; fake_syserr = 0;
     fake_errmsg = "none"; fake_errcode = 0;
 }
@@ -562,22 +560,19 @@ TEST(compass_heading_live_layout)
     CHECK(strstr(row(0), "Hdg:123") != NULL && row(0)[strlen(row(0))-1] == 'd');
     CHECK(strstr(row(1), "P:  1.5") != NULL);
     CHECK(strstr(row(2), "Cal S3 G3 A3 M3") != NULL);
-    CHECK(strstr(row(2), " R") == NULL);          /* no restore marker */
     CHECK(strstr(row(6), "St:05") && strstr(row(6), "Er:00"));
     CHECK(strstr(row(7), "RV#0") != NULL);
 }
 
-TEST(compass_heading_stale_and_restored_markers)
+TEST(compass_heading_stale_marker)
 {
     reset_fakes();
     memset(&cdata, 0, sizeof(cdata));
     cdata.heading = 90.0f; cdata.heading_stale = 1;
-    fake_cal_restored = 1;
     fake_rv_count = 4242;
 
     DisplayMode_CompassHeading(&cdata, &cd_heading);
     CHECK(strstr(row(0), "Hdg: 90d*") != NULL);  /* * = stale */
-    CHECK(strstr(row(2), " R") != NULL);          /* R = cal restored */
     CHECK(strstr(row(7), "RV#4242") != NULL);
 }
 
@@ -644,7 +639,7 @@ int main(void)
     run_rf_mode_last_good_and_testing_star();
     run_rf_mode_no_gps_no_packets();
     run_compass_heading_live_layout();
-    run_compass_heading_stale_and_restored_markers();
+    run_compass_heading_stale_marker();
     run_compass_update_failure_no_response();
     run_compass_visual_rose_and_invalid_heading();
     run_test_pattern_corner_layout();
