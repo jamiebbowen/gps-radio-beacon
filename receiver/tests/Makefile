@@ -142,8 +142,9 @@ coverage: clean $(BINS)
 	@for p in $(COV_PAIRS); do t=$${p%%:*}; f=$${p##*:}; \
 	    gcov -b -o $(BUILD) $(BUILD)/test_$$t*.gcno 2>/dev/null \
 	        | grep -A4 "File '$(SRC_DIR)/$$f'" | grep -v '^--$$'; \
+	    mkdir -p $(BUILD)/gcov/$$t; mv -f *.gcov $(BUILD)/gcov/$$t/ 2>/dev/null; \
+	    echo "Gcov '$(CURDIR)/$(BUILD)/gcov/$$t'"; \
 	done
-	@mv -f *.gcov $(BUILD)/ 2>/dev/null || true
 
 # Sanitizer run: every unit test rebuilt under ASan + UBSan, including
 # float-cast-overflow (NOT part of -fsanitize=undefined in GCC). Separate

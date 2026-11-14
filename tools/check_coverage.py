@@ -10,6 +10,7 @@ Usage:
   make -C transmitter/tests coverage | python3 tools/check_coverage.py tx
   make -C receiver/tests coverage    | python3 tools/check_coverage.py rx
 """
+import os
 import re
 import sys
 
@@ -30,12 +31,19 @@ FLOORS = {
 
 
 def parse(text):
-    mods, cur = {}, None
+    mods, cur, pending = {}, None, []
     for line in text.splitlines():
+        m = re.match(r"Gcov '(.+)'", line)
+        if m:                      # per-test annotated .gcov files live here
+            for mod in pending:
+                mods[mod].setdefault("gcov_dir", m.group(1))
+            pending = []
+            continue
         m = re.match(r"File '(?:\.\./firmware/(?:src/)?)(.+)'", line)
         if m:
             cur = m.group(1)
             mods.setdefault(cur, {})
+            pending.append(cur)
             continue
         if cur is None:
             continue
@@ -46,6 +54,19 @@ def parse(text):
         if m:
             mods[cur]["branches"] = float(m.group(1))
     return mods
+
+
+def print_uncovered(mod, gcov_dir):
+    """List the never-executed lines of a failing module."""
+    if not gcov_dir:
+        return
+    path = os.path.join(gcov_dir, os.path.basename(mod) + ".gcov")
+    if not os.path.exists(path):
+        return
+    for line in open(path, errors="ignore"):
+        m = re.match(r"\s*#####:\s*(\d+):(.*)", line)
+        if m:
+            print(f"      uncovered {mod}:{m.group(1)}: {m.group(2).strip()[:90]}")
 
 
 def main():
@@ -71,6 +92,7 @@ def main():
         if bad:
             failed += 1
             print(f"::error::coverage {mod}: " + ", ".join(bad))
+            print_uncovered(mod, cov.get("gcov_dir"))
     return 1 if failed else 0
 
 

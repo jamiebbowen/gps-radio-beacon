@@ -41,9 +41,12 @@ jobs:
       # Coverage floors (tools/check_coverage.py): a module that drops below
       # its line or branch floor fails the job and is named in the log.
       - name: Receiver coverage gate
-        run: make -C receiver/tests coverage | python3 tools/check_coverage.py rx
+        run: |
+          gcc --version | head -1
+          make -C receiver/tests coverage | python3 tools/check_coverage.py rx
 
       - name: Transmitter coverage gate
+        if: success() || failure()   # report both suites' floors
         run: make -C transmitter/tests coverage | python3 tools/check_coverage.py tx
 
   # Receiver firmware cross-compile (STM32F401, arm-none-eabi-gcc).
