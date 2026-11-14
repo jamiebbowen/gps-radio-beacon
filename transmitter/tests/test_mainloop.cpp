@@ -112,6 +112,8 @@ static uint32_t max_unid_ms = 0;
 /* LoRa time on air at the beacon's settings (SF10, 62.5 kHz, CR 4/8,
  * explicit header, CRC on, LDRO on, 8-symbol preamble), per the SX126x
  * datasheet formula. The real transmit blocks the loop this long. */
+static uint8_t sim_airtime = 0;   /* 1: each transmit holds the loop for its airtime */
+
 static uint32_t lora_toa_ms(size_t pl)
 {
     const double tsym_ms = 1024.0 / 62.5;                 /* 2^SF / BW */
@@ -126,6 +128,7 @@ int transmit_packet(const uint8_t *data, size_t length)
 {
     uint8_t t = data[0];
     wdt_delay_since_feed += lora_toa_ms(length);   /* blocking airtime */
+    if (sim_airtime) sim_ms += lora_toa_ms(length);
     if (sim_ms - last_id_ms > max_unid_ms) max_unid_ms = sim_ms - last_id_ms;
     if (t >= 0x20 && t <= 0x7E) last_id_ms = sim_ms;
     if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_HELLO) {
@@ -443,11 +446,14 @@ int main(void)
     uint32_t fus0 = type_count(PACKET_TYPE_FUSED);
     uint32_t imu0 = type_count(PACKET_TYPE_IMU);
     uint32_t mx0  = type_count(PACKET_TYPE_MAXIMA);
+    sim_airtime = 1;                              /* real ~1 s blocking transmits */
     sim_run(30000);                               /* 30 s of recovery window */
+    sim_airtime = 0;
     uint32_t fus = type_count(PACKET_TYPE_FUSED) - fus0;
     uint32_t imu = type_count(PACKET_TYPE_IMU) - imu0;
     uint32_t mxs = type_count(PACKET_TYPE_MAXIMA) - mx0;
-    CHECK(fus == 20);                             /* 1500 ms cadence exactly */
+    printf("  descent positions with real airtime: %u in 30 s\n", (unsigned)fus);
+    CHECK(fus >= 19 && fus <= 20);  /* 1.5 s grid; one slot can straddle the window */
     CHECK((imu == 5 || imu == 6));                /* 6 s paced inertial stream */
     /* The flash copy is the packet that went on the air, field for field
      * (it used to be re-derived with different, wrapping conversions). */

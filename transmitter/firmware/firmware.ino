@@ -621,7 +621,12 @@ void loop() {
     if (fused_interval_ms != 0 && nav_is_valid() &&
         (now_ms - last_fused_tx_ms >= fused_interval_ms)) {
         beacon_transmit_fused_data(system_time_seconds, transmit_fast_flag);
-        last_fused_tx_ms = now_ms;
+        /* Keep the slot grid: a slot delayed by another packet's ~1 s
+         * airtime must not push every later slot back too (re-anchoring on
+         * the late send cost ~4 of 20 descent positions per 30 s). Resync
+         * only when more than a whole interval behind. */
+        last_fused_tx_ms += fused_interval_ms;
+        if (now_ms - last_fused_tx_ms >= fused_interval_ms) last_fused_tx_ms = now_ms;
     }
 #endif
 
