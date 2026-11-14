@@ -25,8 +25,8 @@ static const uint8_t MAX_INIT_RETRIES = 3;
 static uint8_t tx_fail_streak = 0;
 #define TX_FAIL_STREAK_LIMIT 8
 
-/* E22-400M33S RF switch control (PCB v2: TXEN on pin 12, RXEN on pin 13,
- * both MCU-driven; DIO2 is NOT used as switch control). Truth table:
+/* E22-400M33S RF switch control (PCB v2: TXEN on A4, RXEN on A5 - see
+ * mpu_config.h - both MCU-driven; DIO2 is NOT used as switch control). Truth table:
  *   RX mode = RXEN 1 / TXEN 0,  TX mode = RXEN 0 / TXEN 1,  idle = both 0.
  * Break-before-make on every transition so the PA output is never routed
  * into the LNA path. Defaults to the RX side up in enable() - same idle

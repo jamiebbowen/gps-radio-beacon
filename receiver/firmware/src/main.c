@@ -1974,7 +1974,7 @@ void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256; // APB2 = 21MHz, prescaler 256 gives ~82kHz (ultra-safe for SD card init)
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256; // APB2 = 10.5 MHz (42 MHz HCLK / 4): /256 = ~41 kHz (ultra-safe for SD card init)
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLED;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLED;

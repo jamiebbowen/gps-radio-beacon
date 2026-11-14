@@ -102,7 +102,7 @@ static uint32_t LoRa_RemainingRangeMeters(float d_now_m, int16_t rssi)
  *   => d_max_m = 10 ^ ((Pt - sens - 20*log10(f_MHz) + 27.55) / 20)
  *
  * For current config (22 dBm TX, -134 dBm sens, 433 MHz) this evaluates to
- * roughly 4400 km. That's the Friis ceiling with 0 dBi antennas, no
+ * roughly 3500 km (~2160 mi). That's the Friis ceiling with 0 dBi antennas, no
  * fading; practice is always below it, but it's a physically meaningful
  * cap for "don't show more than this".
  *

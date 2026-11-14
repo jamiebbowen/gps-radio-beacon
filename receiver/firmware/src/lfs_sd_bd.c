@@ -156,8 +156,8 @@ int lfs_sd_bd_init(void)
     }
 
     /* Query total sector count so we can size the LittleFS instance. This is
-     * a one-shot CMD9 (17 bytes); running it at the slow 82 kHz init clock
-     * costs ~2 ms, so there's no point speeding up the SPI first. Reading
+     * a one-shot CMD9 (17 bytes); running it at the slow ~41 kHz init clock
+     * costs ~4 ms, so there's no point speeding up the SPI first. Reading
      * the CSD *before* switching speeds also means we don't have to worry
      * about HAL_SPI_DeInit/Init transiently disturbing CMD9 reliability. */
     DWORD sectors = 0;
@@ -166,11 +166,11 @@ int lfs_sd_bd_init(void)
     }
     sd_sector_count = (uint32_t)sectors;
 
-    /* Switch SPI1 from the ~82 kHz init clock to ~1.3 MHz for data-phase
+    /* Switch SPI1 from the ~41 kHz init clock to /16 (656 kHz) for data-phase
      * transfers (SD_SetFastSpeed picked prescaler 16 after 2.6 MHz proved
      * unreliable on this board's wiring - see sd_diskio.c). Without this,
-     * every LittleFS commit spends ~50 ms per sector at 82 kHz and the main
-     * loop falls behind display updates; at 1.3 MHz a commit is ~3 ms per
+     * every LittleFS commit spends ~100 ms per sector at 41 kHz and the main
+     * loop falls behind display updates; at 656 kHz a commit is ~6 ms per
      * sector - a ~16x speedup that keeps the UI responsive even during
      * post-launch traffic bursts. */
     SD_SetFastSpeed();

@@ -394,7 +394,7 @@ static void SD_SPI_Init(void)
 /**
  * @brief  Switch SPI1 to high-speed mode after SD card init.
  * @note   Called once from lfs_sd_bd_init() after the CMD0/ACMD41/CMD9
- *         sequence completes at the 82 kHz init clock.
+ *         sequence completes at the ~41 kHz init clock (APB2 10.5 MHz / 256).
  *
  *         History: prescaler 16 (~1.3 MHz on this clock tree) is the known-good
  *         setting; prescaler 8 (~2.6 MHz) reportedly produced garbage mounts in
@@ -600,7 +600,7 @@ wait_done:
 static uint8_t SD_WaitResponse(uint8_t Response)
 {
   /* Use time-based timeout so this works correctly at any SPI clock speed.
-   * Count-based (0xFFF) was ~400ms at 82kHz but only ~12ms at 2.6MHz -
+   * Count-based (0xFFF) was ~0.8 s at the 41 kHz init clock but only ~12 ms at 2.6 MHz -
    * far too short for an SD flash write which can take up to 250ms. */
   uint32_t deadline = HAL_GetTick() + 500; /* 500ms absolute deadline */
 
@@ -624,7 +624,7 @@ static uint8_t SD_ReadData(uint8_t *buff, uint16_t btr)
 
   /* Wait for the data token with a TIME-based deadline. The SD spec allows
    * up to 100 ms read access time; the old count-based wait (1000 polls) was
-   * only ~6-12 ms at the 1.3 MHz runtime SPI clock - the same clock-dependent
+   * only milliseconds at runtime SPI clocks (656 kHz at the default /16) - the same clock-dependent
    * timeout bug documented and fixed in SD_WaitResponse above. */
   uint32_t deadline = HAL_GetTick() + 100;
   do {

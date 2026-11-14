@@ -14,8 +14,8 @@
  *    the drawing convention, so the bit is inverted at stream time
  *  - VCOM must toggle at ~1-10 Hz or the panel degrades: handled by flipping
  *    the M1 bit in every frame write, guaranteed by the 250 ms throttle
- *  - SHARP tops out at ~2 MHz: SPI1 is re-prescled to /16 (1.3 MHz at 21 MHz
- *    PCLK2) before every transfer, matching what sd_diskio does for the SD
+ *  - SHARP tops out at ~2 MHz: SPI1 is re-prescaled to /16 (656 kHz at the
+ *    10.5 MHz PCLK2) before every transfer, matching what sd_diskio does for the SD
  */
 
 #include "display.h"
@@ -60,7 +60,7 @@ static inline uint8_t sharp_rev8(uint8_t b)
 /** Drop SPI1 to a SHARP-safe clock before touching the panel. */
 static void sharp_set_bus_speed(void)
 {
-  /* APB2 = 21 MHz; /16 = 1.31 MHz - comfortably under the ~2 MHz limit. */
+  /* APB2 = 10.5 MHz; /16 = 656 kHz - well under the ~2 MHz limit. */
   hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   HAL_SPI_Init(&hspi1);
 }
