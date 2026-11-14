@@ -51,7 +51,9 @@ to repopulate the target.
    - `TST *KE0MZS-3 CH0*` → the beacon's callsign, starred - it was flashed
      with a TESTING_MODE build (30 s ID cadence). Reflash production before
      the pad unless you did that deliberately. The RF mode page stars the
-     callsign the same way.
+     callsign the same way. Power-cycling a production beacon does not
+     trigger it (its boot ID is followed by HELLO; the flag waits 5 s for
+     one).
    - `TX GPS OK n sat` is judged from the newer of the beacon's last
      heartbeat and its last position packet.
    - `TX GPS ACQ n sat` → normal cold start, wait; sats climbing = healthy.

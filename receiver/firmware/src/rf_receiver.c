@@ -184,6 +184,20 @@ static int8_t  ack_snr = 0;
  * the preflight page surfaces it, nothing is gated on it. */
 static uint32_t last_callsign_ms = 0;
 static uint8_t  testing_build_suspect = 0;
+/* Every beacon boot airs its callsign and then HELLO, so a short interval
+ * that ends in a boot ID is a power-cycle, not a TESTING build: it only
+ * counts once RF_BOOT_HELLO_WINDOW_MS pass without a HELLO from us. */
+#define RF_BOOT_HELLO_WINDOW_MS  5000UL
+static uint32_t cs_short_pending_ms = 0;      /* 0 = no short interval pending */
+
+static void rf_promote_testing_suspect(void)
+{
+  if (cs_short_pending_ms != 0 &&
+      HAL_GetTick() - cs_short_pending_ms > RF_BOOT_HELLO_WINDOW_MS) {
+    cs_short_pending_ms = 0;
+    testing_build_suspect = 1;
+  }
+}
 
 /* Ambient noise-floor monitor.
  * GetRssiInst is sampled ~1 Hz while the radio sits in continuous RX and
@@ -321,6 +335,7 @@ uint8_t RF_Receiver_DataAvailable(void)
 {
   /* Ensure we stay in RX mode */
   RF_EnsureRxMode();
+  rf_promote_testing_suspect();
   
   /* Track IRQ checks for diagnostics */
   rf_irq_checks++;
@@ -598,6 +613,12 @@ uint8_t RF_Receiver_DataAvailable(void)
         if (RF_RocketFilter(1, last_hello.rocket_id)) {
           hello_pending = 1;
           last_packet_time = HAL_GetTick();
+          /* Our HELLO right behind a short-interval callsign: that ID was
+           * a boot (power-cycle), not a TESTING-build cadence */
+          if (cs_short_pending_ms != 0 &&
+              HAL_GetTick() - cs_short_pending_ms <= RF_BOOT_HELLO_WINDOW_MS) {
+            cs_short_pending_ms = 0;
+          }
         }
       } else if (last_packet.length == CMD_ACK_PACKET_SIZE
               && last_packet.data[0] == PACKET_TYPE_ACK) {
@@ -682,7 +703,7 @@ uint8_t RF_Receiver_DataAvailable(void)
             if (last_callsign_ms != 0) {
               uint32_t iv = now_cs - last_callsign_ms;
               if (iv >= 15000UL && iv <= 150000UL) {
-                testing_build_suspect = 1;
+                cs_short_pending_ms = now_cs ? now_cs : 1u;  /* HELLO decides */
               }
             }
             last_callsign_ms = now_cs;
@@ -909,6 +930,7 @@ static uint8_t RF_SetChannelCtx(uint8_t channel, uint8_t new_context)
     bound_rocket_id = RF_ROCKET_UNBOUND;
     last_callsign_ms = 0;
     testing_build_suspect = 0;
+    cs_short_pending_ms = 0;
     /* The silence clock and the livelock count belonged to the previous
      * channel's beacon: a manual pick must not be overridden by an auto
      * re-acquire on their behalf. Contact on this channel re-arms both. */
@@ -1264,6 +1286,7 @@ uint32_t RF_Receiver_GetForeignDrops(void)
  *  airframe binding on channel change. */
 uint8_t RF_Receiver_TestingBuildSuspect(void)
 {
+  rf_promote_testing_suspect();
   return testing_build_suspect;
 }
 
