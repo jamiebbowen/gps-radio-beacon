@@ -104,6 +104,13 @@ runbook is `launch-day.md`.
       call used before kept only the last report of each transfer); an
       overflow here means the main loop is too slow to drain them.
 
+- [ ] **IMU read during transmits**: after a shake launch (POST_LAUNCH, the
+      radio busy ~85% of the time), tap the airframe hard a few times over
+      30 s. Each tap shows in the next IMU trace's peak and in the MAXIMA
+      recap even when it landed mid-packet, and the beacon runs for an hour
+      like this without a watchdog reset (`[Boot]` banner) or a radio
+      failure streak.
+
 ## 5. Landing + descent evidence (post-flight review)
 
 These can't be forced on the bench, but know what the log will show:

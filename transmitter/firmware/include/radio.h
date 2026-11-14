@@ -17,6 +17,9 @@ int transmit_string(const char* str);
 
 // Radio status
 bool radio_is_transmitting(void);
+// True while transmit_packet() sits in RadioLib's blocking transmit() (it
+// busy-waits ~1 s per SF10 packet, calling yield() on every turn).
+bool radio_tx_blocking(void);
 
 /* Command uplink window. The receiver sends commands with a ~1.3 s
  * preamble so the beacon's 40 ms listen sniff (about once a second) always

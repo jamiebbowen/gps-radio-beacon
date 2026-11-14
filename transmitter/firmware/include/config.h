@@ -224,6 +224,11 @@
  * flight_cadence_fused_allowed(). */
 #define FUSED_TX_INTERVAL_IDLE_MS       30000
 
+/* While a ~1 s LoRa transmit blocks the loop, the yield() hook in
+ * firmware.ino reads the IMU at most this often (the BNO085 reports at
+ * 100 Hz; 5 ms keeps its batch buffer from overflowing). */
+#define IMU_TX_SERVICE_MS               5
+
 #if TESTING_MODE
     // Testing Configuration - Fast intervals for development/testing
     #define POST_LAUNCH_DURATION_SEC        10    // 10 seconds in LAUNCH state before POST_LAUNCH

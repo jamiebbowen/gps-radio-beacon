@@ -7,6 +7,7 @@
 #define RADIOLIB_STUB_H
 
 #include <stdint.h>
+#include "Arduino.h"   /* yield() */
 #include <stddef.h>
 
 #define RADIOLIB_ERR_NONE            0
@@ -119,6 +120,7 @@ public:
     int transmit(uint8_t *data, size_t len)
     {
         radiolib_transmit_calls++;
+        yield();      /* the real one busy-waits for TX done, yielding */
         if (len > sizeof(radiolib_last_tx)) len = sizeof(radiolib_last_tx);
         memcpy(radiolib_last_tx, data, len);
         radiolib_last_tx_len = len;
