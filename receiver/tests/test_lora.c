@@ -419,8 +419,6 @@ TEST(test_receive_small_packet)
     CHECK(p.crc_error == false);
     CHECK(p.rssi == -95);                      /* raw 190 / -2 */
     CHECK(p.snr == 5);                         /* raw 0x14 / 4 */
-    CHECK(LoRa_GetRSSI() == -95);
-    CHECK(LoRa_GetSNR() == 5);
     CHECK(LoRa_PacketAvailable() == 0);        /* flag consumed */
 }
 
@@ -607,8 +605,6 @@ TEST(test_status_and_accessors)
     CHECK(LoRa_GetDeviceStatus(&status) == LORA_BUSY);
     fake_busy_pin = 0;
 
-    CHECK(LoRa_GetStatus() == fake_status_byte);
-
     int16_t rssi = 0;
     CHECK(LoRa_GetRssiInst(&rssi) == LORA_OK);
     CHECK(rssi == -100);                       /* raw 200 / -2 */
@@ -618,7 +614,7 @@ TEST(test_status_and_accessors)
     chip_irq = 0x0203;
     CHECK(LoRa_GetIRQStatus(&irq) == LORA_OK);
     CHECK(irq == 0x0203);
-    CHECK(LoRa_ClearIRQStatus(0x0203) == LORA_OK);
+    CHECK(LoRa_ClearIRQ(0x0203) == LORA_OK);
     CHECK(chip_irq == 0);
 
     CHECK(LoRa_SetReceiveMode() == LORA_OK);

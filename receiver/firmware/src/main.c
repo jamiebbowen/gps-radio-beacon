@@ -823,9 +823,9 @@ int main(void)
       if (!b2_level_logged && HAL_GetTick() > 500) {
         b2_level_logged = 1;
         if (sd_card_ok) {
-          SD_Card_LogEvent(Button2_RawLevel()
-                           ? "B2 pin idle HIGH (PRESSED at boot? wiring/short)"
-                           : "B2 pin idle LOW (wired correctly)");
+          SD_Card_LogEvent(Button2_IsHeld()
+                           ? "B2 held at boot (stuck key or wiring?)"
+                           : "B2 idle at boot");
         }
       }
     }

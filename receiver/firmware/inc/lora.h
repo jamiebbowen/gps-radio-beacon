@@ -228,24 +228,6 @@ uint8_t LoRa_PacketAvailable(void);
 uint8_t LoRa_ReadPacket(LoRa_Packet_t *packet);
 
 /**
- * @brief Get RSSI of last received packet
- * @retval RSSI in dBm
- */
-int16_t LoRa_GetRSSI(void);
-
-/**
- * @brief Get SNR of last received packet
- * @retval SNR in dB
- */
-int8_t LoRa_GetSNR(void);
-
-/**
- * @brief Get status of LoRa module
- * @retval Status byte
- */
-uint8_t LoRa_GetStatus(void);
-
-/**
  * @brief Clear IRQ flags
  * @param irq_mask IRQ mask to clear
  * @retval Status code
@@ -258,13 +240,6 @@ uint8_t LoRa_ClearIRQ(uint16_t irq_mask);
  * @retval Status code
  */
 uint8_t LoRa_GetIRQStatus(uint16_t *irq_status);
-
-/**
- * @brief Clear IRQ status
- * @param irq_mask IRQ mask to clear
- * @retval Status code
- */
-uint8_t LoRa_ClearIRQStatus(uint16_t irq_mask);
 
 /**
  * @brief Get device status/mode

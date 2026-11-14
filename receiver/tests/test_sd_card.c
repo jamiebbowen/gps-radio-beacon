@@ -26,6 +26,32 @@
 /* Include the module under test directly (not linked - see tests/Makefile) */
 #include "../firmware/src/sd_card.c"
 
+/* Test-side teardown/sync. The firmware never unmounts or force-flushes at
+ * runtime (power-off is the teardown; SD_Card_ServiceSync paces syncs), so
+ * tests drive the module statics directly. */
+static void sd_deinit(void)
+{
+    if (log_file_open) {
+        lfs_file_close(&lfs, &log_file);
+        log_file_open = 0;
+    }
+    if (lfs_mounted) {
+        lfs_unmount(&lfs);
+        lfs_mounted = 0;
+    }
+    memset(&sd_info, 0, sizeof(sd_info));
+    sd_initialized = 0;
+}
+
+static SD_Card_Status sd_flush(void)
+{
+    if (!sd_initialized) return SD_CARD_ERROR;
+    if (log_file_open) lfs_file_sync(&lfs, &log_file);
+    sd_dirty = 0;
+    sd_dirty_rows = 0;
+    return SD_CARD_OK;
+}
+
 /* ------------------------------------------------------------------ */
 /* RAM block device (replaces lfs_sd_bd.c)                             */
 /* ------------------------------------------------------------------ */
@@ -155,7 +181,7 @@ static void wipe_card(void)
 {
     /* Close/unmount first: on target you cannot wipe a mounted card, and
      * wiping under a live mount leaves stale open-file state behind. */
-    SD_Card_DeInit();
+    sd_deinit();
     memset(bd_storage, 0xFF, sizeof(bd_storage));  /* blank flash */
 }
 
@@ -234,7 +260,7 @@ TEST(test_remount_preserves_files)
     CHECK(SD_Card_SaveLastBeacon(39.5f, -105.2f, 1655.0f) == SD_CARD_OK);
 
     /* Power cycle: existing filesystem mounts without formatting */
-    SD_Card_DeInit();
+    sd_deinit();
     CHECK(SD_Card_Init() == SD_CARD_OK);
 
     float lat, lon, alt;
@@ -263,7 +289,7 @@ TEST(test_log_file_lazy_creation_and_sequencing)
                                 5.0f, -2.0f, -92, 6) == SD_CARD_OK);
 
     char big[2048];
-    CHECK(SD_Card_Flush() == SD_CARD_OK);   /* deferred-sync model: explicit flush before readback */
+    CHECK(sd_flush() == SD_CARD_OK);   /* deferred-sync model: explicit flush before readback */
     CHECK(read_file("L0001.TXT", big, sizeof(big)) > 0);  /* seq starts at 1 */
     CHECK(strstr(big, "Timestamp,Type,PktSrc") == big);   /* header first */
     CHECK(strstr(big, "12.345,NAV,GPS,39.89") != NULL);   /* row followed */
@@ -281,19 +307,14 @@ TEST(test_log_file_lazy_creation_and_sequencing)
     }
 
     /* Second boot: sequence advances to L0002.TXT */
-    SD_Card_DeInit();
+    sd_deinit();
     CHECK(SD_Card_Init() == SD_CARD_OK);
-    char name[SD_CARD_MAX_FILENAME];
-    CHECK(SD_Card_CreateLogFile(name, sizeof(name)) == SD_CARD_OK);
-    CHECK(strcmp(name, "L0002.TXT") == 0);
-
-    /* CreateLogFile while open just returns the current name */
-    CHECK(SD_Card_CreateLogFile(name, sizeof(name)) == SD_CARD_OK);
-    CHECK(strcmp(name, "L0002.TXT") == 0);
-    CHECK(SD_Card_CreateLogFile(NULL, 0) == SD_CARD_ERROR);
+    CHECK(SD_Card_EnsureLogFile() == SD_CARD_OK);
+    CHECK(strcmp(sd_info.current_log_file, "L0002.TXT") == 0);
 
     /* EnsureLogFile with one already open is a no-op */
     CHECK(SD_Card_EnsureLogFile() == SD_CARD_OK);
+    CHECK(strcmp(sd_info.current_log_file, "L0002.TXT") == 0);
 }
 
 TEST(test_all_log_row_formats)
@@ -306,19 +327,13 @@ TEST(test_all_log_row_formats)
     GPS_Data gps; memset(&gps, 0, sizeof(gps));
     gps.latitude = 40.0f; gps.longitude = -105.0f; gps.altitude = 1600.0f;
     gps.fix = 1; gps.satellites = 7; gps.speed = 3.5f;
-    CHECK(SD_Card_LogGPS(&gps, LOG_TYPE_GPS_LOCAL) == SD_CARD_OK);
-    CHECK(SD_Card_LogGPS(&gps, LOG_TYPE_GPS_REMOTE) == SD_CARD_OK);
-    CHECK(SD_Card_LogGPS(NULL, LOG_TYPE_GPS_LOCAL) == SD_CARD_ERROR);
 
-    CHECK(SD_Card_LogRFPacket("39.89,-105.11,1800", 18, -95) == SD_CARD_OK);
-    CHECK(SD_Card_LogRFPacket(NULL, 0, 0) == SD_CARD_ERROR);
 
-    CHECK(SD_Card_LogCompass(123.4f, 10, -20, 30) == SD_CARD_OK);
     CHECK(SD_Card_LogEvent("scan lock CH2") == SD_CARD_OK);
     CHECK(SD_Card_LogEvent(NULL) == SD_CARD_ERROR);
     CHECK(SD_Card_LogError("test error") == SD_CARD_OK);
     CHECK(SD_Card_LogError(NULL) == SD_CARD_ERROR);
-    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    CHECK(sd_flush() == SD_CARD_OK);
 
     /* Fused-packet nav row carries velocities + FUS tag */
     GPS_Data fused; memset(&fused, 0, sizeof(fused));
@@ -348,12 +363,8 @@ TEST(test_all_log_row_formats)
     CHECK(SD_Card_LogBase(NULL) == SD_CARD_ERROR);
 
     char big[4096];
-    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    CHECK(sd_flush() == SD_CARD_OK);
     CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
-    CHECK(strstr(big, "GPS_LOCAL")  != NULL);
-    CHECK(strstr(big, "GPS_REMOTE") != NULL);
-    CHECK(strstr(big, "RF_PACKET,-95") != NULL);
-    CHECK(strstr(big, "COMPASS,123.4") != NULL);
     CHECK(strstr(big, "EVENT,scan lock CH2") != NULL);
     CHECK(strstr(big, "ERROR,test error") != NULL);
     CHECK(strstr(big, "NAV,FUS,39.9") != NULL);
@@ -389,7 +400,7 @@ TEST(test_raw_nav_row_flags_carry_beacon_fix_type)
     CHECK(SD_Card_LogNavigation(&nofix, NULL, 0, 0, 0, 0, 0, -90, 5) == SD_CARD_OK);
 
     char big[2048];
-    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    CHECK(sd_flush() == SD_CARD_OK);
     CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
     CHECK(strstr(big, "0.00,0.00,0.00,0,01,") != NULL);   /* fix only     */
     CHECK(strstr(big, "0.00,0.00,0.00,0,31,") != NULL);   /* fix|launch|landed */
@@ -398,19 +409,15 @@ TEST(test_raw_nav_row_flags_carry_beacon_fix_type)
 
 TEST(test_apis_reject_when_uninitialized)
 {
-    SD_Card_DeInit();
+    sd_deinit();
 
     GPS_Data gps; memset(&gps, 0, sizeof(gps));
     float lat, lon, alt;
 
-    CHECK(SD_Card_LogGPS(&gps, LOG_TYPE_GPS_LOCAL) == SD_CARD_ERROR);
-    CHECK(SD_Card_LogRFPacket("x", 1, 0) == SD_CARD_ERROR);
-    CHECK(SD_Card_LogCompass(0, 0, 0, 0) == SD_CARD_ERROR);
     CHECK(SD_Card_LogEvent("x") == SD_CARD_ERROR);
     CHECK(SD_Card_LogError("x") == SD_CARD_ERROR);
     CHECK(SD_Card_LogNavigation(&gps, NULL, 0, 0, 0, 0, 0, 0, 0) == SD_CARD_ERROR);
     CHECK(SD_Card_EnsureLogFile() == SD_CARD_ERROR);
-    CHECK(SD_Card_Flush() == SD_CARD_ERROR);
     CHECK(SD_Card_SaveLastBeacon(1, 2, 3) == SD_CARD_ERROR);
     CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_ERROR);
     CHECK(SD_Card_SelfTest() == SD_CARD_ERROR);
@@ -516,7 +523,7 @@ TEST(test_deferred_sync_powercut_staleness_bound)
     Test_SetTick(1000);
     CHECK(SD_Card_LogNavigation(&beacon, NULL, 0.1f, 1.0f, 0.0f,
                                 0.0f, 0.0f, -90, 5) == SD_CARD_OK);
-    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    CHECK(sd_flush() == SD_CARD_OK);
 
     /* Rows 2-6 go in with NO flush - the deferred-sync window */
     for (int i = 0; i < 5; i++) {
@@ -541,32 +548,6 @@ TEST(test_deferred_sync_powercut_staleness_bound)
     CHECK(read_file("L0001.TXT", big, sizeof(big)) > 0);
     CHECK(strstr(big, ",0.100,") != NULL);    /* flushed row survives */
     CHECK(strstr(big, ",0.200,") == NULL);    /* unsynced tail gone     */
-}
-
-TEST(test_format_wipes_everything)
-{
-    wipe_card();
-    CHECK(SD_Card_Init() == SD_CARD_OK);
-    CHECK(SD_Card_SaveLastBeacon(39.5f, -105.2f, 1655.0f) == SD_CARD_OK);
-    CHECK(SD_Card_EnsureLogFile() == SD_CARD_OK);
-
-    CHECK(SD_Card_Format() == SD_CARD_OK);
-
-    float lat, lon, alt;
-    CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_ERROR);
-    CHECK(sd_info.files_logged == 0);
-
-    /* Format with no card present is rejected */
-    uint8_t saved = sd_info.is_present;
-    sd_info.is_present = 0;
-    CHECK(SD_Card_Format() == SD_CARD_NOT_PRESENT);
-    sd_info.is_present = saved;
-
-    /* Format failure propagates */
-    bd_prog_fail = 1;
-    CHECK(SD_Card_Format() == SD_CARD_ERROR);
-    bd_prog_fail = 0;
-    CHECK(SD_Card_Init() == SD_CARD_OK);      /* recover for later tests */
 }
 
 TEST(test_self_test_pass_and_write_failure)
@@ -594,8 +575,7 @@ TEST(test_rotation_launchflag_and_write_failure)
     CHECK(SD_Card_Init() == SD_CARD_OK);
 
     /* Opening a second log file closes the first (sd_card.c:241-242) */
-    char name[16];
-    CHECK(SD_Card_CreateLogFile(name, sizeof(name)) == SD_CARD_OK);
+    CHECK(SD_Card_EnsureLogFile() == SD_CARD_OK);
     CHECK(log_file_open == 1);
     CHECK(sd_open_new_log_file(NULL, 0) == SD_CARD_OK);   /* rotation */
     CHECK(log_file_open == 1);
@@ -612,7 +592,7 @@ TEST(test_rotation_launchflag_and_write_failure)
     CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 11.0f, 20.0f,
                                 0.0f, 0.0f, -90, 5) == SD_CARD_OK);
 
-    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    CHECK(sd_flush() == SD_CARD_OK);
     char big[2048];
     CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
     CHECK(strstr(big, "NAV,GPS,") != NULL);
@@ -635,14 +615,13 @@ TEST(test_write_recovers_lost_mount)
     wipe_card();
     Test_SetTick(1000);
     CHECK(SD_Card_Init() == SD_CARD_OK);
-    char name[16];
-    CHECK(SD_Card_CreateLogFile(name, sizeof(name)) == SD_CARD_OK);
+    CHECK(SD_Card_EnsureLogFile() == SD_CARD_OK);
 
     GPS_Data beacon; memset(&beacon, 0, sizeof(beacon));
     beacon.latitude = 39.9f; beacon.longitude = -105.1f;
     CHECK(SD_Card_LogNavigation(&beacon, NULL, 1.0f, 10.0f, 20.0f,
                                 0.0f, 0.0f, -90, 5) == SD_CARD_OK);
-    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    CHECK(sd_flush() == SD_CARD_OK);
 
     /* Simulate a recovered contact bounce: mount + handle gone, block
      * device healthy again, littlefs state clean. (A prog-failure
@@ -680,7 +659,7 @@ TEST(test_write_recovers_lost_mount)
     CHECK(lfs_mounted == 1 && log_file_open == 1);
 
     /* The recovered rows are in the file; the backoff-denied row is not */
-    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    CHECK(sd_flush() == SD_CARD_OK);
     char big[2048];
     CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
     CHECK(strstr(big, ",11.0,") != NULL);
@@ -719,7 +698,7 @@ TEST(test_dirty_card_boot_preserves_history)
     lfs_file_close(&lfs, &f);
 
     /* Cycle without reformat - dirty card boots clean-init */
-    SD_Card_DeInit();
+    sd_deinit();
     CHECK(SD_Card_Init() == SD_CARD_OK);
 
     /* New log goes to L0004, not a renumber or a reuse */
@@ -727,7 +706,7 @@ TEST(test_dirty_card_boot_preserves_history)
     CHECK(strcmp(sd_info.current_log_file, "L0004.TXT") == 0);
 
     /* Old content must be byte-identical after the new session starts */
-    SD_Card_Flush();
+    sd_flush();
     char buf[512];
     char small[64];
     CHECK(read_file("L0001.TXT", small, sizeof(small)) > 11);
@@ -737,7 +716,7 @@ TEST(test_dirty_card_boot_preserves_history)
 
     /* The new log is open and writable */
     CHECK(SD_Card_LogEvent("dirty-card boot event") == SD_CARD_OK);
-    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    CHECK(sd_flush() == SD_CARD_OK);
     int nr = read_file("L0004.TXT", buf, sizeof(buf));
     CHECK(nr > 10);
     CHECK(strstr(buf, "dirty-card boot event") != NULL);
@@ -849,7 +828,7 @@ TEST(test_timestamp_format)
 
     /* Internal guard: WriteLogEntry with no mounted fs (the public APIs all
      * guard earlier, so this is only reachable from inside the module) */
-    SD_Card_DeInit();
+    sd_deinit();
     CHECK(SD_Card_WriteLogEntry("x") == SD_CARD_ERROR);
 }
 
@@ -868,7 +847,7 @@ TEST(test_big_sync_burst_logged_once)
     beacon.latitude = 39.9f; beacon.longitude = -105.1f;
     CHECK(SD_Card_LogNavigation(&beacon, NULL, 0.1f, 1.0f, 0.0f,
                                 0.0f, 0.0f, -90, 5) == SD_CARD_OK);
-    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    CHECK(sd_flush() == SD_CARD_OK);
     CHECK(sd_dirty == 0);
 
     /* Dirty a row, then force the sync; every HAL_GetTick call inside
@@ -882,7 +861,7 @@ TEST(test_big_sync_burst_logged_once)
     Test_SetTickAutoAdvance(0);
 
     /* The burst event was queued as a row; flush and look for it. */
-    CHECK(SD_Card_Flush() == SD_CARD_OK);
+    CHECK(sd_flush() == SD_CARD_OK);
     char big[4096];
     CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
     CHECK(strstr(big, "SD sync burst") != NULL);
@@ -907,7 +886,6 @@ int main(void)
     run_test_beacon_persistence_validation();
     run_test_quatlock_persistence();
     run_test_deferred_sync_powercut_staleness_bound();
-    run_test_format_wipes_everything();
     run_test_self_test_pass_and_write_failure();
     run_test_rotation_launchflag_and_write_failure();
     run_test_write_recovers_lost_mount();

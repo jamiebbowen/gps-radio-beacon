@@ -182,11 +182,6 @@ int lfs_sd_bd_init(void)
     return 0;
 }
 
-int lfs_sd_bd_is_ready(void)
-{
-    return sd_ready;
-}
-
 uint32_t lfs_sd_bd_capacity_mb(void)
 {
     if (!sd_ready) return 0;

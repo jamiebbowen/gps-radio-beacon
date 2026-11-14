@@ -19,14 +19,14 @@
 /* HAL fakes                                                           */
 /* ------------------------------------------------------------------ */
 
-static HAL_StatusTypeDef tx_result    = HAL_OK;
 static HAL_StatusTypeDef read_result  = HAL_OK;
 static HAL_StatusTypeDef init_result  = HAL_OK;
 static uint32_t init_calls   = 0;
 static uint32_t deinit_calls = 0;
 static uint32_t probe_calls  = 0;
 static uint16_t probe_addr   = 0;
-static uint32_t tx_calls     = 0;
+static uint32_t read_calls   = 0;
+static uint8_t  rx1[1];
 
 /* 7-bit addresses that ACK IsDeviceReady; -1 terminates (0 = nobody).
  * ready_only_at_100k gates the ACK on the CURRENT bus clock - models a
@@ -55,14 +55,6 @@ HAL_StatusTypeDef HAL_I2C_DeInit(I2C_HandleTypeDef *h)
     (void)h; deinit_calls++;
     return HAL_OK;
 }
-HAL_StatusTypeDef HAL_I2C_Master_Transmit(I2C_HandleTypeDef *h, uint16_t addr,
-                                          uint8_t *data, uint16_t size,
-                                          uint32_t timeout)
-{
-    (void)h; (void)addr; (void)data; (void)size; (void)timeout;
-    tx_calls++;
-    return tx_result;
-}
 HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *h, uint16_t addr,
                                    uint16_t mem_addr, uint16_t mem_size,
                                    uint8_t *data, uint16_t size,
@@ -70,6 +62,7 @@ HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *h, uint16_t addr,
 {
     (void)h; (void)addr; (void)mem_addr; (void)mem_size; (void)data;
     (void)size; (void)timeout;
+    read_calls++;
     return read_result;
 }
 HAL_StatusTypeDef HAL_I2C_IsDeviceReady(I2C_HandleTypeDef *h, uint16_t addr,
@@ -95,8 +88,8 @@ HAL_StatusTypeDef HAL_I2C_Mem_Write(I2C_HandleTypeDef *h, uint16_t a,
 
 static void reset_all(void)
 {
-    tx_result = read_result = init_result = HAL_OK;
-    init_calls = deinit_calls = probe_calls = tx_calls = 0;
+    read_result = init_result = HAL_OK;
+    init_calls = deinit_calls = probe_calls = read_calls = 0;
     probe_addr = 0;
     memset(ready_addrs, 0, sizeof(ready_addrs));
     ready_only_at_100k = 0;
@@ -119,7 +112,7 @@ TEST(init_fast_probe_ok_stays_400k)
     ready_addrs[0] = 0x5A;              /* jogpad ACKs */
     I2CBus_Init();
     CHECK(I2CBus_IsOnline() == 1);
-    CHECK(I2CBus_ClockKHz() == 400);
+    CHECK(bus_khz == 400);
 }
 
 TEST(init_fast_fail_falls_back_to_100k)
@@ -128,10 +121,10 @@ TEST(init_fast_fail_falls_back_to_100k)
     /* nobody answers at 400k; the BNO085 ACKs once the bus slows */
     probe_calls = 0;
     I2CBus_Init();
-    CHECK(I2CBus_ClockKHz() == 100 || I2CBus_IsOnline() == 0);
+    CHECK(bus_khz == 100 || I2CBus_IsOnline() == 0);
     /* with nobody answering at all the bus is offline at the slow rung */
     CHECK(I2CBus_IsOnline() == 0);
-    CHECK(I2CBus_ClockKHz() == 100);
+    CHECK(bus_khz == 100);
 }
 
 TEST(init_slow_probe_ok_online_100k)
@@ -143,7 +136,7 @@ TEST(init_slow_probe_ok_online_100k)
     ready_only_at_100k = 1;
     I2CBus_Init();
     CHECK(I2CBus_IsOnline() == 1);
-    CHECK(I2CBus_ClockKHz() == 100);
+    CHECK(bus_khz == 100);
 }
 
 TEST(init_hal_failure_goes_offline_not_hang)
@@ -178,21 +171,21 @@ TEST(error_streak_drops_bus_to_100k)
     reset_all();
     ready_addrs[0] = 0x5A;
     I2CBus_Init();
-    CHECK(I2CBus_ClockKHz() == 400);
+    CHECK(bus_khz == 400);
 
-    tx_result = HAL_ERROR;
+    read_result = HAL_ERROR;
     for (int i = 0; i < 32; i++)
-        I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
-    CHECK(I2CBus_ClockKHz() == 100);    /* first streak = slow rung */
+        I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
+    CHECK(bus_khz == 100);    /* first streak = slow rung */
     CHECK(I2CBus_IsOnline() == 1);      /* not offline yet */
 
     /* A clean transaction resets the streak */
-    tx_result = HAL_OK;
-    I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
-    tx_result = HAL_ERROR;
+    read_result = HAL_OK;
+    I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
+    read_result = HAL_ERROR;
     for (int i = 0; i < 32; i++)
-        I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
-    CHECK(I2CBus_ClockKHz() == 100);    /* still slow */
+        I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
+    CHECK(bus_khz == 100);    /* still slow */
     CHECK(I2CBus_IsOnline() == 0);      /* second streak = offline */
 }
 
@@ -203,25 +196,25 @@ TEST(offline_probe_recovers_when_bus_acks)
     I2CBus_Init();
 
     /* Drive it offline */
-    tx_result = HAL_ERROR;
+    read_result = HAL_ERROR;
     for (int i = 0; i < 64; i++)
-        I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
+        I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
     CHECK(I2CBus_IsOnline() == 0);
 
     /* Calls while offline short-circuit (no bus traffic), and probes are
      * rate-limited to one per 10 s. */
-    tx_calls = 0;
+    read_calls = 0;
     probe_calls = 0;
-    I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
-    CHECK(tx_calls == 0);               /* offline: no bus transaction */
+    I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
+    CHECK(read_calls == 0);               /* offline: no bus transaction */
     uint32_t probes_first = probe_calls;
-    I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
+    I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
     CHECK(probe_calls == probes_first); /* within 10 s: no second probe */
 
     /* Still answering 10 s later -> recovered, streak cleared */
     Test_SetTick(HAL_GetTick() + 10001);
     ready_addrs[0] = 0x5A;
-    I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
+    I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
     CHECK(probe_calls == probes_first + 1);
 }
 
@@ -230,9 +223,9 @@ TEST(wedged_state_reinits_before_probe)
     reset_all();
     ready_addrs[0] = 0x5A;
     I2CBus_Init();
-    tx_result = HAL_ERROR;
+    read_result = HAL_ERROR;
     for (int i = 0; i < 64; i++)
-        I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
+        I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
     CHECK(I2CBus_IsOnline() == 0);
 
     /* A wedge leaves hi2c->State stuck BUSY: the recovery probe must
@@ -241,7 +234,7 @@ TEST(wedged_state_reinits_before_probe)
     uint32_t dinits = deinit_calls;
     uint32_t inits  = init_calls;
     Test_SetTick(HAL_GetTick() + 11000);
-    I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
+    I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
     CHECK(deinit_calls == dinits + 1);
     CHECK(init_calls == inits + 1);
     CHECK(I2CBus_IsOnline() == 1);      /* recovered via the jogpad ACK */
@@ -258,21 +251,21 @@ TEST(slow_bus_ramps_up_after_two_clean_minutes)
     I2CBus_Init();
 
     /* Drop to the slow rung */
-    tx_result = HAL_ERROR;
+    read_result = HAL_ERROR;
     for (int i = 0; i < 32; i++)
-        I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
-    CHECK(I2CBus_ClockKHz() == 100);
-    tx_result = HAL_OK;
+        I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
+    CHECK(bus_khz == 100);
+    read_result = HAL_OK;
 
     /* 119 s of quiet: still slow */
     Test_SetTick(HAL_GetTick() + 119000);
-    I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
-    CHECK(I2CBus_ClockKHz() == 100);
+    I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
+    CHECK(bus_khz == 100);
 
     /* past the 2-minute window: one probe, fast rung restored */
     Test_SetTick(HAL_GetTick() + 2000);
-    I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
-    CHECK(I2CBus_ClockKHz() == 400);
+    I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
+    CHECK(bus_khz == 400);
 }
 
 TEST(rampup_probe_failure_stays_slow)
@@ -280,18 +273,18 @@ TEST(rampup_probe_failure_stays_slow)
     reset_all();
     ready_addrs[0] = 0x5A;
     I2CBus_Init();
-    tx_result = HAL_ERROR;
+    read_result = HAL_ERROR;
     for (int i = 0; i < 32; i++)
-        I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
-    tx_result = HAL_OK;
-    CHECK(I2CBus_ClockKHz() == 100);
+        I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
+    read_result = HAL_OK;
+    CHECK(bus_khz == 100);
 
     /* Two quiet minutes, but the fast-rung probe NACKs: stay slow and
      * restart the quiet window instead of ping-ponging. */
     memset(ready_addrs, 0, sizeof(ready_addrs));
     Test_SetTick(HAL_GetTick() + 121000);
-    I2CBus_Transmit(0x5A << 1, (const uint8_t *)"x", 1);
-    CHECK(I2CBus_ClockKHz() == 100);
+    I2CBus_MemRead(0x5A << 1, 0x00, rx1, 1);
+    CHECK(bus_khz == 100);
 }
 
 /* ------------------------------------------------------------------ */
@@ -311,7 +304,7 @@ TEST(memread_online_passes_through_and_offline_short_circuits)
     read_result = HAL_ERROR;
     for (int i = 0; i < 32; i++)
         I2CBus_MemRead(0x5A << 1, 0x10, buf, sizeof(buf));
-    CHECK(I2CBus_ClockKHz() == 100);
+    CHECK(bus_khz == 100);
     read_result = HAL_ERROR;
     for (int i = 0; i < 32; i++)
         I2CBus_MemRead(0x5A << 1, 0x10, buf, sizeof(buf));

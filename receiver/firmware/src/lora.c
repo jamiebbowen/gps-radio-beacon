@@ -9,8 +9,6 @@
 /* Private variables */
 static SPI_HandleTypeDef *lora_hspi = NULL;
 static uint8_t lora_initialized = 0;
-static int16_t last_rssi = 0;
-static int8_t last_snr = 0;
 
 /* Currently tuned rocket channel (see channel plan in lora.h) */
 static uint8_t lora_current_channel = 0;
@@ -491,8 +489,6 @@ uint8_t LoRa_ReadPacket(LoRa_Packet_t *packet) {
                  * Casting after the unsigned divide turned e.g. -2 dB (0xF8)
                  * into +62 dB, corrupting weak-signal readings. */
                 packet->snr = (int8_t)((int8_t)pkt_status[1] / 4);
-                last_rssi = packet->rssi;
-                last_snr = packet->snr;
             }
             
             /* Clear IRQ for this packet */
@@ -508,20 +504,6 @@ uint8_t LoRa_ReadPacket(LoRa_Packet_t *packet) {
     (void)LoRa_SetReceiveMode();
     LoRa_ConsumePacketReady(pending_at_start);
     return LORA_ERROR;
-}
-
-/**
- * @brief Get RSSI of last received packet
- */
-int16_t LoRa_GetRSSI(void) {
-    return last_rssi;
-}
-
-/**
- * @brief Get SNR of last received packet
- */
-int8_t LoRa_GetSNR(void) {
-    return last_snr;
 }
 
 /**
@@ -630,15 +612,6 @@ uint8_t LoRa_CadResult(void) {
 }
 
 /**
- * @brief Get status of LoRa module
- */
-uint8_t LoRa_GetStatus(void) {
-    uint8_t status;
-    LoRa_ReadCommand(SX1268_CMD_GET_STATUS, &status, 1);
-    return status;
-}
-
-/**
  * @brief Clear IRQ flags
  */
 uint8_t LoRa_ClearIRQ(uint16_t irq_mask) {
@@ -659,17 +632,6 @@ uint8_t LoRa_GetIRQStatus(uint16_t *irq_status) {
         return LORA_OK;
     }
     return LORA_ERROR;
-}
-
-/**
- * @brief Clear IRQ status
- */
-uint8_t LoRa_ClearIRQStatus(uint16_t irq_mask) {
-    uint8_t clear_params[2] = {
-        (uint8_t)(irq_mask >> 8),
-        (uint8_t)(irq_mask & 0xFF)
-    };
-    return LoRa_SendCommand(SX1268_CMD_CLR_IRQSTATUS, clear_params, 2);
 }
 
 /**

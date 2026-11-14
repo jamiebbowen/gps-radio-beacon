@@ -62,9 +62,6 @@ Button_State_t Button_GetState(void)
   return BUTTON_RELEASED;
 }
 
-uint8_t Button_IsPressed(void) { return Button_GetState() == BUTTON_PRESSED; }
-uint8_t Button_IsReleased(void) { return Button_GetState() == BUTTON_RELEASED; }
-
 /**
  * @brief Poll the pad and turn stick motion / button edges into events.
  * @retval None
@@ -155,8 +152,4 @@ uint8_t Button2_WasPressed(void)
   return 0;
 }
 
-/* Diagnostics for the SD breadcrumb paths in main.c: "raw level" now means
- * "context action currently held" (1 = pressed), matching the old polarity
- * where 1 = pressed. */
-uint8_t Button2_RawLevel(void) { return prev_z_held || prev_b_held; }
 uint8_t Button2_IsHeld(void)   { return prev_z_held || prev_b_held; }

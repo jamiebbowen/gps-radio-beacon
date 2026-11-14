@@ -232,21 +232,6 @@ SD_Card_Status SD_Card_Init(void)
     return SD_CARD_OK;
 }
 
-SD_Card_Status SD_Card_DeInit(void)
-{
-    if (log_file_open) {
-        lfs_file_close(&lfs, &log_file);
-        log_file_open = 0;
-    }
-    if (lfs_mounted) {
-        lfs_unmount(&lfs);
-        lfs_mounted = 0;
-    }
-    memset(&sd_info, 0, sizeof(sd_info));
-    sd_initialized = 0;
-    return SD_CARD_OK;
-}
-
 bool SD_Card_IsPresent(void)
 {
     GPIO_PinState pin_state = HAL_GPIO_ReadPin(SD_DETECT_GPIO_PORT, SD_DETECT_PIN);
@@ -362,17 +347,6 @@ static SD_Card_Status sd_open_new_log_file(char *filename_out, uint32_t max_len)
         filename_out[max_len - 1] = '\0';
     }
     return SD_CARD_OK;
-}
-
-SD_Card_Status SD_Card_CreateLogFile(char *filename, uint32_t max_len)
-{
-    if (filename == NULL || max_len == 0) return SD_CARD_ERROR;
-    if (log_file_open) {
-        strncpy(filename, sd_info.current_log_file, max_len - 1);
-        filename[max_len - 1] = '\0';
-        return SD_CARD_OK;
-    }
-    return sd_open_new_log_file(filename, max_len);
 }
 
 /* ========================================================================= */
@@ -540,39 +514,6 @@ void SD_Card_GetTimestamp(char *timestamp_str, uint32_t max_len)
              (unsigned long)(tick / 1000), (unsigned long)(tick % 1000));
 }
 
-SD_Card_Status SD_Card_LogGPS(GPS_Data *gps_data, Log_Entry_Type log_type)
-{
-    if (gps_data == NULL || !sd_initialized) return SD_CARD_ERROR;
-    char ts[32];
-    SD_Card_GetTimestamp(ts, sizeof(ts));
-    const char *type_str = (log_type == LOG_TYPE_GPS_LOCAL) ? "GPS_LOCAL" : "GPS_REMOTE";
-    snprintf(log_buffer, sizeof(log_buffer),
-             "%s,%s,%.6f,%.6f,%.1f,%d,%d,%.1f\n",
-             ts, type_str,
-             gps_data->latitude, gps_data->longitude, gps_data->altitude,
-             gps_data->fix, gps_data->satellites, gps_data->speed);
-    return SD_Card_WriteLogEntry(log_buffer);
-}
-
-SD_Card_Status SD_Card_LogRFPacket(const char *packet_data, uint32_t packet_length, int16_t rssi)
-{
-    (void)packet_length;
-    if (packet_data == NULL || !sd_initialized) return SD_CARD_ERROR;
-    char ts[32];
-    SD_Card_GetTimestamp(ts, sizeof(ts));
-    snprintf(log_buffer, sizeof(log_buffer), "%s,RF_PACKET,%d,%s\n", ts, rssi, packet_data);
-    return SD_Card_WriteLogEntry(log_buffer);
-}
-
-SD_Card_Status SD_Card_LogCompass(float heading, int16_t x, int16_t y, int16_t z)
-{
-    if (!sd_initialized) return SD_CARD_ERROR;
-    char ts[32];
-    SD_Card_GetTimestamp(ts, sizeof(ts));
-    snprintf(log_buffer, sizeof(log_buffer), "%s,COMPASS,%.1f,%d,%d,%d\n", ts, heading, x, y, z);
-    return SD_Card_WriteLogEntry(log_buffer);
-}
-
 /* Syncs are deferred (SD_Card_ServiceSync): the 2026-09-11 bench cards
  * showed the per-row sync picking up ~2 s LittleFS metadata-compaction
  * bursts mid-packet-flow. Committing at an idle window instead bounds the
@@ -693,15 +634,6 @@ SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, int16_t rssi,
              (int)imu->gyro_x_cds, (int)imu->gyro_y_cds, (int)imu->gyro_z_cds,
              (int)imu->peak_accel_mg, (int)imu->temp_c10, (int)rssi, (int)snr);
     return SD_Card_WriteLogEntry(log_buffer);
-}
-
-SD_Card_Status SD_Card_Flush(void)
-{
-    if (!sd_initialized) return SD_CARD_ERROR;
-    if (log_file_open) lfs_file_sync(&lfs, &log_file);
-    sd_dirty = 0;
-    sd_dirty_rows = 0;
-    return SD_CARD_OK;
 }
 
 /**
@@ -965,26 +897,6 @@ SD_Card_Status SD_Card_LoadDeclination(float *deg)
 /* ========================================================================= */
 /* Format (destroys all data)                                                */
 /* ========================================================================= */
-
-SD_Card_Status SD_Card_Format(void)
-{
-    if (!sd_info.is_present) return SD_CARD_NOT_PRESENT;
-
-    if (log_file_open) { lfs_file_close(&lfs, &log_file); log_file_open = 0; }
-    if (lfs_mounted)   { lfs_unmount(&lfs); lfs_mounted = 0; }
-
-    if (lfs_format(&lfs, &lfs_sd_cfg) != 0) return SD_CARD_ERROR;
-    if (lfs_mount(&lfs, &lfs_sd_cfg) != 0)  return SD_CARD_ERROR;
-
-    lfs_mounted = 1;
-    sd_info.is_mounted = 1;
-    sd_info.files_logged  = 0;
-    sd_info.bytes_written = 0;
-    sd_info.write_errors  = 0;
-    memset(sd_info.current_log_file, 0, sizeof(sd_info.current_log_file));
-    SD_Card_UpdateInfo();
-    return SD_CARD_OK;
-}
 
 /* ========================================================================= */
 /* Self-test (write, sync, close, reopen, read, verify, delete)              */

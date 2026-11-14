@@ -33,9 +33,7 @@ typedef enum {
 
 uint8_t Jogpad_Init(void);          /* returns 1 if the pad ACKed at 0x5A */
 void    Jogpad_Update(void);        /* throttled poll - call every main loop */
-uint8_t Jogpad_IsPresent(void);
 
-uint8_t Jogpad_GetX(void);          /* 0..255, 128 = centered */
 uint8_t Jogpad_GetY(void);          /* 0..255, top = 0, bottom = 255 */
 uint8_t Jogpad_ButtonHeld(Jogpad_Button b);  /* 1 = currently held */
 
