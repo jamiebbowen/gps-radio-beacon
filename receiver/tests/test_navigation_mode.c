@@ -177,6 +177,199 @@ static void draw(uint32_t now_ms, uint32_t last_pkt_ms, uint32_t pkt_count)
 
 /* ------------------------------------------------------------------ */
 
+/* RF sensitivity floor the page's range budget uses (navigation_mode.c) */
+#define NAV_TEST_FLOOR_DBM (-134)
+
+TEST(test_nav_flight_range_budget_row)
+{
+    /* In flight (ground speed >= 2 m/s) row 5 is the remaining RF range */
+    reset_scenario();
+    remote_g.v_north = 30.0f;
+    /* 1 m away: under the extrapolation anchor -> radio's theoretical max,
+     * >= 1000 mi so the decimal is dropped to fit the column */
+    remote_g.latitude = local_g.latitude + 0.00001f;
+    remote_g.longitude = local_g.longitude;
+    draw(100000, 100000, 42);
+    ROW_HAS(5, "mi max");
+    CHECK(strchr(cap_row_text[5], '.') == NULL);
+
+    /* ~5.6 km out with 14 dB of margin: miles to go, tenths */
+    remote_g.latitude = local_g.latitude + 0.05f;
+    fake_rssi = NAV_TEST_FLOOR_DBM + 14;
+    draw(101000, 101000, 43);
+    ROW_HAS(0, "km");
+    ROW_HAS(5, "mi left");
+    CHECK(strchr(cap_row_text[5], '.') != NULL);
+
+    /* 1 dB of margin: under a mile -> feet */
+    fake_rssi = NAV_TEST_FLOOR_DBM + 1;
+    draw(102000, 102000, 44);
+    ROW_HAS(5, "ft left");
+
+    /* At the floor: nothing left */
+    fake_rssi = NAV_TEST_FLOOR_DBM;
+    draw(103000, 103000, 45);
+    ROW_IS(5, "~0ft left");
+
+    /* No local anchor: the budget can't be extrapolated -> max */
+    draw_local_live = 0;
+    draw(104000, 104000, 46);
+    ROW_HAS(5, "mi max");
+}
+
+TEST(test_nav_link_quality_tiers)
+{
+    /* The worse of the RSSI and SNR tiers names the link */
+    static const struct { int16_t r; int8_t s; const char *label; } t[] = {
+        {  -95,   8, "Good" }, { -105,   8, "Fair" }, { -115,   8, "Weak" },
+        { -125,   8, "Poor" }, {  -80,   3, "Good" }, {  -80,  -5, "Fair" },
+        {  -80, -10, "Weak" }, {  -80, -20, "Poor" },
+    };
+    reset_scenario();
+    for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
+        fake_rssi = t[i].r;
+        fake_snr  = t[i].s;
+        draw(100000, 100000, 42);
+        ROW_IS(4, t[i].label);
+    }
+}
+
+TEST(test_nav_freshness_and_heartbeat_rows)
+{
+    reset_scenario();
+    /* A raised noise floor outranks freshness on row 1 */
+    fake_noise_alert = 1;
+    fake_floor_valid = 1;
+    fake_noise_floor = -100;
+    draw(100000, 100000, 42);
+    ROW_IS(1, "RF NOISE! -100dBm");
+    fake_noise_alert = 0;
+
+    /* A heartbeat newer than the last position: both ages */
+    fake_hb_heard = 1;
+    fake_hb_age_ms = 2000;
+    fake_hb.satellites = 7;
+    fake_hb.rocket_id = 3;
+    fake_hb.gps_health = HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0);
+    draw(110000, 100000, 42);
+    ROW_IS(1, "Last: 10s HB:2s");
+
+    /* SD-restored position, beacon alive on heartbeats */
+    draw(110000, 0, 0);
+    ROW_IS(1, "Last: SD HB:2s");
+    ROW_IS(3, "S:7  no fix");
+    ROW_HAS(5, "HB R3 CH0");
+    fake_hb.gps_health = HB_GPS_HEALTH(HB_GPS_NO_DATA, 0);
+    draw(110000, 0, 0);
+    ROW_IS(5, "GPS SILENT!");
+    fake_hb.gps_health = HB_GPS_HEALTH(HB_GPS_NO_NMEA, 0);
+    draw(110000, 0, 0);
+    ROW_IS(5, "GPS GARBLED!");
+
+    /* SD-restored, nothing heard: scanning / RF dead / no signal */
+    fake_hb_heard = 0;
+    draw(110000, 0, 0);
+    ROW_IS(1, "Last: SD");
+    ROW_IS(3, "S:-- ---.-m/s");
+    ROW_IS(6, "RSSI --  SNR --");
+    fake_scanning = 1;
+    draw(110000, 0, 0);
+    ROW_IS(4, "Scanning...");
+    ROW_HAS(5, "CH0 ");
+    fake_scanning = 0;
+    rf_initialized = 0;
+    draw(110000, 0, 0);
+    ROW_IS(4, "RF DEAD");
+    ROW_IS(5, "reinit...");
+    rf_initialized = 1;
+    draw(110000, 0, 0);
+    ROW_IS(4, "No signal");
+}
+
+TEST(test_nav_packet_source_tag)
+{
+    reset_scenario();
+    remote_g.is_fused = 1;
+    draw(100000, 100000, 42);
+    ROW_HAS(7, "FUS");
+    remote_g.fused_sensor_degraded = 1;
+    draw(100000, 100000, 42);
+    ROW_HAS(7, "SNS!");
+    remote_g.fused_dr = 1;
+    draw(100000, 100000, 42);
+    ROW_HAS(7, " DR");
+    remote_g.fused_landed = 1;
+    draw(100000, 100000, 42);
+    ROW_HAS(7, "LANDED");
+}
+
+TEST(test_nav_arrow_placeholders)
+{
+    /* No usable heading: a circle, labelled VERT (held too steeply) or
+     * CAL (uncalibrated) */
+    reset_scenario();
+    compass_data.heading_valid = 0;
+    compass_data.heading_stale = 0;
+    compass_data.orientation_valid = 0;
+    draw(100000, 100000, 42);
+    CHECK(cap_arrow_angle < 0.0f);
+    compass_data.orientation_valid = 1;
+    draw(100000, 100000, 42);
+    CHECK(cap_arrow_angle < 0.0f);
+}
+
+TEST(test_nav_no_position_beacon_status_rows)
+{
+    /* Nothing to navigate to yet: the page reports what the beacon says */
+    reset_scenario();
+    draw_has_remote = 0;
+    fake_hb_heard = 1;
+    fake_hb_age_ms = 4000;
+    fake_hb.rocket_id = 3;
+    fake_hb.satellites = 0;
+    fake_hb.uptime_s = 120;
+    static const struct { uint8_t health; const char *row6; } t[] = {
+        { HB_GPS_HEALTH(HB_GPS_NO_DATA, 0),   "GPS SILENT wire" },
+        { HB_GPS_HEALTH(HB_GPS_NO_NMEA, 0),   "GPS data garbled" },
+        { HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0), "0 sats-chk TXant" },
+        { HB_GPS_HEALTH(HB_GPS_ACQUIRING, 2), "0 sats-chk TXant rst:2" },
+    };
+    for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
+        fake_hb.gps_health = t[i].health;
+        draw(100000, 0, 0);
+        ROW_IS(1, "NOT READY YET");
+        ROW_IS(2, "Beacon HB 4s ago");
+        ROW_IS(3, "R3 CH0 sats:0");
+        ROW_IS(4, "No fix, up 120s");
+        ROW_IS(6, t[i].row6);
+    }
+    fake_hb.uptime_s = 30;                     /* early: just acquiring */
+    fake_hb.gps_health = HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0);
+    draw(100000, 0, 0);
+    ROW_IS(6, "GPS ok, acquiring");
+    fake_hb.gps_health = HB_GPS_UNKNOWN;       /* old TX: no verdict row */
+    draw(100000, 0, 0);
+    ROW_IS(6, "");
+
+    fake_hb_heard = 0;
+    fake_scanning = 1;
+    draw(100000, 0, 0);
+    ROW_HAS(4, "Scanning CH0");
+    fake_scanning = 0;
+    rf_initialized = 0;
+    draw(100000, 0, 0);
+    ROW_IS(4, "RF DEAD - reinit...");
+    rf_initialized = 1;
+    fake_floor_valid = 1;
+    fake_noise_floor = -118;
+    draw(100000, 0, 0);
+    ROW_IS(4, "No RF Data");
+    ROW_IS(7, "NF:-118dBm");
+    fake_noise_alert = 1;
+    draw(100000, 0, 0);
+    ROW_IS(7, "NF:-118dBm NOISY!");
+}
+
 TEST(test_nav_arrow_follows_compass_when_local_fix_lost)
 {
     /* Losing the receiver's own fix (tree cover on the walk-in) must not
@@ -369,6 +562,12 @@ int main(void)
     run_test_nav_pad_ready_to_fly_verdict();
     run_test_nav_ready_row_honours_vetoes();
     run_test_nav_arrow_follows_compass_when_local_fix_lost();
+    run_test_nav_flight_range_budget_row();
+    run_test_nav_link_quality_tiers();
+    run_test_nav_freshness_and_heartbeat_rows();
+    run_test_nav_packet_source_tag();
+    run_test_nav_arrow_placeholders();
+    run_test_nav_no_position_beacon_status_rows();
     run_test_nav_not_ready_names_failed_checks();
     run_test_nav_landed_shows_landed_not_rtf();
     run_test_nav_landed_drag_warning();
