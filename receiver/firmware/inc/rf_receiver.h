@@ -192,6 +192,13 @@ uint8_t RF_Receiver_ScanUpdate(void);   /* Poll from main loop; 1 = just locked 
 /* Signal quality and data age functions */
 void RF_Receiver_GetSignalQuality(int16_t *rssi, int8_t *snr);
 uint32_t RF_Receiver_GetLastPacketTime(void);
+/* Tick of the newest packet from OUR beacon on this channel context: any
+ * CRC-valid packet that passed the airframe filter (typed packets, our
+ * heartbeat, a callsign carrying our ID, or a legacy ID-less packet).
+ * Link liveness on the pad, where heartbeats are all there is between
+ * 10-minute position audits. 0 = nothing heard since the last manual
+ * channel change / scan start. */
+uint32_t RF_Receiver_GetBeaconHeardTick(void);
 
 /* Packet loss diagnostics */
 void RF_Receiver_GetPacketLossDiagnostics(uint32_t *irq_count, uint32_t *lora_packets, uint32_t *duplicates);

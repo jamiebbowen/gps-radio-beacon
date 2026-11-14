@@ -79,9 +79,11 @@ static void render(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
     /* The shared evaluation, built from the same inputs main.c uses */
     Preflight_Inputs_t in;
     memset(&in, 0, sizeof(in));
-    in.link_ok = link_ok;
-    in.tx_fix = tx_fix;
-    in.tx_sats = tx_sats;
+    in.link_heard = link_ok;                 /* link_ok exactly as given */
+    in.link_age_s = link_ok ? 0u : PF_LINK_FRESH_S + 1u;
+    in.pos_valid = 1;
+    in.pos_fix = tx_fix;
+    in.pos_sats = tx_sats;
     in.rx_fix_ok = rx_fix_ok;
     in.compass_ok = compass_ok;
     in.rx_vdd_mv = vdd;

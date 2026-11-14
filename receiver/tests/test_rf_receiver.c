@@ -1717,6 +1717,47 @@ TEST(test_auto_rescan_after_prolonged_silence)
     fake_cad_available = 0;   /* restore test-suite default */
 }
 
+TEST(test_beacon_heard_tick_counts_every_own_packet)
+{
+    /* Pad link liveness: between 10-minute position audits the beacon is
+     * heard only through heartbeats (and callsigns) - those must count. */
+    fake_mode = 5;
+    RF_Receiver_StopScan();
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);       /* new context */
+    CHECK(RF_Receiver_GetBeaconHeardTick() == 0);
+
+    inject_heartbeat(OUR_ROCKET_ID, 0, 9, 30);
+    run_for(250, 250);
+    uint32_t t_hb = RF_Receiver_GetBeaconHeardTick();
+    CHECK(t_hb != 0 && t_hb == now_ms);
+
+    run_for(1000, 250);
+    inject_callsign("KE0MZS-3 CH0");
+    run_for(250, 250);
+    uint32_t t_cs = RF_Receiver_GetBeaconHeardTick();
+    CHECK(t_cs > t_hb);
+
+    run_for(1000, 250);
+    GPS_Data gps;
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetGPSData(&gps) == RF_OK);
+    uint32_t t_pos = RF_Receiver_GetBeaconHeardTick();
+    CHECK(t_pos > t_cs);
+
+    /* Someone else's heartbeat on the channel proves nothing about ours */
+    run_for(1000, 250);
+    inject_heartbeat(FOREIGN_ROCKET_ID, 0, 9, 30);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetBeaconHeardTick() == t_pos);
+
+    /* A manual pick starts a new context: nothing heard there yet */
+    RF_Receiver_StopScan();
+    (void)RF_Receiver_NextChannel();
+    CHECK(RF_Receiver_GetBeaconHeardTick() == 0);
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+}
+
 TEST(test_manual_pick_holds_after_prolonged_silence)
 {
     /* Our beacon went quiet 6 min ago (switched off, or another airframe
@@ -2569,6 +2610,7 @@ int main(void)
     run_test_diagnostics_getters();
     run_test_live_noise_floor_min_samples_and_min_pick();
     run_test_auto_rescan_after_prolonged_silence();
+    run_test_beacon_heard_tick_counts_every_own_packet();
     run_test_manual_pick_holds_after_prolonged_silence();
     run_test_foreign_beacon_filter();
     run_test_foreign_chatter_does_not_suppress_auto_rescan();

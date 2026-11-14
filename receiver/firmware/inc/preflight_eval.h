@@ -17,10 +17,25 @@
  * mid-session and scramble SD state: a hard veto. 0 = not measured. */
 #define PF_LOW_POWER_MV  3200u
 
+/* Link freshness: the pad link is heartbeat-paced - the beacon's quiet pad
+ * sends one heartbeat a minute and a position only every 10 minutes - so
+ * every packet from our beacon counts, and the gate is one 60 s pad
+ * heartbeat plus margin. (A 35 s gate on position packets alone let READY
+ * show for at most 35 s in every 10 minutes.) */
+#define PF_LINK_FRESH_S  75u
+
 typedef struct {
-  uint8_t  link_ok;          /* beacon heard within the 35 s freshness gate */
-  uint8_t  tx_fix;           /* beacon fix quality (last position packet)   */
-  uint8_t  tx_sats;          /* beacon satellites                           */
+  uint8_t  link_heard;       /* our beacon has been heard on this channel   */
+  uint32_t link_age_s;       /* age of its newest packet, any type          */
+  /* The beacon's GPS, judged from whichever report is newer: */
+  uint8_t  pos_valid;        /* a position packet has arrived               */
+  uint32_t pos_age_s;
+  uint8_t  pos_fix;          /* fix quality it carried                      */
+  uint8_t  pos_sats;
+  uint8_t  hb_valid;         /* our beacon has sent a heartbeat             */
+  uint32_t hb_age_s;
+  uint8_t  hb_fix;
+  uint8_t  hb_sats;
   uint8_t  rx_fix_ok;        /* receiver has its own fix                    */
   uint8_t  compass_ok;       /* heading valid and live                      */
   uint16_t rx_vdd_mv;        /* receiver pack voltage, 0 = not measured     */
@@ -35,8 +50,10 @@ typedef enum {
 } Preflight_Verdict_t;
 
 typedef struct {
-  uint8_t link_ok;
+  uint8_t link_ok;           /* heard within PF_LINK_FRESH_S                */
   uint8_t tx_gps_ok;         /* fix >= 1 and >= 4 satellites                */
+  uint8_t tx_fix;            /* the report tx_gps_ok judged (0 if none)     */
+  uint8_t tx_sats;
   uint8_t rx_gps_ok;
   uint8_t compass_ok;
   uint8_t low_power;

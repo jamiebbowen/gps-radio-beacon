@@ -263,9 +263,11 @@ static void Eink_MaybeRefreshSummary(uint32_t now_ms)
   int16_t rssi = 0;
   int8_t snr = 0;
   RF_Receiver_GetSignalQuality(&rssi, &snr);
-  uint32_t age_s = (last_rf_packet_time > 0)
-                   ? (now_ms - last_rf_packet_time) / 1000 : 0;
-  uint8_t link_lost = (last_rf_packet_time == 0) || (age_s > 180);
+  /* Link age from any packet of our beacon: on the pad its heartbeat comes
+   * once a minute and a position only every 10 minutes. */
+  uint32_t heard_ms = RF_Receiver_GetBeaconHeardTick();
+  uint32_t age_s = (heard_ms > 0) ? (now_ms - heard_ms) / 1000 : 0;
+  uint8_t link_lost = (heard_ms == 0) || (age_s > 180);
 
   Eink_Clear();
   Eink_DrawText(4, 2, 2, "GPS BEACON RX", EINK_BLACK);
@@ -748,12 +750,13 @@ int main(void)
     }
 
     /* USER CODE BEGIN 3 */
-    /* LED = RF activity indicator: pulse for 100 ms after each packet
-     * (PC13 is active LOW). Previously the LED was held solid on, which
-     * conveyed nothing and contradicted the "pulse" comments. */
+    /* LED = RF activity indicator: pulse for 100 ms after each packet from
+     * our beacon, heartbeats included (PC13 is active LOW). Previously the
+     * LED was held solid on, which conveyed nothing and contradicted the
+     * "pulse" comments. */
     {
-      uint8_t led_on = (last_rf_packet_time > 0) &&
-                       (HAL_GetTick() - last_rf_packet_time < 100);
+      uint32_t heard_ms = RF_Receiver_GetBeaconHeardTick();
+      uint8_t led_on = (heard_ms > 0) && (HAL_GetTick() - heard_ms < 100);
       HAL_GPIO_WritePin(LED_GPIO_PORT, LED_PIN,
                         led_on ? GPIO_PIN_RESET : GPIO_PIN_SET);
     }
@@ -1611,10 +1614,13 @@ int main(void)
   }
   
   /* SD session marker (log_policy.c): one RF LOST row per silence over
-   * 5 min, then RF REGAINED with the whole silence's length. */
+   * 5 min, then RF REGAINED with the whole silence's length. Silence means
+   * nothing at all from our beacon: on the pad its once-a-minute heartbeat
+   * is the contact (positions come only every 10 minutes there). */
+  uint32_t heard_tick = RF_Receiver_GetBeaconHeardTick();
   static LogPolicy_Contact_t contact;
   char contact_msg[48];
-  if (LogPolicy_Contact(&contact, last_rf_packet_time, current_time,
+  if (LogPolicy_Contact(&contact, heard_tick, current_time,
                         contact_msg, sizeof(contact_msg))) {
     SD_Card_LogEvent(contact_msg);
   }
@@ -1646,21 +1652,27 @@ int main(void)
   /* One go/no-go evaluation per loop, shared by the PRE-FLIGHT page and the
    * navigation page's ready-to-fly row (they used to disagree: the nav row
    * skipped the TESTING-build and low-battery vetoes).
-   * Link freshness: the gate must EXCEED the pre-launch cadence, otherwise
-   * the check flaps CHK for the tail of every pad cycle. 35 s covers the
-   * sparser (30 s) flight-prep regime with margin and stays correct during
-   * the denser (5 s) range-testing regime; heartbeats fill the gap in
-   * no-fix state. */
-  uint8_t pf_link_ok = 0;
-  uint32_t pf_link_age_s = 0;
-  if (last_rf_packet_time > 0) {
-    pf_link_age_s = (current_time - last_rf_packet_time) / 1000;
-    pf_link_ok = (pf_link_age_s <= 35);
-  }
+   * Link freshness counts every packet from our beacon (PF_LINK_FRESH_S,
+   * preflight_eval.h): the quiet pad sends a heartbeat a minute and a
+   * position only every 10 minutes. The beacon's GPS is judged from the
+   * newer of its last heartbeat and its last position packet. */
+  uint32_t pf_link_age_s = (heard_tick > 0) ? (current_time - heard_tick) / 1000 : 0;
+  HeartbeatPacket_t own_hb;
+  memset(&own_hb, 0, sizeof(own_hb));
+  uint32_t own_hb_age_ms = 0;
+  uint8_t own_hb_valid = RF_Receiver_GetLastHeartbeat(&own_hb, &own_hb_age_ms);
   Preflight_Inputs_t pf_in = {
-    .link_ok         = pf_link_ok,
-    .tx_fix          = remote_gps_data.fix,
-    .tx_sats         = (uint8_t)remote_gps_data.satellites,
+    .link_heard      = (heard_tick > 0),
+    .link_age_s      = pf_link_age_s,
+    .pos_valid       = (last_rf_packet_time > 0),
+    .pos_age_s       = (last_rf_packet_time > 0)
+                       ? (current_time - last_rf_packet_time) / 1000 : 0,
+    .pos_fix         = remote_gps_data.fix,
+    .pos_sats        = (uint8_t)remote_gps_data.satellites,
+    .hb_valid        = own_hb_valid,
+    .hb_age_s        = own_hb_age_ms / 1000,
+    .hb_fix          = own_hb.fix_quality,
+    .hb_sats         = own_hb.satellites,
     .rx_fix_ok       = has_valid_local_gps,
     .compass_ok      = compass_data.heading_valid && !compass_data.heading_stale,
     .rx_vdd_mv       = (uint16_t)sys_vdd_mv,
@@ -1711,17 +1723,15 @@ int main(void)
       RF_Receiver_GetSignalQuality(&pf_rssi, &pf_snr);
 
       /* Heartbeat health is only meaningful when the heartbeat is fresh;
-       * once position packets flow it goes quiet by design. 35 s gate
-       * tracks the 30 s heartbeat cadence. */
-      HeartbeatPacket_t pf_hb;
-      uint32_t pf_hb_age = 0;
+       * once position packets flow it goes quiet by design. Same gate as
+       * the link: one 60 s pad heartbeat plus margin. */
       uint8_t pf_hb_state = 0xFF;
-      if (RF_Receiver_GetLastHeartbeat(&pf_hb, &pf_hb_age) && pf_hb_age < 35000) {
-        pf_hb_state = HB_GPS_STATE(pf_hb.gps_health);
+      if (own_hb_valid && own_hb_age_ms <= PF_LINK_FRESH_S * 1000u) {
+        pf_hb_state = HB_GPS_STATE(own_hb.gps_health);
       }
 
-      DisplayMode_Preflight(pf_link_ok, pf_link_age_s, pf_rssi,
-                            remote_gps_data.fix, (uint8_t)remote_gps_data.satellites,
+      DisplayMode_Preflight(pf_result.link_ok, pf_link_age_s, pf_rssi,
+                            pf_result.tx_fix, pf_result.tx_sats,
                             pf_hb_state,
                             remote_gps_data.fused_sensor_degraded,
                             has_valid_local_gps, (uint8_t)local_gps_data.satellites,

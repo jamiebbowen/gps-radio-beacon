@@ -42,12 +42,18 @@ to repopulate the target.
    shows the callsign `KE0MZS-<id> CH<n>` (RF mode). Confirm `<id>` and
    `<n>` match the labels on the airframe and the jumper you mean to fly.
 4. **PRE-FLIGHT page** — every row means something you can fix now:
+   - `TX LINK OK Ns` counts every packet from the beacon. On the quiet pad
+     that is mostly its once-a-minute heartbeat (a position goes out only
+     every 10 minutes), so N climbs to ~60 between heartbeats; the row
+     drops to `CHK no pkts` after 75 s of silence.
    - `TX LINK WEAK xx dBm` → antenna/IPEX problem: fix before flight.
      (A healthy beacon on the rail is way above -75 dBm.)
    - `TST *KE0MZS-3 CH0*` → the beacon's callsign, starred - it was flashed
      with a TESTING_MODE build (30 s ID cadence). Reflash production before
      the pad unless you did that deliberately. The RF mode page stars the
      callsign the same way.
+   - `TX GPS OK n sat` is judged from the newer of the beacon's last
+     heartbeat and its last position packet.
    - `TX GPS ACQ n sat` → normal cold start, wait; sats climbing = healthy.
    - `TX GPS CHK wiring!` / `CHK garbled` → GPS UART fault; open the rocket.
    - `TX IMU CHK dead!` → advisory only; the flight still works on GPS

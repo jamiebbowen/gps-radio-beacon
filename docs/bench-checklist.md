@@ -62,6 +62,11 @@ Connect the beacon over USB and watch the first seconds of boot:
       beacon's USB log for `[2way] CMD answered`.
 - [ ] With a second beacon on the same channel, its heartbeats log as
       `HEARTBEAT FOREIGN ...` and never raise a `TX reset` ERROR row.
+- [ ] Pad wait: leave the beacon past its 60 s turn-on minute (PRE_LAUNCH:
+      a heartbeat a minute, a position every 10 minutes) for 10 minutes.
+      PRE-FLIGHT keeps `** READY TO FLY **` with `TX LINK OK` climbing to
+      ~60 s between heartbeats, the e-ink never shows `LINK LOST`, and the
+      SD log has no `RF LOST` / `RF REGAINED` rows for that wait.
 
 ## 4. Compass / IMU
 
