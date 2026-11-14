@@ -21,8 +21,7 @@ typedef struct __attribute__((packed)) {
 
 // Packet types
 #define PACKET_TYPE_GPS         0x01
-#define PACKET_TYPE_CALLSIGN    0x02  // Future use
-#define PACKET_TYPE_TELEMETRY   0x03  // Future use
+// 0x02, 0x03: retired draft IDs, never sent on the air - do not reuse
 #define PACKET_TYPE_FUSED       0x04  // EKF-fused position + velocity (TX nav module)
 #define PACKET_TYPE_HEARTBEAT   0x05  // No-fix keepalive (see HeartbeatPacket_t)
 #define PACKET_TYPE_IMU         0x06  // Inertial trace during ascent (forensics)
@@ -124,7 +123,6 @@ typedef struct __attribute__((packed)) {
 #define FUSED_FLAG_V3                0x01  /* Bit 0: V3 wire marker (always set
                                               * on the air; distinguishes V3
                                               * from legacy 19-byte V1)      */
-#define FUSED_FLAG_RESERVED_MASK     FUSED_FLAG_V3  /* old name for bit 0    */
 
 /* Fused packet: V3 = 19 bytes (no age_ds: the receiver derives staleness
  * from GPS_FRESH + inter-arrival time; the V2 rocket_id byte had pushed
@@ -257,7 +255,5 @@ typedef struct __attribute__((packed)) {
 // Convert decimal degrees to encoded integer
 #define ENCODE_COORD(deg)       ((int32_t)((deg) * GPS_COORD_SCALE))
 
-// Convert encoded integer back to decimal degrees
-#define DECODE_COORD(val)       ((double)(val) / GPS_COORD_SCALE)
 
 #endif // _PACKET_FORMAT_H_

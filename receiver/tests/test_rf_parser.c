@@ -181,7 +181,7 @@ TEST(test_binary_layouts_and_malformed) {
     CHECK(RF_Parser_ParseBinaryPacket(pkt, GPS_PACKET_SIZE_V1 - 1) == RF_PARSER_ERROR); /* short */
     CHECK(RF_Parser_ParseBinaryPacket(pkt, GPS_PACKET_SIZE + 1) == RF_PARSER_ERROR);  /* long  */
 
-    pkt[0] = PACKET_TYPE_TELEMETRY;                                   /* type   */
+    pkt[0] = 0x03;                                /* retired type ID */
     CHECK(RF_Parser_ParseBinaryPacket(pkt, GPS_PACKET_SIZE) == RF_PARSER_ERROR);
 
     build_gps_packet(pkt, 95.0, -105.11, 100, 8, 0);                  /* lat>90 */
@@ -328,7 +328,7 @@ TEST(test_fused_reserved_bits_ignored) {
     parser_reset();
     uint8_t pkt[FUSED_PACKET_SIZE];
     build_fused_packet(pkt, 39.89, -105.11, 2400, 0, 0, 0, 3,
-                       FUSED_FLAG_RESERVED_MASK);
+                       FUSED_FLAG_V3);
     CHECK(RF_Parser_ParseFusedPacket(pkt, sizeof(pkt)) == RF_PARSER_OK);
 
     GPS_Data gps;
@@ -363,7 +363,7 @@ TEST(test_fused_wire_format_constants_pin) {
     CHECK(FUSED_FLAG_LANDED          == 0x08);
     CHECK(FUSED_FLAG_SENSOR_DEGRADED == 0x04);
     CHECK(FUSED_FLAG_GATE_REJECT     == 0x02);
-    CHECK(FUSED_FLAG_RESERVED_MASK   == 0x01);
+    CHECK(FUSED_FLAG_V3              == 0x01);
 
     CHECK(FLAG_LOW_SATS              == 0x20);
 

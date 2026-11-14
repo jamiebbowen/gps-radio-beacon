@@ -713,7 +713,6 @@ TEST(test_fused_wire_format_pin)
     CHECK(FUSED_FLAG_SENSOR_DEGRADED == 0x04);
     CHECK(FUSED_FLAG_GATE_REJECT     == 0x02);
     CHECK(FUSED_FLAG_V3              == 0x01);
-    CHECK(FUSED_FLAG_RESERVED_MASK   == 0x01);
 
     CHECK(FLAG_LOW_SATS              == 0x20);
 

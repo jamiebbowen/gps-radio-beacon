@@ -324,7 +324,7 @@ uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length)
   uint8_t flags_idx = is_v3 ? 17 : 18;
   uint8_t age_ds    = is_v3 ? ((data[17] & FUSED_FLAG_GPS_FRESH) ? 0 : 255)
                             : data[17];
-  uint8_t flags     = data[flags_idx] & (uint8_t)~FUSED_FLAG_RESERVED_MASK;
+  uint8_t flags     = data[flags_idx] & (uint8_t)~FUSED_FLAG_V3;
 
   double lat = (double)lat_enc / 10000000.0;
   double lon = (double)lon_enc / 10000000.0;

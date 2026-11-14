@@ -177,7 +177,7 @@ static void check_fused_row(double lat, double lon, float alt, float vn,
      * tick past RF_FUSED_STALE_OVERRIDE_MS before every decode so this
      * sweep exercises capacity, not the override path (pinned elsewhere). */
     tick_ms += 12000;
-    RF_Parser_Reset();
+    RF_Parser_Init();   /* full parser reset (incl. raw-GPS freshness) */
     CHECK(RF_Parser_ParseFusedPacket(tx_buf, (uint16_t)tx_len) == RF_PARSER_OK);
 
     GPS_Data g;
@@ -317,7 +317,7 @@ int main(void)
     fake_fused.lon_deg = -105.11f; fake_fused.alt_m = 1655.0f;
     CHECK(beacon_transmit_fused_data(42, 1) == 1);
     tick_ms += 12000;
-    RF_Parser_Reset();
+    RF_Parser_Init();   /* full parser reset (incl. raw-GPS freshness) */
     CHECK(RF_Parser_ParseFusedPacket(tx_buf, (uint16_t)tx_len) == RF_PARSER_OK);
     GPS_Data g;
     CHECK(RF_Parser_GetParsedData(&g, NULL, 0, NULL) == 1);
