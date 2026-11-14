@@ -39,7 +39,11 @@ to repopulate the target.
 ## On the pad, before arming
 
 3. Power/arm the beacon. Within ~30 s the receiver locks its channel and
-   shows the callsign `KE0MZS-<id> CH<n>` (RF mode). Confirm `<id>` and
+   shows the callsign `KE0MZS-<id> CH<n>` (RF mode). That holds during the
+   beacon's first minute (a heartbeat every 5 s); after that its quiet pad
+   sends one packet a minute, so a receiver booted later starts on the
+   channel it last locked and catches the beacon there within ~62 s - on
+   any other channel, pick it on Rocket Select. Confirm `<id>` and
    `<n>` match the labels on the airframe and the jumper you mean to fly.
 4. **PRE-FLIGHT page** — every row means something you can fix now:
    - `TX LINK OK Ns` counts every packet from the beacon. On the quiet pad

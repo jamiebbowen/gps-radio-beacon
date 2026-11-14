@@ -716,7 +716,15 @@ int main(void)
    * hopped off CH-boot without ever listening there and burned a full 52 s
    * lap before coming back (measured: every logged boot locked at ~61 s). */
   if (rf_initialized && RF_Receiver_IsScanning()) {
-    RF_Receiver_StartScan();
+    /* Start on the channel the receiver last locked: a beacon already in
+     * its quiet pad sends one packet a minute, which the 62 s first dwell
+     * there outwaits (a 6.5 s-per-channel lap catches it ~1 time in 8). */
+    uint8_t last_ch = 0;
+    if (sd_card_ok && SD_Card_LoadLastChannel(&last_ch) == SD_CARD_OK) {
+      RF_Receiver_StartScanFrom(last_ch);
+    } else {
+      RF_Receiver_StartScan();
+    }
   }
 
   /* The IWDG was armed at the top of boot; the loop just feeds it. */
@@ -836,6 +844,7 @@ int main(void)
           snprintf(ch_msg, sizeof(ch_msg), "RF manual CH%u %.2fMHz",
                    (unsigned)after, LORA_CHANNEL_FREQ_MHZ(after));
           SD_Card_LogEvent(ch_msg);
+          (void)SD_Card_SaveLastChannel(after);   /* next boot scans here first */
         }
       }
       mode_change_time = HAL_GetTick();
@@ -953,6 +962,7 @@ int main(void)
          * may not exist yet (no NAV row before the first position packet) */
         SD_Card_EnsureLogFile();
         SD_Card_LogEvent(ch_msg);
+        (void)SD_Card_SaveLastChannel(locked_ch);   /* next boot scans here first */
       }
       force_display_update = 1;
     }

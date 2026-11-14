@@ -185,6 +185,11 @@ uint32_t RF_Receiver_GetSweepTick(uint8_t ch);
 
 /* Boot-time channel scan: hop channels until a CRC-valid packet is heard */
 void    RF_Receiver_StartScan(void);
+/* Boot scan from a remembered channel: new airframe context on `channel`,
+ * a first dwell of RF_SCAN_REACQ_DWELL_MS there with no CAD sniffing (it
+ * outwaits a quiet-pad beacon's one-a-minute heartbeat), then the normal
+ * dwell lap. Out-of-range channels fall back to RF_Receiver_StartScan(). */
+void RF_Receiver_StartScanFrom(uint8_t channel);
 void    RF_Receiver_StopScan(void);     /* Cancel (e.g. manual channel pick) */
 uint8_t RF_Receiver_IsScanning(void);
 uint8_t RF_Receiver_ScanUpdate(void);   /* Poll from main loop; 1 = just locked */

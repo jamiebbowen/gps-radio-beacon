@@ -178,6 +178,15 @@ SD_Card_Status SD_Card_SaveQuatLock(uint8_t conv);
 SD_Card_Status SD_Card_LoadQuatLock(uint8_t *conv);
 
 /**
+ * @brief Remember / recall the channel the receiver last locked (LASTCH.BIN:
+ *        magic, channel, checksum). The boot scan starts there.
+ * @retval SD_CARD_OK, or SD_CARD_ERROR (no card, no/corrupt file, channel
+ *         >= LORA_CHANNEL_COUNT)
+ */
+SD_Card_Status SD_Card_SaveLastChannel(uint8_t channel);
+SD_Card_Status SD_Card_LoadLastChannel(uint8_t *channel);
+
+/**
  * @brief Load a magnetic-declination override from DECLIN.TXT (ASCII deg).
  * @retval SD_CARD_OK if a file was present and in [-30..+30]; else ERROR
  *         and the compile-time Denver default stays in effect.

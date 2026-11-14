@@ -490,6 +490,40 @@ TEST(test_beacon_persistence_validation)
     CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_ERROR);
 }
 
+TEST(test_last_channel_persistence)
+{
+    /* The boot scan starts on the channel the receiver last locked: a
+     * beacon in its quiet pad sends only one packet a minute */
+    wipe_card();
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+    uint8_t ch = 0xEE;
+    CHECK(SD_Card_LoadLastChannel(&ch) == SD_CARD_ERROR);     /* none yet */
+    CHECK(SD_Card_SaveLastChannel(LORA_CHANNEL_COUNT) == SD_CARD_ERROR);
+    CHECK(SD_Card_SaveLastChannel(5) == SD_CARD_OK);
+    CHECK(SD_Card_LoadLastChannel(&ch) == SD_CARD_OK && ch == 5);
+    CHECK(SD_Card_LoadLastChannel(NULL) == SD_CARD_ERROR);
+
+    /* Survives a power cycle */
+    sd_deinit();
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+    ch = 0;
+    CHECK(SD_Card_LoadLastChannel(&ch) == SD_CARD_OK && ch == 5);
+
+    /* A corrupt checksum is rejected */
+    lfs_file_t f;
+    uint8_t raw[LASTCH_FILE_LEN];
+    CHECK(lfs_file_opencfg(&lfs, &f, LASTCH_FILENAME, LFS_O_RDONLY,
+                           &adhoc_file_cfg) == 0);
+    CHECK(lfs_file_read(&lfs, &f, raw, LASTCH_FILE_LEN) == LASTCH_FILE_LEN);
+    lfs_file_close(&lfs, &f);
+    raw[LASTCH_FILE_LEN - 1] ^= 0x01;
+    CHECK(lfs_file_opencfg(&lfs, &f, LASTCH_FILENAME,
+                           LFS_O_WRONLY | LFS_O_TRUNC, &adhoc_file_cfg) == 0);
+    lfs_file_write(&lfs, &f, raw, LASTCH_FILE_LEN);
+    lfs_file_close(&lfs, &f);
+    CHECK(SD_Card_LoadLastChannel(&ch) == SD_CARD_ERROR);
+}
+
 TEST(test_quatlock_persistence)
 {
     wipe_card();
@@ -1019,6 +1053,7 @@ int main(void)
     run_test_raw_nav_row_flags_carry_beacon_fix_type();
     run_test_apis_reject_when_uninitialized();
     run_test_beacon_persistence_validation();
+    run_test_last_channel_persistence();
     run_test_quatlock_persistence();
     run_test_deferred_sync_powercut_staleness_bound();
     run_test_self_test_pass_and_write_failure();

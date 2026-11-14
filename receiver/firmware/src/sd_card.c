@@ -28,6 +28,7 @@
 #include "display.h"
 #include "lfs.h"
 #include "lfs_sd_bd.h"
+#include "lora.h"        /* LORA_CHANNEL_COUNT */
 /* sd_diskio.h drags in old FatFS headers the host test harness lacks;
  * forward-declare the one symbol we need instead. */
 uint8_t SD_StepSpeedDown(void);
@@ -54,6 +55,13 @@ uint8_t SD_FastSpeedEnabled(void);
 #define QLOCK_FILE_LEN      4     /* magic0, magic1, conv, csum */
 
 #define BEACON_FILENAME     "BEACON.TXT"
+
+/* Last-locked channel: the boot scan starts there (a beacon in its quiet
+ * pad sends one packet a minute). */
+#define LASTCH_FILENAME     "LASTCH.BIN"
+#define LASTCH_MAGIC_0      0x4C  /* 'L' */
+#define LASTCH_MAGIC_1      0x43  /* 'C' */
+#define LASTCH_FILE_LEN     4     /* magic0, magic1, channel, csum */
 
 /* Private variables ---------------------------------------------------------*/
 static lfs_t         lfs;
@@ -872,6 +880,41 @@ SD_Card_Status SD_Card_SaveQuatLock(uint8_t conv)
     lfs_ssize_t w = lfs_file_write(&lfs, &f, buf, QLOCK_FILE_LEN);
     int close_err = lfs_file_close(&lfs, &f);
     return (w == QLOCK_FILE_LEN && close_err == 0) ? SD_CARD_OK : SD_CARD_ERROR;
+}
+
+SD_Card_Status SD_Card_SaveLastChannel(uint8_t channel)
+{
+    if (channel >= LORA_CHANNEL_COUNT) return SD_CARD_ERROR;
+    if (!sd_initialized || !lfs_mounted) return SD_CARD_ERROR;
+
+    uint8_t buf[LASTCH_FILE_LEN] = { LASTCH_MAGIC_0, LASTCH_MAGIC_1, channel,
+                                     (uint8_t)(channel ^ 0x5A) };
+    lfs_file_t f;
+    if (LFS_OPEN(&lfs, &f, LASTCH_FILENAME,
+                 LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC) != 0) {
+        return SD_CARD_ERROR;
+    }
+    lfs_ssize_t w = lfs_file_write(&lfs, &f, buf, LASTCH_FILE_LEN);
+    int close_err = lfs_file_close(&lfs, &f);
+    return (w == LASTCH_FILE_LEN && close_err == 0) ? SD_CARD_OK : SD_CARD_ERROR;
+}
+
+SD_Card_Status SD_Card_LoadLastChannel(uint8_t *channel)
+{
+    if (!channel) return SD_CARD_ERROR;
+    if (!sd_initialized || !lfs_mounted) return SD_CARD_ERROR;
+
+    lfs_file_t f;
+    if (LFS_OPEN(&lfs, &f, LASTCH_FILENAME, LFS_O_RDONLY) != 0) return SD_CARD_ERROR;
+    uint8_t buf[LASTCH_FILE_LEN];
+    lfs_ssize_t r = lfs_file_read(&lfs, &f, buf, LASTCH_FILE_LEN);
+    lfs_file_close(&lfs, &f);
+    if (r != LASTCH_FILE_LEN) return SD_CARD_ERROR;
+    if (buf[0] != LASTCH_MAGIC_0 || buf[1] != LASTCH_MAGIC_1) return SD_CARD_ERROR;
+    if (buf[2] >= LORA_CHANNEL_COUNT) return SD_CARD_ERROR;
+    if (buf[3] != (uint8_t)(buf[2] ^ 0x5A)) return SD_CARD_ERROR;
+    *channel = buf[2];
+    return SD_CARD_OK;
 }
 
 SD_Card_Status SD_Card_LoadQuatLock(uint8_t *conv)
