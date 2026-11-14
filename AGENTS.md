@@ -54,6 +54,12 @@ explicit `make -C receiver/firmware flash` or `make -C transmitter/firmware uplo
   page buffer and byte ADDR; keep it that way.
 - Encode wire/flash integers with the saturating helpers in
   `transmitter/firmware/include/fixed_point.h`, never a bare cast.
+- **`yield()` is the TX's IMU service hook.** `firmware.ino` defines it:
+  RadioLib's blocking `transmit()` (~1 s per packet) calls it on every turn
+  of its wait, and while `radio_tx_blocking()` it runs `launch_detect_update()`
+  + `nav_predict()`. Keep it re-entrancy-guarded and rate-limited, never touch
+  the radio or SPI from it, and build with the Arduino USB stack (TinyUSB
+  defines its own `yield()`; the sketch `#error`s on it).
 
 ## Testing conventions
 
