@@ -125,6 +125,36 @@ CHECKED += 1
 if "OK - no watchdog resets" in wd_boot:
     FAILURES.append("watchdog resets present but the boot section says OK")
 
+# Every event prefix log_summary keys on must still be a message the
+# receiver firmware can write: a renamed message silently drops out of
+# the summary (the IWDG wording once did). Compared against the static
+# part of each C string literal (up to its first % conversion); a
+# template like "RESET src=%s" also needs the rest ("IWDG") as a literal.
+import glob
+_repo = pathlib.Path(__file__).resolve().parent.parent
+_prefixes = sorted(set(re.findall(r'msg\.startswith\("([^"]+)"\)',
+                                  (_repo / "tools" / "log_summary.py").read_text())))
+_lits = []
+for _f in glob.glob(str(_repo / "receiver" / "firmware" / "src" / "**" / "*.c"), recursive=True):
+    _lits += re.findall(r'"((?:[^"\\]|\\.)*)"', open(_f, errors="ignore").read())
+_static = [l.split("%", 1)[0] for l in _lits]
+for _p in _prefixes:
+    CHECKED += 1
+    _need = min(len(_p), 6)
+    _ok = False
+    for _s in _static:
+        if len(_s) < _need:
+            continue
+        if _s.startswith(_p):
+            _ok = True
+        elif _p.startswith(_s):
+            _rest = _p[len(_s):].strip()
+            _ok = not _rest or any(l.startswith(_rest) for l in _lits)
+        if _ok:
+            break
+    if not _ok:
+        FAILURES.append(f"log_summary keys on {_p!r}, but no receiver firmware message starts with it")
+
 if FAILURES:
     for f in FAILURES:
         print(f"FAIL: {f}")
