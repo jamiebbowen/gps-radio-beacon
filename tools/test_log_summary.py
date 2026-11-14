@@ -103,6 +103,17 @@ expect("GPS: 1 rows", out)                                # NAV row accounting
 expect("RSSI [-85..-85]", out)
 expect("Operator track: 2 fixes, 30:00..30:30", out)      # BASE row accounting
 
+# Fused dead-reckoning share: FusedFlags (column 12) bit1 = DR. Reported
+# from the FUS rows themselves - this log has no BASE rows.
+FUS_LOG = """Timestamp,Type,Data
+0.000,EVENT,RESET src=POR vdd=3290mV
+10.000,NAV,FUS,39.890,-105.115,1650.0,9,1.0,0.0,0.0,0,0x05,39.0,-105.0,1000.0,1.00,12.0,90.0,-85,-5
+11.500,NAV,FUS,39.890,-105.115,1650.0,9,1.0,0.0,0.0,255,0x03,39.0,-105.0,1000.0,1.00,12.0,90.0,-86,-5
+""".strip() + "\n"
+fus_out = run_report(FUS_LOG)
+expect("FUS: 2 rows", fus_out)
+expect("FUS: 1 dead-reckoning rows (50%)", fus_out)
+
 # The empty-section "OK" lines must NOT claim OK when content exists
 boot_idx = out.index("== Boot / reset ==")
 rf_idx = out.index("== RF link ==")

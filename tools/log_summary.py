@@ -169,7 +169,15 @@ def parse_file(path, sess):
                         snr = int(cols[19])
                     except ValueError:
                         rssi = snr = 0
-                    sess.add_nav(t, src, rssi, snr, cols[10])
+                    sess.add_nav(t, src, rssi, snr, cols[11])  # FusedFlags
+
+
+def fused_dr(flags_hex):
+    """FUS row FusedFlags (hex byte, sd_card.c schema): bit1 = dead reckoning."""
+    try:
+        return (int(flags_hex, 16) & 0x02) != 0
+    except ValueError:
+        return False
 
 
 def print_section(title, lines, empty="OK"):
@@ -253,12 +261,11 @@ def report(sess, label):
             f"Operator track: {len(sess.base_times)} fixes, "
             f"{fmt_s(sess.base_times[0])}..{fmt_s(sess.base_times[-1])} "
             f"(BASE rows cover the beacon-blackout walk too)")
-        if src == "FUS":
-            dr = sum(1 for _, _, _, fl in rows
-                     if fl.strip().upper().endswith("D"))
-            if dr:
-                telem.append(f"FUS: {dr} dead-reckoning rows "
-                             f"({100.0 * dr / len(rows):.0f}%)")
+    fus_rows = sess.nav.get("FUS", [])
+    dr = sum(1 for _, _, _, fl in fus_rows if fused_dr(fl))
+    if dr:
+        telem.append(f"FUS: {dr} dead-reckoning rows "
+                     f"({100.0 * dr / len(fus_rows):.0f}%)")
     print_section("Telemetry", telem, empty="no NAV rows")
 
     print_section("Errors",
