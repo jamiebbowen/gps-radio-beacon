@@ -431,6 +431,7 @@ int main(void)
     CHECK(launch_detect_has_landed() == true);
     CHECK(beacon_state == BEACON_STATE_BATTERY_SAVE);
     CHECK(gps_in_flight_flag == 0);               /* landed: resets allowed */
+    CHECK(fev_code_count[FLIGHT_EVENT_NONE] == 0);  /* no code-0x00 events aired */
     /* Certified LANDED event: FLIGHT_EVENT_REPEATS copies went on the air
      * (spacing ~1.2 s << the quiet window above) and nothing else fired.
      * The landing transition also fires one final maxima copy. */

@@ -132,6 +132,52 @@ TEST(test_drogue_then_main_step_down)
     CHECK(ev_value == 600);
 }
 
+TEST(test_events_drain_without_value_out)
+{
+    /* value_out is optional: every edge still drains, worst first */
+    reset();
+    CHECK(flight_events_anomaly_code() == FLIGHT_EVENT_NONE);   /* idle */
+    scenario_airborne(1);
+    uint8_t seen[8];
+    int n = 0;
+    float vd[4] = { 3.0f, 20.0f, 6.0f, 6.0f };      /* apogee, drogue, main */
+    for (int phase = 0; phase < 4; phase++) {
+        in.v_d_ms = vd[phase];
+        for (int i = 0; i < 40; i++) {
+            now_ms += 100;
+            uint8_t e = flight_events_feed(&in, now_ms, NULL);
+            if (e != FLIGHT_EVENT_NONE && n < 8) seen[n++] = e;
+        }
+    }
+    CHECK(n == 3);
+    CHECK(seen[0] == FLIGHT_EVENT_APOGEE);
+    CHECK(seen[1] == FLIGHT_EVENT_DROGUE);
+    CHECK(seen[2] == FLIGHT_EVENT_MAIN);
+
+    /* An anomaly entry edge with no value_out */
+    in.gyro_mag_rads = 40.0f;            /* ~2300 deg/s: tumbling */
+    uint8_t e = FLIGHT_EVENT_NONE;
+    for (int i = 0; i < 40 && e == FLIGHT_EVENT_NONE; i++) {
+        now_ms += 100;
+        e = flight_events_feed(&in, now_ms, NULL);
+    }
+    CHECK(e == FLIGHT_EVENT_ANOM_TUMBLE);
+}
+
+TEST(test_climb_inside_main_window_is_not_main)
+{
+    /* Under drogue a brief upward gust (negative descent rate) sits
+     * "below the step" numerically but is not a canopy opening. */
+    reset();
+    scenario_airborne(1);
+    in.v_d_ms = 3.0f;
+    run_ms(2000, 100);              /* apogee */
+    in.v_d_ms = 20.0f;
+    CHECK(run_ms(3000, 100) == FLIGHT_EVENT_DROGUE);
+    in.v_d_ms = -1.0f;
+    CHECK(run_ms(3000, 100) != FLIGHT_EVENT_MAIN);
+}
+
 TEST(test_main_needs_a_real_prior_descent)
 {
     reset();
@@ -170,8 +216,13 @@ TEST(test_ballistic_after_grace_and_clear_hysteresis)
     in.v_d_ms = 4.0f;
     run_ms(ANOM_CLEAR_MS - 1000, 100);
     CHECK(flight_events_anomaly_active());
+    /* While the level holds, the re-announce still names the anomaly that
+     * is clearing - it used to fall back to FLIGHT_EVENT_NONE, so the
+     * beacon aired code-0x00 FLIGHT_EVENT packets for the whole window. */
+    CHECK(flight_events_anomaly_code() == FLIGHT_EVENT_ANOM_BALLISTIC);
     run_ms(2000, 100);              /* crosses ANOM_CLEAR_MS of all-clear */
     CHECK(!flight_events_anomaly_active());
+    CHECK(flight_events_anomaly_code() == FLIGHT_EVENT_NONE);
 }
 
 TEST(test_anomaly_value_saturates_not_wraps)
@@ -279,6 +330,8 @@ int main(void)
     run_test_apogee_rejects_brief_dips_and_early_launch();
     run_test_drogue_then_main_step_down();
     run_test_main_needs_a_real_prior_descent();
+    run_test_events_drain_without_value_out();
+    run_test_climb_inside_main_window_is_not_main();
     run_test_ballistic_after_grace_and_clear_hysteresis();
     run_test_anomaly_value_saturates_not_wraps();
     run_test_ballistic_grace_recovers_if_drogue_opens_late();

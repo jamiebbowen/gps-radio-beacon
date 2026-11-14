@@ -24,6 +24,10 @@ static struct {
     uint32_t sensor_since;
 
     uint8_t  anomaly_active;
+
+    uint8_t  anom_code;       /* worst active anomaly; held through the
+
+                                * all-clear window for the re-announce */
     uint32_t all_clear_since;       /* 0 = a condition is currently held  */
 
     /* Pending (detected, not yet handed to the caller) one-shots.
@@ -42,15 +46,6 @@ static int held(uint32_t *timer, int cond, uint32_t now_ms, uint32_t hold_ms)
 }
 
 static int16_t cms(float v) { return sat_i16(v * 100.0f); }   /* never wraps */
-
-static uint8_t current_anomaly_code(void)
-{
-    if (s.anom_ballistic) return FLIGHT_EVENT_ANOM_BALLISTIC;
-    if (s.anom_tumble)    return FLIGHT_EVENT_ANOM_TUMBLE;
-    if (s.anom_sensor)    return FLIGHT_EVENT_ANOM_SENSOR_LOSS;
-    if (s.anom_gps)       return FLIGHT_EVENT_ANOM_GPS_OUTAGE;
-    return FLIGHT_EVENT_NONE;
-}
 
 void flight_events_init(void)
 {
@@ -84,6 +79,14 @@ uint8_t flight_events_feed(const flight_events_input_t *in,
     uint8_t any_anom = s.anom_ballistic || s.anom_tumble ||
                        s.anom_sensor || s.anom_gps;
     if (any_anom) {
+        /* Worst first. Latched here (not derived on demand) so that during
+         * the all-clear hysteresis - level still active, every flag already
+         * down - the re-announce keeps naming the anomaly instead of
+         * airing FLIGHT_EVENT_NONE. */
+        s.anom_code = s.anom_ballistic ? FLIGHT_EVENT_ANOM_BALLISTIC :
+                      s.anom_tumble    ? FLIGHT_EVENT_ANOM_TUMBLE :
+                      s.anom_sensor    ? FLIGHT_EVENT_ANOM_SENSOR_LOSS :
+                                         FLIGHT_EVENT_ANOM_GPS_OUTAGE;
         s.all_clear_since = 0;
         if (!s.anomaly_active) {
             s.anomaly_active = 1;
@@ -112,10 +115,7 @@ uint8_t flight_events_feed(const flight_events_input_t *in,
             s.apogee_done = 1;
             s.apogee_t_ms = now_ms;
             s.pend_apogee = 1;
-            float alt = in->alt_m;
-            if (alt > 32767.0f) alt = 32767.0f;
-            if (alt < -32768.0f) alt = -32768.0f;
-            s.pend_apogee_val = sat_i16(alt);
+            s.pend_apogee_val = sat_i16(in->alt_m);   /* saturates */
             s.max_vd_since_apogee = in->v_d_ms;
         }
 
@@ -152,7 +152,7 @@ uint8_t flight_events_feed(const flight_events_input_t *in,
     if (s.pend_anomaly) {
         s.pend_anomaly = 0;
         if (value_out) *value_out = cms(in->v_d_ms);
-        return current_anomaly_code();
+        return s.anom_code;
     }
     if (s.pend_apogee) {
         s.pend_apogee = 0;
@@ -179,5 +179,5 @@ uint8_t flight_events_anomaly_active(void)
 
 uint8_t flight_events_anomaly_code(void)
 {
-    return s.anomaly_active ? current_anomaly_code() : FLIGHT_EVENT_NONE;
+    return s.anomaly_active ? s.anom_code : FLIGHT_EVENT_NONE;
 }
