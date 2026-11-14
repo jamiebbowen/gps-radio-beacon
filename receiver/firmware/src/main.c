@@ -30,6 +30,7 @@
 #include "stm32f4xx_hal_spi.h"
 #include "gps.h"
 #include "gps_parser.h"
+#include "log_policy.h"
 #include "compass.h"
 #include "globals.h"
 #include "i2c_bus.h"
@@ -1211,30 +1212,32 @@ int main(void)
         uint32_t sd_werr = (SD_Card_GetInfo(&sd_i) == SD_CARD_OK) ? sd_i.write_errors : 0;
         uint32_t sd_syncs = SD_Card_TakeSyncCount();   /* verify burst cadence dropped */
 
-        /* Live-link floor: valid even mid-flight where the quiet-gated
-         * alert estimate parks (was nf=n/a for whole flights - L0016). */
-        char nfl_field[24] = "";
+        /* The RFSTATS row (log_policy.c). nfl, the live-link floor, is
+         * valid even mid-flight where the quiet-gated alert estimate (nf)
+         * parks (was nf=n/a for whole flights - L0016). */
+        LogPolicy_RfStats_t rs = {0};
         int16_t nfl = 0;
-        if (RF_Receiver_GetLiveNoiseFloor(&nfl)) {
-          snprintf(nfl_field, sizeof(nfl_field), " nfl=%ddBm", (int)nfl);
-        }
-
-        char nf_field[12] = "n/a";
-        if (RF_Receiver_GetNoiseFloor(&nf)) {
-          snprintf(nf_field, sizeof(nf_field), "%ddBm", (int)nf);
-        }
-
+        rs.pkts = pkts;
+        rs.irqs = irqs;
+        rs.crc = RF_Receiver_GetCrcErrors();
+        rs.wedges = RF_Receiver_GetWedgesRecovered();
+        rs.nf_valid = RF_Receiver_GetNoiseFloor(&nf) ? 1 : 0;
+        rs.nf_dbm = nf;
+        rs.vdd_mv = sys_vdd_mv;
+        rs.loop_ms = loop_max;
+        rs.sd_ms = sd_max;
+        rs.syncs = sd_syncs;
+        rs.spidiv = (uint8_t)SD_FastSpeedEnabled();
+        rs.rf_ms = m_rf;
+        rs.gps_ms = m_gps;
+        rs.disp_ms = m_disp;
+        rs.cmp_ms = m_cmp;
+        rs.iters = loops_d;
+        rs.sderr = sd_werr;
+        rs.nfl_valid = RF_Receiver_GetLiveNoiseFloor(&nfl) ? 1 : 0;
+        rs.nfl_dbm = nfl;
         char st_msg[200];
-        snprintf(st_msg, sizeof(st_msg),
-                 "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%s vdd=%umV loop=%lums sd=%lums syncs=%lu spidiv=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu%s",
-                 (unsigned long)pkts, (unsigned long)irqs,
-                 (unsigned long)RF_Receiver_GetCrcErrors(),
-                 (unsigned long)RF_Receiver_GetWedgesRecovered(), nf_field,
-                 (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max,
-                 (unsigned long)sd_syncs, (unsigned)SD_FastSpeedEnabled(),
-                 (unsigned long)m_rf, (unsigned long)m_gps,
-                 (unsigned long)m_disp, (unsigned long)m_cmp,
-                 (unsigned long)loops_d, (unsigned long)sd_werr, nfl_field);
+        LogPolicy_FormatRfStats(&rs, st_msg, sizeof(st_msg));
         SD_Card_LogEvent(st_msg);
       }
     }
@@ -1483,21 +1486,11 @@ int main(void)
               int8_t  pkt_snr;
               RF_Receiver_GetSignalQuality(&pkt_rssi, &pkt_snr);
 
-              /* Link-edge breadcrumbs: the crossing moments mark the
-               * walk-out/walk-back edge without needing post-hoc RSSI
-               * archaeology. -85/-80 hysteresis keeps flutter out. */
-              static uint8_t link_weak = 0;
-              if (!link_weak && pkt_rssi <= -85) {
-                link_weak = 1;
-                char wk[48];
-                snprintf(wk, sizeof(wk), "LINK WEAK rssi=%ddBm snr=%d",
-                         (int)pkt_rssi, (int)pkt_snr);
-                SD_Card_LogEvent(wk);
-              } else if (link_weak && pkt_rssi >= -80) {
-                link_weak = 0;
-                char wk[48];
-                snprintf(wk, sizeof(wk), "LINK OK rssi=%ddBm snr=%d",
-                         (int)pkt_rssi, (int)pkt_snr);
+              /* Link-edge breadcrumbs (log_policy.c): the walk-out /
+               * walk-back edge, with hysteresis. */
+              static LogPolicy_LinkEdge_t link_edge;
+              char wk[48];
+              if (LogPolicy_LinkEdge(&link_edge, pkt_rssi, pkt_snr, wk, sizeof(wk))) {
                 SD_Card_LogEvent(wk);
               }
 
@@ -1617,28 +1610,13 @@ int main(void)
     last_compass_update = current_time;
   }
   
-  /* SD session marker: log the moment contact is lost (once per loss), so
-   * post-flight log review can tell "signal lost at T" from "operator
-   * stopped logging". Re-arms when contact resumes. 5 min matches the
-   * auto re-scan threshold: far beyond the slowest beacon cadence (60 s). */
-  static uint8_t lost_logged = 0;
-  static uint32_t lost_since_ms = 0;
-  if (last_rf_packet_time > 0 && current_time - last_rf_packet_time > 300000) {
-    if (!lost_logged) {
-      lost_logged = 1;
-      lost_since_ms = current_time;
-      SD_Card_LogEvent("RF LOST (>5min silence)");
-    }
-  } else if (last_rf_packet_time > 0) {
-    if (lost_logged) {
-      /* First packet after a logged blackout: the gap's true length is
-       * forensic data (beacon recovery vs receiver wedge vs geometry). */
-      char rg_msg[48];
-      snprintf(rg_msg, sizeof(rg_msg), "RF REGAINED after %lus",
-               (unsigned long)((current_time - lost_since_ms) / 1000u));
-      SD_Card_LogEvent(rg_msg);
-    }
-    lost_logged = 0;
+  /* SD session marker (log_policy.c): one RF LOST row per silence over
+   * 5 min, then RF REGAINED with the whole silence's length. */
+  static LogPolicy_Contact_t contact;
+  char contact_msg[48];
+  if (LogPolicy_Contact(&contact, last_rf_packet_time, current_time,
+                        contact_msg, sizeof(contact_msg))) {
+    SD_Card_LogEvent(contact_msg);
   }
 
   /* Check if RF data is stale (no updates for more than 180 seconds) */

@@ -21,6 +21,7 @@ make clean
 | `math_utils.c` — haversine, bearing, angles, `Nav_Compute` | `test_math_utils.c` | 100% / 80.8% |
 | `rf_receiver.c` — scan/wedge/re-acquisition, binding, heartbeats, PING scheduler | `test_rf_receiver.c` | 99.7% / 89.6% |
 | `preflight_eval.c` — the shared go/no-go evaluation | `test_preflight_eval.c` | 100% / 100% |
+| `log_policy.c` — main.c's SD breadcrumbs: link edges, contact loss, RFSTATS row | `test_log_policy.c` | 100% / 100% |
 | `button.c` — debounce/short/long-press policy | `test_button.c` | 100% / 90.0% |
 | `display.c` — SSD1309 driver incl. headless I2C fault ladder | `test_display.c` | 100% / 97.7% |
 | `gps.c` — sentence RX path, FIFO drop-oldest, watchdog, rx stats | `test_gps.c` | 100% / 96.7% |

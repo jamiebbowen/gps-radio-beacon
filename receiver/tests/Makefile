@@ -37,7 +37,7 @@ SRC_DIR  := ../firmware/src
 HEADERS := $(wildcard ../firmware/inc/*.h ../firmware/inc/display_modes/*.h test_harness.h stubs/*.h) Makefile
 
 # Modules with a matching test_<module>.c and $(SRC_DIR)/<module>.c
-MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass i2c_bus jogpad eink sd_diskio preflight_eval
+MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass i2c_bus jogpad eink sd_diskio preflight_eval log_policy
 BINS     := $(addprefix $(BUILD)/test_,$(MODULES)) \
             $(BUILD)/test_navigation_mode $(BUILD)/test_preflight_mode \
             $(BUILD)/test_display_modes $(BUILD)/test_fuzz_parsers
