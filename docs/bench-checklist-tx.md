@@ -42,6 +42,9 @@ runbook is `launch-day.md`.
       cause. Trigger a button reset once while armed and check the receiver
       SD log records a reset-cause transition line.
 
+- [ ] DUMP output starts with the IMU units note; IMU rows written by this
+      firmware end with `,3` (V3 units).
+
 ## 2. GPS path
 
 - [ ] `[GPS] ✓ Fix:` lines appear once per second after lock; sats climb to
@@ -55,12 +58,17 @@ runbook is `launch-day.md`.
 
 - [ ] Unplug the GPS antenna (or shade it under metal): within ~30 s
       `[GPS] Watchdog: No UART data` or within ~60 s `No valid fix` prints,
-      followed by `Recovery attempt complete`.
+      then `Recovery: UBX-CFG-RST hot start` and `Recovery attempt
+      complete`. Leave it out: the next attempts print `warm start`, then
+      `cold start` (the heartbeat's `rst=` count climbs 1-3).
 - [ ] Reconnect: fixes resume without a reboot.
 - [ ] If you leave it unplugged long enough to see
       `Recovery failed after 3 attempts - cooling down`, that is the
       three-strikes cooldown; `cooldown over, re-arming` should follow.
       Persistent failure here = module/wiring fault, not firmware.
+- [ ] In flight the watchdog never resets the module: during a GPS-altitude
+      fallback launch (section 6) a fault prints `settings re-send only (in
+      flight)` instead of a UBX-CFG-RST line.
 
 ## 4. IMU launch path (shake test)
 
@@ -96,6 +104,10 @@ cold boot - that is correct, not a missed resume.
       `[Boot] *** mid-flight reboot: resuming flight ***` and the
       receiver's SD log gains an anomaly event - the flight record
       continues appending into the surviving log instead of erasing it.
+- [ ] After the resume banner the beacon leaves continuous TX within a few
+      seconds (POST_LAUNCH) and the callsign airs again within 5 minutes.
+      (A resumed flight used to stay in LAUNCH for good, never airing the
+      callsign.)
 - [ ] **Optional field verification without flying**: take the beacon up
       ~50 m of real elevation (a hill drive or 15+ flights of stairs with
       GPS view) - the GPS-altitude fallback prints `GPS-alt fallback:
