@@ -133,9 +133,15 @@ static uint32_t scan_cad_deadline = 0;   /* per-state timeout */
 static uint8_t scan_cad_strikes = 0;     /* consecutive timed-out CADs */
 
 /* Last heartbeat received (no-fix keepalive from the beacon) */
-static HeartbeatPacket_t last_heartbeat;
+static HeartbeatPacket_t last_heartbeat;      /* newest heard, any rocket (log) */
 static uint8_t heartbeat_pending = 0;
-static uint32_t last_heartbeat_time = 0;   /* 0 = never heard one */
+static RF_HbInfo_t heartbeat_info;            /* context of the pending one     */
+static HeartbeatPacket_t own_heartbeat;       /* newest from OUR beacon (pages) */
+static uint32_t own_heartbeat_time = 0;       /* 0 = never heard one            */
+/* TX-reset detector, our beacon only: a new binding or channel restarts it */
+static uint8_t  hb_track_init = 0;
+static uint16_t hb_prev_uptime = 0;
+static uint8_t  hb_prev_reset_info = 0;
 
 /* Flight-window forensics: inertial trace + certified launch T0 */
 static ImuTracePacket_t last_imu_trace;
@@ -288,6 +294,9 @@ static uint8_t RF_RocketFilter(uint8_t has_id, uint8_t id)
     }
     if (bound_rocket_id == RF_ROCKET_UNBOUND) {
         bound_rocket_id = id;
+        /* A new airframe: its heartbeats owe nothing to the last one's */
+        hb_track_init = 0;
+        own_heartbeat_time = 0;
     }
     if (bound_rocket_id == id) {
         last_identified_ms = HAL_GetTick();
@@ -599,12 +608,30 @@ uint8_t RF_Receiver_DataAvailable(void)
          * gps_health byte; zero-fill decodes it as HB_GPS_UNKNOWN.
          * Foreign heartbeats are still recorded (they are useful "someone
          * else is on this channel" intel) - they just can't steal the
-         * binding and never touch position state. */
+         * binding, never touch position state, and never feed the pages'
+         * heartbeat rows or the TX-reset detector. */
         memset(&last_heartbeat, 0, sizeof(last_heartbeat));
         memcpy(&last_heartbeat, last_packet.data, last_packet.length);
-        (void)RF_RocketFilter(1, last_heartbeat.rocket_id);
+        uint8_t ours = RF_RocketFilter(1, last_heartbeat.rocket_id);
+        memset(&heartbeat_info, 0, sizeof(heartbeat_info));
+        heartbeat_info.foreign = ours ? 0 : 1;
+        if (ours) {
+          own_heartbeat = last_heartbeat;
+          own_heartbeat_time = HAL_GetTick();
+          if (hb_track_init) {
+            if (last_heartbeat.uptime_s < hb_prev_uptime) {
+              heartbeat_info.reset_event = RF_HB_UPTIME_REGRESSED;
+            } else if (last_heartbeat.reset_info != hb_prev_reset_info) {
+              heartbeat_info.reset_event = RF_HB_CAUSE_CHANGED;
+            }
+          }
+          heartbeat_info.prev_uptime = hb_prev_uptime;
+          heartbeat_info.prev_reset_info = hb_prev_reset_info;
+          hb_prev_uptime = last_heartbeat.uptime_s;
+          hb_prev_reset_info = last_heartbeat.reset_info;
+          hb_track_init = 1;
+        }
         heartbeat_pending = 1;
-        last_heartbeat_time = HAL_GetTick();
       } else {
         /* The callsign ("CALLSIGN-id CHn") has no type byte and a variable
          * length, so it matches none of the typed branches above. Route
@@ -851,7 +878,8 @@ static uint8_t RF_SetChannelCtx(uint8_t channel, uint8_t new_context)
   noise_sample_idx = 0;
   noise_alert_active = 0;
   heartbeat_pending = 0;
-  last_heartbeat_time = 0;
+  own_heartbeat_time = 0;
+  hb_track_init = 0;
   if (new_context) {
     bound_rocket_id = RF_ROCKET_UNBOUND;
     last_callsign_ms = 0;
@@ -891,33 +919,35 @@ uint8_t RF_Receiver_NextChannel(void)
 }
 
 /**
- * @brief Get the last received heartbeat (one-shot)
- * @param hb Output buffer for the heartbeat packet
+ * @brief Get the last received heartbeat, any rocket (one-shot, for the log)
+ * @param hb   Output buffer for the heartbeat packet
+ * @param info Output: foreign flag and our beacon's reset event (may be NULL)
  * @retval 1 if a new heartbeat arrived since the last call, 0 otherwise
  */
-uint8_t RF_Receiver_GetHeartbeat(HeartbeatPacket_t *hb)
+uint8_t RF_Receiver_GetHeartbeat(HeartbeatPacket_t *hb, RF_HbInfo_t *info)
 {
   if (!heartbeat_pending || hb == NULL) {
     return 0;
   }
   memcpy(hb, &last_heartbeat, sizeof(*hb));
+  if (info) *info = heartbeat_info;
   heartbeat_pending = 0;
   return 1;
 }
 
 /**
- * @brief Get the last heartbeat without consuming it (for display)
+ * @brief Get OUR beacon's last heartbeat without consuming it (for display)
  * @param hb Output buffer for the heartbeat packet (may be NULL)
  * @param age_ms Output: milliseconds since it was received (may be NULL)
- * @retval 1 if a heartbeat has ever been received on this channel, 0 otherwise
+ * @retval 1 if our beacon has sent one on this channel, 0 otherwise
  */
 uint8_t RF_Receiver_GetLastHeartbeat(HeartbeatPacket_t *hb, uint32_t *age_ms)
 {
-  if (last_heartbeat_time == 0) {
+  if (own_heartbeat_time == 0) {
     return 0;
   }
-  if (hb) memcpy(hb, &last_heartbeat, sizeof(*hb));
-  if (age_ms) *age_ms = HAL_GetTick() - last_heartbeat_time;
+  if (hb) memcpy(hb, &own_heartbeat, sizeof(*hb));
+  if (age_ms) *age_ms = HAL_GetTick() - own_heartbeat_time;
   return 1;
 }
 

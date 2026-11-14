@@ -57,7 +57,21 @@ uint8_t RF_Receiver_GetChannel(void);
 uint8_t RF_Receiver_NextChannel(void);  /* Cycle to next channel; returns the now-active channel */
 
 /* No-fix heartbeat from the beacon (one-shot; 1 = new heartbeat copied) */
-uint8_t RF_Receiver_GetHeartbeat(HeartbeatPacket_t *hb);
+/* Context computed when a heartbeat arrives (see RF_Receiver_GetHeartbeat).
+ * reset_event / prev_* describe OUR beacon only; a foreign heartbeat (another
+ * rocket on the channel) is intel for the log and never feeds them. */
+typedef enum {
+  RF_HB_RESET_NONE = 0,
+  RF_HB_UPTIME_REGRESSED,    /* uptime went backwards: the TX rebooted     */
+  RF_HB_CAUSE_CHANGED        /* reset-cause byte changed, uptime still up  */
+} RF_HbResetEvent_t;
+typedef struct {
+  uint8_t  foreign;          /* 1 = another rocket's heartbeat             */
+  uint8_t  reset_event;      /* RF_HbResetEvent_t                          */
+  uint16_t prev_uptime;      /* our previous heartbeat's uptime_s          */
+  uint8_t  prev_reset_info;  /* our previous heartbeat's reset_info        */
+} RF_HbInfo_t;
+uint8_t RF_Receiver_GetHeartbeat(HeartbeatPacket_t *hb, RF_HbInfo_t *info);
 
 /* Non-consuming heartbeat access for display (1 = a heartbeat has been
  * heard on the current channel; hb/age_ms filled if non-NULL) */

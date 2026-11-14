@@ -231,6 +231,17 @@ static void inject_heartbeat(uint8_t rocket_id, uint8_t channel,
     fake_pkt_pending = 1;
 }
 
+/* Heartbeat with an explicit V3 reset cause (channel 0, 5 sats) */
+static void inject_heartbeat_rc(uint8_t rocket_id, uint16_t uptime_s,
+                                uint8_t reset_info)
+{
+    inject_heartbeat(rocket_id, 0, 5, uptime_s);
+    HeartbeatPacket_t hb;
+    memcpy(&hb, fake_pkt.data, sizeof(hb));
+    hb.reset_info = reset_info;
+    memcpy(fake_pkt.data, &hb, sizeof(hb));
+}
+
 /* Legacy 7-byte heartbeat (pre-gps_health TX firmware) */
 static void inject_heartbeat_v1(uint8_t rocket_id, uint8_t channel)
 {
@@ -440,9 +451,12 @@ TEST(test_heartbeat_lifecycle)
 {
     HeartbeatPacket_t hb;
     uint32_t age_ms = 0;
+    /* The page getter only reports OUR beacon: start unbound so rocket 3
+     * (OUR_ROCKET_ID, which later tests assume) claims the channel. */
+    bound_rocket_id = RF_ROCKET_UNBOUND;
 
     /* Nothing heard yet */
-    CHECK(RF_Receiver_GetHeartbeat(&hb) == 0);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, NULL) == 0);
     CHECK(RF_Receiver_GetLastHeartbeat(&hb, &age_ms) == 0);
 
     inject_heartbeat(3, 5, 7, 42);
@@ -453,12 +467,12 @@ TEST(test_heartbeat_lifecycle)
     CHECK(RF_Receiver_GetLastPacketTime() == 0);
 
     /* One-shot getter: first call yes, second no */
-    CHECK(RF_Receiver_GetHeartbeat(&hb) == 1);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, NULL) == 1);
     CHECK(hb.rocket_id == 3 && hb.channel == 5 && hb.satellites == 7);
     CHECK(hb.uptime_s == 42);
     CHECK(HB_GPS_STATE(hb.gps_health) == HB_GPS_ACQUIRING);
     CHECK(HB_GPS_RESETS(hb.gps_health) == 0);
-    CHECK(RF_Receiver_GetHeartbeat(&hb) == 0);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, NULL) == 0);
 
     /* Non-consuming getter keeps returning it, with a growing age */
     CHECK(RF_Receiver_GetLastHeartbeat(&hb, &age_ms) == 1);
@@ -482,11 +496,68 @@ TEST(test_heartbeat_lifecycle)
      * from whatever the radio buffer held before. */
     inject_heartbeat_v1(4, 6);
     run_for(250, 250);
-    CHECK(RF_Receiver_GetHeartbeat(&hb) == 1);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, NULL) == 1);
     CHECK(hb.rocket_id == 4 && hb.channel == 6);
     CHECK(hb.uptime_s == 99);
     CHECK(hb.gps_health == HB_GPS_UNKNOWN);
     CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    bound_rocket_id = OUR_ROCKET_ID;
+}
+
+TEST(test_heartbeat_foreign_and_reset_tracking)
+{
+    /* Two beacons on one channel: only OUR beacon's heartbeats may feed the
+     * preflight/nav pages and the TX-reset detector. A foreign heartbeat
+     * with a lower uptime used to log a false "TX reset" ERROR row. */
+    uint8_t saved_bound = bound_rocket_id;
+    bound_rocket_id = RF_ROCKET_UNBOUND;
+    HeartbeatPacket_t hb;
+    RF_HbInfo_t info;
+    uint32_t age_ms = 0;
+
+    inject_heartbeat_rc(7, 500, 0x01);        /* first ID heard: binds */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, &info) == 1);
+    CHECK(info.foreign == 0 && info.reset_event == RF_HB_RESET_NONE);
+
+    inject_heartbeat_rc(9, 20, 0x40);         /* someone else's beacon */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, &info) == 1);
+    CHECK(hb.rocket_id == 9);                 /* still logged as intel */
+    CHECK(info.foreign == 1);
+    CHECK(info.reset_event == RF_HB_RESET_NONE);
+    CHECK(RF_Receiver_GetLastHeartbeat(&hb, &age_ms) == 1);
+    CHECK(hb.rocket_id == 7);                 /* pages only see ours */
+
+    inject_heartbeat_rc(7, 505, 0x01);        /* ours, still running */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, &info) == 1);
+    CHECK(info.foreign == 0 && info.reset_event == RF_HB_RESET_NONE);
+
+    inject_heartbeat_rc(7, 3, 0x01);          /* ours rebooted */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, &info) == 1);
+    CHECK(info.reset_event == RF_HB_UPTIME_REGRESSED);
+    CHECK(info.prev_uptime == 505);
+
+    inject_heartbeat_rc(7, 8, 0x40);          /* cause register changed */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, &info) == 1);
+    CHECK(info.reset_event == RF_HB_CAUSE_CHANGED);
+    CHECK(info.prev_reset_info == 0x01);
+
+    /* A channel change starts tracking from scratch */
+    CHECK(RF_Receiver_NextChannel() == 1);
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    CHECK(RF_Receiver_GetLastHeartbeat(&hb, &age_ms) == 0);
+    bound_rocket_id = RF_ROCKET_UNBOUND;
+    inject_heartbeat_rc(7, 1, 0x01);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, &info) == 1);
+    CHECK(info.reset_event == RF_HB_RESET_NONE);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, NULL) == 0);    /* one-shot */
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    bound_rocket_id = saved_bound;
 }
 
 TEST(test_heartbeat_v3_reset_cause)
@@ -510,7 +581,7 @@ TEST(test_heartbeat_v3_reset_cause)
     run_for(250, 250);
 
     HeartbeatPacket_t out;
-    CHECK(RF_Receiver_GetHeartbeat(&out) == 1);
+    CHECK(RF_Receiver_GetHeartbeat(&out, NULL) == 1);
     CHECK(out.reset_info == HB_RESET_WDT);
     CHECK(strcmp(HB_RESET_NAME(HB_RESET_WDT),     "WDT")   == 0);
     CHECK(strcmp(HB_RESET_NAME(HB_RESET_BODVDD),  "BOD-v") == 0);
@@ -523,7 +594,7 @@ TEST(test_heartbeat_v3_reset_cause)
     inject_heartbeat(OUR_ROCKET_ID, 0, 5, 12);
     fake_pkt.length = HEARTBEAT_PACKET_SIZE_V2;
     run_for(250, 250);
-    CHECK(RF_Receiver_GetHeartbeat(&out) == 1);
+    CHECK(RF_Receiver_GetHeartbeat(&out, NULL) == 1);
     CHECK(out.reset_info == 0);
 }
 
@@ -2256,7 +2327,7 @@ TEST(test_heartbeat_uptime_regression_keeps_tracking)
     inject_heartbeat(OUR_ROCKET_ID, 0, 0, 7);
     run_for(250, 250);
     HeartbeatPacket_t hb;
-    CHECK(RF_Receiver_GetHeartbeat(&hb) == 1);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, NULL) == 1);
     CHECK(hb.uptime_s == 7);
     CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);  /* no rebind drama */
 
@@ -2282,6 +2353,7 @@ int main(void)
     run_test_channel_cycling_covers_all_channels();
     run_test_callsign_captured_in_binary_mode();
     run_test_heartbeat_lifecycle();
+    run_test_heartbeat_foreign_and_reset_tracking();
     run_test_heartbeat_v3_reset_cause();
     run_test_imu_trace_and_launch_t0();
     run_test_launch_t0_one_shot();

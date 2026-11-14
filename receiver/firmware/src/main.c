@@ -987,26 +987,25 @@ int main(void)
      * pad-wait record of sat acquisition progress. */
     if (rf_initialized && sd_card_ok) {
       HeartbeatPacket_t hb;
-      if (RF_Receiver_GetHeartbeat(&hb)) {
+      RF_HbInfo_t hbi;
+      if (RF_Receiver_GetHeartbeat(&hb, &hbi)) {
         /* Beacon-side resets are otherwise indistinguishable from a LOST
          * window at review time: the heartbeat uptime field regresses, and
          * V3 heartbeats add the boot's RCAUSE so we know WHAT. POR alone
          * is the power-cycling-a-new-pack case; everything else needs a
          * close look during post-flight. (Covers TX WDT resets and supply
-         * sags - the lfs-of-the-air.) */
-        static uint16_t prev_hb_uptime = 0;
-        static uint8_t  prev_hb_reset_info = 0;
-        static uint8_t  prev_hb_init = 0;
-        if (hb.uptime_s < prev_hb_uptime) {
+         * sags - the lfs-of-the-air.) rf_receiver tracks this per bound
+         * rocket: another beacon's heartbeats can't fake a reset. */
+        if (hbi.reset_event == RF_HB_UPTIME_REGRESSED) {
           /* A watchdog/soft restart mid-flight: uptime regresses. */
           char r_msg[64];
           snprintf(r_msg, sizeof(r_msg),
-                   "TX reset: uptime %us -> %us (unchanged cause=%s)",
-                   (unsigned)prev_hb_uptime, (unsigned)hb.uptime_s,
+                   "TX reset: uptime %us -> %us (cause=%s)",
+                   (unsigned)hbi.prev_uptime, (unsigned)hb.uptime_s,
                    HB_RESET_NAME(hb.reset_info));
           SD_Card_EnsureLogFile();
           SD_Card_LogError(r_msg);
-        } else if (prev_hb_init && prev_hb_reset_info != hb.reset_info) {
+        } else if (hbi.reset_event == RF_HB_CAUSE_CHANGED) {
           /* The cause register changed between heartbeats of a still-running
            * TX: means a mid-flight physical reset, and this message should
            * say that (the uptime didn't move, so calling it a 'reset' with
@@ -1014,16 +1013,12 @@ int main(void)
           char r_msg[80];
           snprintf(r_msg, sizeof(r_msg),
                    "TX boot cause changed: %s(0x%02X) -> %s(0x%02X) at up=%us",
-                   HB_RESET_NAME(prev_hb_reset_info), (unsigned)prev_hb_reset_info,
+                   HB_RESET_NAME(hbi.prev_reset_info), (unsigned)hbi.prev_reset_info,
                    HB_RESET_NAME(hb.reset_info), (unsigned)hb.reset_info,
                    (unsigned)hb.uptime_s);
           SD_Card_EnsureLogFile();
           SD_Card_LogError(r_msg);
         }
-        prev_hb_uptime = hb.uptime_s;
-        prev_hb_reset_info = hb.reset_info;
-        prev_hb_init = 1;
-
         int16_t hb_rssi;
         int8_t  hb_snr;
         RF_Receiver_GetSignalQuality(&hb_rssi, &hb_snr);
@@ -1031,9 +1026,10 @@ int main(void)
          * / GARBLED (bytes but no NMEA) / unk (pre-health TX firmware) */
         static const char *hb_gps_names[] = {"unk", "SILENT", "GARBLED", "acq"};
         uint8_t hb_gps = HB_GPS_STATE(hb.gps_health);
-        char hb_msg[112];   /* fits field-127 up/rssi + unknown rc name     */
+        char hb_msg[128];   /* fits field-127 up/rssi + unknown rc name     */
         snprintf(hb_msg, sizeof(hb_msg),
-                 "HEARTBEAT id=%u CH%u sats=%u fix=%u up=%us rssi=%d gps=%s rst=%u rc=%s",
+                 "HEARTBEAT%s id=%u CH%u sats=%u fix=%u up=%us rssi=%d gps=%s rst=%u rc=%s",
+                 hbi.foreign ? " FOREIGN" : "",
                  (unsigned)hb.rocket_id, (unsigned)hb.channel,
                  (unsigned)hb.satellites, (unsigned)hb.fix_quality,
                  (unsigned)hb.uptime_s, (int)hb_rssi,
