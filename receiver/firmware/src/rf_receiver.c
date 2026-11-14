@@ -165,6 +165,9 @@ static uint8_t hello_pending = 0;
  * Set for the rest of the power-on session; only an operator action or a
  * reboot clears it. Counted suppressions keep the policy visible in logs. */
 static uint8_t  flight_contact_latch = 0;
+/* The bound beacon has reported landing (LANDED flag or event): it listens
+ * for commands again, so the uplink is no longer suppressed. */
+static uint8_t  beacon_landed_seen = 0;
 static uint32_t rescan_suppression_count = 0;
 
 /* Two-way answer channel (TX -> RX) */
@@ -500,6 +503,10 @@ uint8_t RF_Receiver_DataAvailable(void)
               (last_packet.data[12] & FLAG_LAUNCH_DETECTED)) {
             flight_contact_latch = 1;
           }
+          if (last_packet.length == GPS_PACKET_SIZE &&
+              (last_packet.data[12] & FLAG_LANDED)) {
+            beacon_landed_seen = 1;
+          }
         }
       } else if ((last_packet.length == FUSED_PACKET_SIZE
                || last_packet.length == FUSED_PACKET_SIZE_V2)
@@ -525,6 +532,9 @@ uint8_t RF_Receiver_DataAvailable(void)
                                  (last_packet.data[17] & FUSED_FLAG_V3)) ? 17 : 18;
             if (last_packet.data[flags_idx] & FUSED_FLAG_LAUNCH_DETECTED) {
               flight_contact_latch = 1;
+            }
+            if (last_packet.data[flags_idx] & FUSED_FLAG_LANDED) {
+              beacon_landed_seen = 1;
             }
           }
         }
@@ -565,6 +575,7 @@ uint8_t RF_Receiver_DataAvailable(void)
           flight_event_pending = 1;
           last_packet_time = HAL_GetTick();
           flight_contact_latch = 1;   /* flight events only exist in flight */
+          if (last_flight_event.code == FLIGHT_EVENT_LANDED) beacon_landed_seen = 1;
         }
         /* V2 only: the 12-byte V1 layout (u16 gyro) never flew, and its
          * low gyro byte would decode nonsense under the u8 x16 scheme. */
@@ -1044,9 +1055,10 @@ void RF_Receiver_ServiceCommands(void)
     return;
   }
 
-  /* Never transmit at a flying beacon: it doesn't listen in flight, and
-   * every attempt would make this receiver deaf for ~1.8 s. */
-  if (flight_contact_latch) {
+  /* Never transmit at a flying beacon (launch seen, landing not yet): it
+   * doesn't listen in flight, and every attempt would make this receiver
+   * deaf for ~1.8 s. */
+  if (flight_contact_latch && !beacon_landed_seen) {
     cmd_active = 0;
     cmd_waiting = 0;
     cmd_post(RF_CMD_EV_SUPPRESSED, 0, 0, 0);

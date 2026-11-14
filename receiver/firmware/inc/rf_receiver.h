@@ -101,9 +101,9 @@ uint8_t RF_Receiver_GetHello(HelloPacket_t *hello);
 /* Two-way command uplink. RequestPing() queues a PING to the bound
  * beacon; ServiceCommands() (every main loop) sends it with the long
  * command preamble, waits RF_CMD_ACK_WAIT_MS for the matching ACK and
- * retries up to RF_CMD_MAX_ATTEMPTS times. Never sent once in-flight
- * contact has been seen this session. Each step is reported once through
- * TakeCommandResult() for the SD log. */
+ * retries up to RF_CMD_MAX_ATTEMPTS times. Never sent while the beacon
+ * is airborne (launch seen, landing not yet reported). Each step is
+ * reported once through TakeCommandResult() for the SD log. */
 #define RF_CMD_MAX_ATTEMPTS  3
 #define RF_CMD_ACK_WAIT_MS   2500u
 typedef enum {

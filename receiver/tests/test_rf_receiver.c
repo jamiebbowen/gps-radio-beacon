@@ -1059,12 +1059,29 @@ TEST(test_two_way_ping_suppressed_while_flying)
     RF_CmdResult_t cr;
     lora_tx_calls = 0;
     flight_contact_latch = 1;
+    beacon_landed_seen = 0;
     RF_Receiver_RequestPing();
     RF_Receiver_ServiceCommands();
     CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
     CHECK(cr.event == RF_CMD_EV_SUPPRESSED);
     CHECK(lora_tx_calls == 0);
+
+    /* The beacon announces LANDED: it listens again, PINGs go out */
+    inject_flight_event(OUR_ROCKET_ID, FLIGHT_EVENT_LANDED, 0);
+    run_for(250, 250);
+    FlightEventPacket_t fe;
+    (void)RF_Receiver_GetFlightEvent(&fe);      /* consume it */
+    CHECK(beacon_landed_seen == 1);
+    RF_Receiver_RequestPing();
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_SENT);
+    CHECK(lora_tx_calls == 1);
+
+    cmd_active = 0;                             /* leave the scheduler idle */
+    cmd_waiting = 0;
     flight_contact_latch = 0;
+    beacon_landed_seen = 0;
 }
 
 TEST(test_two_way_foreign_ack_dropped)
