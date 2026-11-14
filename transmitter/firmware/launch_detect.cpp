@@ -8,6 +8,55 @@
 Adafruit_BNO08x bno08x(BNO08X_RESET);
 sh2_SensorValue_t sensorValue;
 
+/* Every IMU report, in order. The hub batches reports that fall due
+ * together into one SHTP transfer, and Adafruit_BNO08x::getSensorEvent()
+ * decodes each into a single slot and returns only the LAST one - so with
+ * four reports enabled at the same rate, linear acceleration batched ahead
+ * of a rotation vector never reached launch detection. Our own sensor
+ * callback (installed after every begin_I2C, which reinstalls the
+ * library's) queues them all instead. */
+#define IMU_EVQ_LEN                 16
+#define IMU_MAX_TRANSFERS_PER_TICK  32   /* bounded drain per update */
+static sh2_SensorValue_t imu_evq[IMU_EVQ_LEN];
+static uint8_t  imu_evq_head = 0, imu_evq_count = 0;
+static uint32_t imu_ev_delivered = 0;    /* reports handed over, ever */
+static uint32_t imu_ev_dropped = 0;      /* queue full: oldest dropped */
+
+static void imu_event_cb(void *cookie, sh2_SensorEvent_t *event)
+{
+    (void)cookie;
+    sh2_SensorValue_t v;
+    if (sh2_decodeSensorEvent(&v, event) != SH2_OK) return;
+    if (imu_evq_count == IMU_EVQ_LEN) {
+        imu_evq_head = (uint8_t)((imu_evq_head + 1) % IMU_EVQ_LEN);
+        imu_evq_count--;
+        if (imu_ev_dropped++ == 0) {
+            Serial.println(F("[Launch] IMU report queue overflow - dropping oldest"));
+        }
+    }
+    imu_evq[(imu_evq_head + imu_evq_count) % IMU_EVQ_LEN] = v;
+    imu_evq_count++;
+    imu_ev_delivered++;
+}
+
+/* Next queued report, servicing the hub one transfer at a time while the
+ * queue is empty. False once a transfer brings nothing new or the per-tick
+ * budget is spent. */
+static bool imu_next_event(sh2_SensorValue_t *out, int *transfers)
+{
+    while (imu_evq_count == 0) {
+        if (*transfers >= IMU_MAX_TRANSFERS_PER_TICK) return false;
+        (*transfers)++;
+        uint32_t before = imu_ev_delivered;
+        sh2_service();
+        if (imu_ev_delivered == before) return false;
+    }
+    *out = imu_evq[imu_evq_head];
+    imu_evq_head = (uint8_t)((imu_evq_head + 1) % IMU_EVQ_LEN);
+    imu_evq_count--;
+    return true;
+}
+
 // Static variables for launch detection state
 static volatile launch_state_t current_state = LAUNCH_STATE_IDLE;
 static volatile uint32_t launch_time_seconds = 0;
@@ -86,6 +135,9 @@ void launch_detect_init(void) {
         return;
     }
     Serial.println("[Launch] ✓ BNO08x Found!");
+    imu_evq_head = imu_evq_count = 0;
+    imu_ev_dropped = 0;
+    sh2_setSensorCallback(imu_event_cb, NULL);   /* every report, not the last */
     
     // Enable accelerometer reports
     // Using linear acceleration (gravity removed) for better launch detection
@@ -170,7 +222,8 @@ void launch_detect_update(uint32_t system_time_seconds) {
     // Drain all queued sensor events this tick, not just one.  At 100 Hz+ the
     // BNO085 can produce several reports between main-loop iterations, and
     // only consuming one starves the nav/EKF layer of rotation updates.
-    while (bno08x.getSensorEvent(&sensorValue)) {
+    int imu_transfers = 0;
+    while (imu_next_event(&sensorValue, &imu_transfers)) {
 
     // Capture rotation vector whenever the sensor emits one.  Both the full
     // and game variants land in the same union field (rotationVector).
@@ -243,7 +296,7 @@ void launch_detect_update(uint32_t system_time_seconds) {
                 break;
         }
     }
-    }  // end while(getSensorEvent)
+    }  // end while(imu_next_event)
 }
 
 /* ---------- IMU accessors for the nav / EKF layer ------------------------ */

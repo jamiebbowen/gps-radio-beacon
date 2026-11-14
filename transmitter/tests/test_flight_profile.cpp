@@ -56,6 +56,7 @@ int  bno_last_report   = -1;
 sh2_SensorValue_t bno_events[32];
 int bno_event_head = 0;
 int bno_event_tail = 0;
+int bno_batch = 1;
 
 /* Radio fakes: capture fused packets */
 static uint8_t  tx_buf[32];

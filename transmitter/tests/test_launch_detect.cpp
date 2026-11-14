@@ -51,6 +51,7 @@ int  bno_last_report   = -1;
 sh2_SensorValue_t bno_events[32];
 int bno_event_head = 0;
 int bno_event_tail = 0;
+int bno_batch = 1;
 
 /* Include the module under test */
 #include "../firmware/launch_detect.cpp"
@@ -69,6 +70,7 @@ static void reset_all(void)
     bno_begin_calls = 0;
     bno_last_report = -1;
     bno_event_head = bno_event_tail = 0;
+    bno_batch = 1;
     Serial.clear();
 }
 
@@ -283,6 +285,67 @@ TEST(test_sensor_event_draining_and_accessors)
     launch_detect_get_gyro_rads(NULL, NULL, NULL);
 
     CHECK(imu_last_accel_ms() == now_ms - 1);   /* gyro tick: accel kept */
+}
+
+TEST(test_batched_reports_all_reach_launch_detection)
+{
+    /* The hub batches reports that fall due together into one SHTP
+     * transfer, and the Adafruit driver's getSensorEvent() returns only the
+     * last report of a transfer. Linear acceleration batched ahead of a
+     * rotation vector must still reach launch detection - and the
+     * rotation vector the nav layer. */
+    reset_all();
+    launch_detect_init();
+    bno_batch = 2;
+    push_accel(25, 0, 0); push_rotvec(1, 0, 0, 0);
+    tick(10, 0);
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_DETECTING);
+    push_accel(25, 0, 0); push_rotvec(1, 0, 0, 0);
+    tick(50, 0);
+    push_accel(25, 0, 0); push_rotvec(1, 0, 0, 0);
+    tick(50, 42);
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
+    CHECK(imu_has_quaternion() == true);
+
+    /* A re-init runs begin_I2C again, which reinstalls the library's own
+     * handler: init must take the reports back */
+    launch_detect_init();
+    bno_batch = 3;
+    push_rotvec(1, 0, 0, 0); push_accel(1, 2, 3); push_gyro(0.5f, 0, 0);
+    tick(10, 0);
+    float x = 0, y = 0, z = 0;
+    launch_detect_get_accel_xyz(&x, &y, &z);
+    CHECK(x == 1 && y == 2 && z == 3);
+}
+
+TEST(test_report_queue_overflow_and_per_tick_budget)
+{
+    reset_all();
+    launch_detect_init();
+    /* One transfer bigger than the queue: the oldest reports go, the
+     * newest survive, and the overflow is reported once */
+    bno_batch = 20;
+    for (int i = 0; i < 20; i++) push_accel((float)i, 0, 0);
+    tick(10, 0);
+    float x = -1, y, z;
+    launch_detect_get_accel_xyz(&x, &y, &z);
+    CHECK(x == 19.0f);
+    CHECK(strstr(Serial.log, "IMU report queue overflow") != NULL);
+    CHECK(imu_ev_dropped == 4);
+
+    /* A backlog longer than the per-tick budget drains over two ticks */
+    reset_all();
+    launch_detect_init();
+    for (int i = 0; i < 31; i++) push_accel(1, 0, 0);
+    push_accel(2, 0, 0); push_accel(3, 0, 0);
+    tick(10, 0);
+    launch_detect_get_accel_xyz(&x, &y, &z);
+    CHECK(x == 2.0f);                   /* 32 transfers processed */
+    CHECK(bno_event_head != bno_event_tail);
+    tick(10, 0);
+    launch_detect_get_accel_xyz(&x, &y, &z);
+    CHECK(x == 3.0f);
+    CHECK(bno_event_head == bno_event_tail);
 }
 
 TEST(test_sensor_reset_reenables_reports)
@@ -624,6 +687,8 @@ int main(void)
     run_test_launch_detection_happy_path();
     run_test_false_alarm_drops_to_idle();
     run_test_sensor_event_draining_and_accessors();
+    run_test_batched_reports_all_reach_launch_detection();
+    run_test_report_queue_overflow_and_per_tick_budget();
     run_test_sensor_reset_reenables_reports();
     run_test_gps_fallback_confirms_on_sustained_climb();
     run_test_gps_fallback_cold_start_low_baseline_no_false_launch();
