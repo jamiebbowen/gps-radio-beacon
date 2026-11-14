@@ -670,7 +670,7 @@ TEST(test_uninitialized_guards)
     CHECK(LoRa_StartCad() == LORA_ERROR);
     CHECK(LoRa_CadResult() == LORA_CAD_FAIL);
     CHECK(LoRa_GetRssiInst(&rssi) == LORA_ERROR);
-    CHECK(LoRa_Transmit((const uint8_t *)"x", 1) == LORA_ERROR);
+    CHECK(LoRa_TransmitPreamble((const uint8_t *)"x", 1, LORA_PREAMBLE_LENGTH) == LORA_ERROR);
 
     lora_initialized = saved;
 }
@@ -690,26 +690,26 @@ TEST(test_transmit_long_preamble_for_commands)
     CHECK(chip_tx_preamble == LORA_CMD_PREAMBLE_SYMBOLS);
     CHECK(chip_preamble == LORA_PREAMBLE_LENGTH);    /* restored for RX */
     CHECK(chip_mode == 5);
-    CHECK(LoRa_Transmit(cmd, sizeof(cmd)) == LORA_OK);
-    CHECK(chip_tx_preamble == LORA_PREAMBLE_LENGTH);  /* plain TX unchanged */
+    CHECK(LoRa_TransmitPreamble(cmd, sizeof(cmd), LORA_PREAMBLE_LENGTH) == LORA_OK);
+    CHECK(chip_tx_preamble == LORA_PREAMBLE_LENGTH);  /* normal preamble */
 }
 
 TEST(test_transmit)
 {
     fresh_init();
 
-    CHECK(LoRa_Transmit(NULL, 5) == LORA_ERROR);
-    CHECK(LoRa_Transmit((const uint8_t *)"x", 0) == LORA_ERROR);
+    CHECK(LoRa_TransmitPreamble(NULL, 5, LORA_PREAMBLE_LENGTH) == LORA_ERROR);
+    CHECK(LoRa_TransmitPreamble((const uint8_t *)"x", 0, LORA_PREAMBLE_LENGTH) == LORA_ERROR);
 
     /* Success: TX_DONE latches on SET_TX */
     const uint8_t msg[4] = {1, 2, 3, 4};
-    CHECK(LoRa_Transmit(msg, sizeof(msg)) == LORA_OK);
+    CHECK(LoRa_TransmitPreamble(msg, sizeof(msg), LORA_PREAMBLE_LENGTH) == LORA_OK);
     CHECK(chip_mode == 5);                     /* restored to RX */
     CHECK(rxen_state == GPIO_PIN_SET);         /* RF switch back to RX */
 
     /* TX_DONE never arrives: 1 s timeout, still restored to RX */
     txdone_on_tx = 0;
-    CHECK(LoRa_Transmit(msg, sizeof(msg)) == LORA_TIMEOUT);
+    CHECK(LoRa_TransmitPreamble(msg, sizeof(msg), LORA_PREAMBLE_LENGTH) == LORA_TIMEOUT);
     CHECK(chip_mode == 5);
     txdone_on_tx = 1;
 }
@@ -727,7 +727,7 @@ TEST(test_command_failure_propagation)
     CHECK(LoRa_CadResult() == LORA_CAD_FAIL);
     uint16_t irq = 0;
     CHECK(LoRa_GetIRQStatus(&irq) == LORA_ERROR);   /* ReadCommand busy ret */
-    CHECK(LoRa_Transmit(pkt, sizeof(pkt)) == LORA_ERROR); /* WriteBuffer busy */
+    CHECK(LoRa_TransmitPreamble(pkt, sizeof(pkt), LORA_PREAMBLE_LENGTH) == LORA_ERROR); /* WriteBuffer busy */
     fake_busy_pin = 0;
 
     /* ReadPacket: IRQ read succeeds (RX_DONE), buffer-status read fails */

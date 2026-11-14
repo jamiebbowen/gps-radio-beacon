@@ -267,7 +267,6 @@ uint8_t LoRa_GetRssiInst(int16_t *rssi_dbm);
  * @param length Length of data
  * @retval Status code
  */
-uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length);
 uint8_t LoRa_TransmitPreamble(const uint8_t *data, uint8_t length,
                               uint16_t preamble_symbols);
 

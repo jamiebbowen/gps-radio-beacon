@@ -767,13 +767,6 @@ uint8_t LoRa_TransmitPreamble(const uint8_t *data, uint8_t length,
     return result;
 }
 
-/**
- * @brief Transmit a packet with the normal LORA_PREAMBLE_LENGTH preamble
- */
-uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
-    return LoRa_TransmitPreamble(data, length, LORA_PREAMBLE_LENGTH);
-}
-
 /* ===== Private Functions ===== */
 
 /**
