@@ -19,6 +19,7 @@ field, not on a bench. Keep changes small, test-first, and verified.
 
 | What | Command |
 |------|---------|
+| Everything CI runs, before pushing | `make ci-local` |
 | All host tests (tools + RX + TX) | `make test` |
 | Same tests under ASan + UBSan + float-cast-overflow | `make sanitize` |
 | Analysis-tool tests + packet-format drift guard | `make tools-test` |
