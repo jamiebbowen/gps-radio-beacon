@@ -552,10 +552,14 @@ void loop() {
              * GPS health at the state cadence. Position rides the sparse
              * audit path below instead; the fused stream stays off. */
             gps_poll_rx();
+            /* No limiter floor here: the 1 Hz tick and last_transmission_time
+             * already pace the pad. A floor equal to the tick's own period
+             * refused any heartbeat whose pass ran a few ms earlier relative
+             * to its tick than the last one, and the slot was spent anyway -
+             * a 120 s gap (and the PRE_LAUNCH entry heartbeat, 5 s after the
+             * last turn-on one, never went out). */
             beacon_transmit_heartbeat(gps_get_current_coordinates(),
-                                      system_time_seconds,
-                                      flight_cadence_heartbeat_interval_s(beacon_state,
-                                          system_time_seconds - battery_save_start_time),
+                                      system_time_seconds, 0,
                                       transmit_fast_flag);
             last_transmission_time = system_time_seconds;
         } else {

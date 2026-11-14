@@ -197,9 +197,9 @@ uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t
 uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t system_time_seconds,
                                   uint32_t min_interval_s, uint8_t transmit_fast) {
     /* Rate limit: the GPS TX path retries every second when there is no fix;
-     * do not turn every retry into an RF transmission. On the pad states the
-     * caller passes the (slower) state cadence, which the 1 Hz tick already
-     * paces - this limiter is the floor, not the scheduler. */
+     * do not turn every retry into an RF transmission. The pad states pass 0:
+     * their 1 Hz tick is the scheduler, and a floor equal to its own period
+     * refused every heartbeat whose loop pass happened to run early. */
     static uint32_t last_heartbeat_ms = 0;
     uint32_t now_ms = millis();
     if (last_heartbeat_ms != 0 &&
