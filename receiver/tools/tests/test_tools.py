@@ -342,7 +342,9 @@ class TestImuRows(unittest.TestCase):
     """IMU trace rows: beacon accel/gyro forwarded to the log in flight."""
 
     def imu_row(self, t, peak_mg=1350, with_snr=True):
-        # <ts>,IMU,ts_ms,ax,ay,az(cg),gx,gy,gz(cds),peak_mg,temp,rssi[,snr]
+        # Pre-V3 beacon via a pre-ImuFmt receiver:
+        # <ts>,IMU,ts_ms,ax,ay,az(cm/s^2),gx,gy,gz(0.01 deg/s),peak(mm/s^2),
+        # temp,rssi[,snr]
         tail = f",{-95},{-12}" if with_snr else f",{-95}"
         return (f"{t:.2f},IMU,{int(t*1000)%1000},55,-125,980,57,-114,12,"
                 f"{peak_mg},231{tail}\n")
@@ -356,9 +358,11 @@ class TestImuRows(unittest.TestCase):
             log = write_log(body, Path(td))
             imu = af.load_imu_rows(log)
             self.assertEqual(len(imu), 2)
-            self.assertEqual(imu[0]["peak"], 900)
-            self.assertEqual(imu[0]["ax"], 55)
-            self.assertEqual(imu[1]["gx"], 57)
+            # Converted to g / deg/s from the pre-V3 m/s^2-based units
+            self.assertEqual(imu[0]["fmt"], 2)
+            self.assertAlmostEqual(imu[0]["peak"], 0.9 / 9.80665, places=6)
+            self.assertAlmostEqual(imu[0]["ax"], 0.55 / 9.80665, places=6)
+            self.assertAlmostEqual(imu[1]["gx"], 0.57)
             self.assertIsNone(imu[0]["snr"])          # legacy row
             self.assertEqual(imu[1]["snr"], -12)      # new schema
             self.assertEqual(imu[0]["rssi"], -95)
@@ -375,8 +379,52 @@ class TestImuRows(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertIn("INERTIAL TRACE", out)
             self.assertIn("Peak accel:", out)
-            self.assertIn("1.70 g", out)
+            # peak 1700 was mm/s^2 (1.7 m/s^2), not milli-g: 0.17 g, and
+            # the legacy rows are called out
+            self.assertIn("0.17 g", out)
+            self.assertIn("pre-V3 rows", out)
             self.assertIn("SNR range:          -12 to -12 dB", out)
+
+
+    def _load(self, rows):
+        with tempfile.TemporaryDirectory() as td:
+            log = write_log(HEADER + "\n" + "\n".join(rows) + "\n", Path(td))
+            return af.load_imu_rows(str(log))
+
+    def test_v3_row_with_imufmt_column(self):
+        (r,) = self._load(["12.0,IMU,500,6,-13,0,6,-11,0,138,0,-90,5,3"])
+        self.assertEqual(r["fmt"], 3)
+        self.assertAlmostEqual(r["ax"], 0.06)          # centi-g
+        self.assertAlmostEqual(r["gx"], 0.6)           # 0.1 deg/s
+        self.assertAlmostEqual(r["peak"], 0.138)       # milli-g
+        self.assertEqual((r["rssi"], r["snr"]), (-90, 5))
+
+    def test_pre_v3_row_from_old_receiver(self):
+        (r,) = self._load(["13.0,IMU,500,55,-125,980,57,-114,12,1350,231,-95,-12"])
+        self.assertEqual(r["fmt"], 2)
+        self.assertAlmostEqual(r["ax"], 0.55 / 9.80665, places=6)    # cm/s^2
+        self.assertAlmostEqual(r["gx"], 0.57)                        # 0.01 deg/s
+        self.assertAlmostEqual(r["peak"], 1.35 / 9.80665, places=6)  # mm/s^2
+
+    def test_v3_beacon_logged_by_old_receiver(self):
+        # Receivers without the ImuFmt column log ts_ms raw, marker bit set
+        (r,) = self._load([f"14.0,IMU,{500 | 0x8000},6,-13,0,6,-11,0,138,0,-90,5"])
+        self.assertEqual(r["fmt"], 3)
+        self.assertAlmostEqual(r["peak"], 0.138)
+
+    def test_report_converts_units_and_flags_legacy_rows(self):
+        imu = ["30.0,IMU,500,600,0,0,0,0,30000,10000,0,-80,4,3",
+               "31.0,IMU,500,55,-125,980,57,-114,12,1350,231,-95,-12"]
+        with tempfile.TemporaryDirectory() as td:
+            log = write_log(synthetic_flight() + "\n".join(imu) + "\n", Path(td))
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = af.analyze(str(log))
+            out = buf.getvalue()
+        self.assertEqual(rc, 0)
+        self.assertIn("Peak accel:           10.00 g", out)       # V3 milli-g
+        self.assertIn("Max gyro magnitude:    3000 deg/s", out)   # 0.1 deg/s
+        self.assertIn("1 pre-V3 row", out)                        # legacy note
 
     def test_analyze_without_imu_rows_omits_section(self):
         with tempfile.TemporaryDirectory() as td:
