@@ -1477,7 +1477,10 @@ int main(void)
                * harmless. */
               static uint32_t last_beacon_save_ms = 0;
               uint32_t now_ms = HAL_GetTick();
-              if (now_ms - last_beacon_save_ms >= 10000U) {
+              /* A held (dead-reckoned) fused packet carries no new
+               * position: never persist it as the last beacon fix. */
+              if (!rf_gps_data.fused_position_held &&
+                  now_ms - last_beacon_save_ms >= 10000U) {
                 SD_Card_SaveLastBeacon(rf_gps_data.latitude,
                                        rf_gps_data.longitude,
                                        rf_gps_data.altitude);
@@ -1525,9 +1528,14 @@ int main(void)
             /* Invalid coordinates despite receiving a packet */
             has_valid_remote_gps = 0;
           }
-          last_rf_packet_time = HAL_GetTick();
+          /* Position age: a held (dead-reckoned) fused packet carries no
+           * new position, so "Last:" keeps counting from the last real
+           * fix. The link itself is the beacon-heard tick (any packet). */
+          if (!rf_gps_data.fused_position_held) {
+            last_rf_packet_time = HAL_GetTick();
+          }
           rf_packet_count++;
-          /* LED pulse handled at top of loop from last_rf_packet_time */
+          /* LED pulse handled at top of loop from the beacon-heard tick */
           
           /* Log the transmitting rocket's ID once per change: the beacon's
            * periodic callsign packet is "CALL-<id> CH<n>" and the parser

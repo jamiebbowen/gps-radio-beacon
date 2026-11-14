@@ -78,6 +78,9 @@ to repopulate the target.
 8. On `LANDED` (row 7 chip), the position is the touchdown anchor. Row 5
    becomes recovery intel:
    - `LANDED` — down, holding position, walk on.
+   - Row 7 `LANDED DR` — down, and the beacon has lost its GPS too: the
+     target is its last real fix and stays put until the beacon
+     re-acquires (dead-reckoned positions never move it).
    - `MOVED +Nm!` — it dragged after touchdown (wind/slope): what you're
      walking to is moving; keep an eye out visually.
    - `CLS N m/m` — closing rate. `AWY N m/m` — you're walking away from it
@@ -89,7 +92,9 @@ to repopulate the target.
    current.
 10. If the beacon's GPS dies under cover (heartbeat-only: `HB R<id>` with
     sats low), the position also stays at last-known — walk it, then use
-    eyes and the RF strength trend.
+    eyes and the RF strength trend. Its fused packets turn `DR` (dead
+    reckoning): they are logged but never move the target, `Last:` keeps
+    counting from the last real fix, and BEACON.TXT keeps that fix.
 
 ## Crowded channel (someone else on our frequency)
 

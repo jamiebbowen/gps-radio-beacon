@@ -67,6 +67,10 @@ Connect the beacon over USB and watch the first seconds of boot:
       PRE-FLIGHT keeps `** READY TO FLY **` with `TX LINK OK` climbing to
       ~60 s between heartbeats, the e-ink never shows `LINK LOST`, and the
       SD log has no `RF LOST` / `RF REGAINED` rows for that wait.
+- [ ] Landed beacon, GPS lost: after the landing latch (BATTERY_SAVE),
+      cover the beacon's GPS antenna. The receiver's target stays at the
+      touchdown fix, nav row 7 reads `LANDED DR`, `Last:` keeps counting,
+      and BEACON.TXT still holds the touchdown fix after a receiver reboot.
 
 ## 4. Compass / IMU
 

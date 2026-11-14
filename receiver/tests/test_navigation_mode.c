@@ -303,7 +303,11 @@ TEST(test_nav_packet_source_tag)
     ROW_HAS(7, " DR");
     remote_g.fused_landed = 1;
     draw(100000, 100000, 42);
+    ROW_HAS(7, "LANDED DR");           /* landed, but its GPS is gone */
+    remote_g.fused_dr = 0;
+    draw(100000, 100000, 42);
     ROW_HAS(7, "LANDED");
+    CHECK(strstr(cap_row_text[7], " DR") == NULL);
 }
 
 TEST(test_nav_arrow_placeholders)

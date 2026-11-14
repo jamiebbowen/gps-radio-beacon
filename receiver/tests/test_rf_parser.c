@@ -34,6 +34,7 @@ static void parser_reset(void)
     memset(parsed_callsign, 0, sizeof(parsed_callsign));
     memset(last_valid_packet, 0, sizeof(last_valid_packet));
     last_raw_gps_ms = 0;
+    have_gps_backed_pos = 0;
     parsed_data_ready = 0;
     parse_attempts = parse_successes = parse_failures = 0;
     parse_failures_null_packet = 0;
@@ -510,14 +511,94 @@ TEST(test_stale_fused_does_not_override_fresh_raw) {
     CHECK(gps.is_fused == 1);                   /* metadata still tracked */
     CHECK(gps.fused_dr == 1);
 
-    /* After the override window expires, the fused stream takes over:
-     * raw silence longer than the window means the fused estimate is all
-     * there is. */
+    /* ...and long after it: a dead-reckoned position never replaces a
+     * GPS-backed one. The TX coast state drifts without bound (touchdown
+     * with the beacon's GPS lost walked the target 1.8 km in 10 min);
+     * the metadata still reports DR. */
     Test_SetTick(HAL_GetTick() + RF_FUSED_STALE_OVERRIDE_MS + 1000);
     CHECK(RF_Parser_ParseFusedPacket(fused_pkt, sizeof(fused_pkt)) == RF_PARSER_OK);
     CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
-    CHECK_NEAR(gps.latitude, 40.08, 1e-4);      /* free to drift again */
+    CHECK_NEAR(gps.latitude, 39.89, 1e-4);
+    CHECK(gps.fused_dr == 1 && gps.fused_position_held == 1);
 
+    Test_SetTick(0);
+}
+
+TEST(test_dr_fused_never_moves_a_gps_backed_target) {
+    /* Flight and recovery: the beacon sends no raw GPS packets in LAUNCH /
+     * POST_LAUNCH, only fused. Once a GPS-backed fused position exists, a
+     * dead-reckoned one is held - here 10 minutes of them at 5 s. */
+    parser_reset();
+    Test_SetTick(300000);
+    uint8_t fresh[FUSED_PACKET_SIZE], dr[FUSED_PACKET_SIZE];
+    build_fused_packet(fresh, 39.89, -105.11, 2400, 300, 0, 500, 0,
+                       FUSED_FLAG_GPS_FRESH | FUSED_FLAG_LANDED);
+    build_fused_packet(dr, 39.95, -105.20, 2400, 900, 0, 500, 255,
+                       FUSED_FLAG_DEAD_RECKONING | FUSED_FLAG_LANDED);
+    GPS_Data gps;
+    CHECK(RF_Parser_ParseFusedPacket(fresh, sizeof(fresh)) == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK(gps.fused_position_held == 0);
+    for (int i = 0; i < 120; i++) {
+        Test_SetTick(HAL_GetTick() + 5000);
+        CHECK(RF_Parser_ParseFusedPacket(dr, sizeof(dr)) == RF_PARSER_OK);
+    }
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK_NEAR(gps.latitude, 39.89, 1e-4);       /* still the real fix */
+    CHECK_NEAR(gps.longitude, -105.11, 1e-4);
+    CHECK_NEAR(gps.v_north, 3.0, 0.01);          /* velocity held too  */
+    CHECK(gps.fused_dr == 1 && gps.fused_landed == 1);
+    CHECK(gps.fused_position_held == 1);
+
+    /* GPS back: the next fresh packet moves the target again */
+    build_fused_packet(fresh, 39.8901, -105.1101, 2400, 0, 0, 0, 0,
+                       FUSED_FLAG_GPS_FRESH);
+    CHECK(RF_Parser_ParseFusedPacket(fresh, sizeof(fresh)) == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK_NEAR(gps.latitude, 39.8901, 1e-4);
+    CHECK(gps.fused_position_held == 0 && gps.fused_dr == 0);
+    Test_SetTick(0);
+}
+
+TEST(test_cold_start_dr_position_is_shown) {
+    /* A receiver booted mid-outage has no GPS-backed position yet: the DR
+     * one beats nothing (the DR tag says what it is) - and never becomes
+     * the anchor later DR packets defer to. */
+    parser_reset();
+    Test_SetTick(400000);
+    uint8_t dr[FUSED_PACKET_SIZE];
+    build_fused_packet(dr, 39.95, -105.20, 2400, 0, 0, 0, 255,
+                       FUSED_FLAG_DEAD_RECKONING);
+    GPS_Data gps;
+    CHECK(RF_Parser_ParseFusedPacket(dr, sizeof(dr)) == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK_NEAR(gps.latitude, 39.95, 1e-4);
+    CHECK(gps.fused_position_held == 0);
+    build_fused_packet(dr, 39.96, -105.21, 2400, 0, 0, 0, 255,
+                       FUSED_FLAG_DEAD_RECKONING);
+    CHECK(RF_Parser_ParseFusedPacket(dr, sizeof(dr)) == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK_NEAR(gps.latitude, 39.96, 1e-4);
+    Test_SetTick(0);
+}
+
+TEST(test_stale_not_dr_fused_applies_without_recent_raw) {
+    /* 1.5-3 s since the TX's last fix (GPS_FRESH clear, not yet DR) is
+     * still a GPS-anchored estimate: with no raw fix in the last 10 s it
+     * moves the position, as before. */
+    parser_reset();
+    Test_SetTick(500000);
+    uint8_t fresh[FUSED_PACKET_SIZE], stale[FUSED_PACKET_SIZE];
+    build_fused_packet(fresh, 39.89, -105.11, 2400, 0, 0, 0, 0,
+                       FUSED_FLAG_GPS_FRESH);
+    build_fused_packet(stale, 39.8905, -105.1105, 2400, 0, 0, 0, 255, 0);
+    GPS_Data gps;
+    CHECK(RF_Parser_ParseFusedPacket(fresh, sizeof(fresh)) == RF_PARSER_OK);
+    Test_SetTick(HAL_GetTick() + 2000);
+    CHECK(RF_Parser_ParseFusedPacket(stale, sizeof(stale)) == RF_PARSER_OK);
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
+    CHECK_NEAR(gps.latitude, 39.8905, 1e-4);
+    CHECK(gps.fused_position_held == 0);
     Test_SetTick(0);
 }
 
@@ -664,6 +745,9 @@ int main(void) {
     run_test_airlink_golden_fused_decode();
     run_test_airlink_golden_gps_decode();
     run_test_stale_fused_does_not_override_fresh_raw();
+    run_test_dr_fused_never_moves_a_gps_backed_target();
+    run_test_cold_start_dr_position_is_shown();
+    run_test_stale_not_dr_fused_applies_without_recent_raw();
     run_test_fresh_fused_always_updates_position();
     run_test_fused_landed_flag_both_streams();
     run_test_fused_layouts_and_malformed();

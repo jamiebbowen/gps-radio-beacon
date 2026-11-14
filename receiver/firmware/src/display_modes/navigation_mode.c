@@ -566,10 +566,15 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
      *   "LANDED" = either stream reported the landing latch - the moment
      *              that most needs certainty during recovery, so it takes
      *              precedence over the link-source label.
+     *   "LANDED DR" = landed, and the beacon's GPS is gone: the target is
+     *              the last real fix (DR positions never move it).
      * Helps spot when the link has dropped back to pure inertial. */
     const char *src = "GPS";
     if (remote_gps_data->fused_landed) {
-      src = "LANDED";
+      /* ...and if its GPS is gone as well, say so: the position shown is
+       * the last real fix and stays put until the beacon re-acquires. */
+      src = (remote_gps_data->is_fused && remote_gps_data->fused_dr)
+            ? "LANDED DR" : "LANDED";
     } else if (remote_gps_data->is_fused && remote_gps_data->fused_dr) {
       src = "DR";
     } else if (remote_gps_data->is_fused && remote_gps_data->fused_sensor_degraded) {
