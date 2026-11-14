@@ -56,7 +56,6 @@ bool launch_detect_has_landed(void);
 uint32_t launch_detect_get_time_since_launch(uint32_t system_time_seconds);
 
 // Diagnostic functions
-float launch_detect_get_current_accel(void);      // Get current total acceleration (m/s²)
 /* Per-report IMU peaks: each consumer has its own window, so one taking
  * its peak never steals another's. */
 typedef enum {

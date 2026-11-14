@@ -542,10 +542,6 @@ float launch_detect_take_peak_gyro(imu_peak_consumer_t who) {
     return p;
 }
 
-float launch_detect_get_current_accel(void) {
-    return total_accel;
-}
-
 /**
  * Check if IMU is initialized and working
  */

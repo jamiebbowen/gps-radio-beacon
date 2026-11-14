@@ -143,9 +143,9 @@ Edit `include/mpu_config.h`:
 You can add diagnostic output to your code:
 
 ```cpp
-// Get current acceleration
-float accel = launch_detect_get_current_accel();
-Serial.print("Accel: ");
+// Peak |acceleration| (m/s^2) since the IMU trace last took it
+float accel = launch_detect_take_peak_accel(IMU_PEAK_TRACE);
+Serial.print("Peak accel: ");
 Serial.println(accel);
 
 // Get individual axes

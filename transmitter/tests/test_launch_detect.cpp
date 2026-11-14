@@ -254,8 +254,8 @@ TEST(test_sensor_event_draining_and_accessors)
     tick(10, 0);
 
     CHECK(bno_event_head == bno_event_tail);   /* fully drained */
-    CHECK(launch_detect_get_current_accel() > 8.7f && /* sqrt(16+25+36) */
-          launch_detect_get_current_accel() < 8.8f);
+    float pk = launch_detect_take_peak_accel(IMU_PEAK_MAXIMA);
+    CHECK(pk > 8.7f && pk < 8.8f);                    /* sqrt(16+25+36) */
 
     float x = 0, y = 0, z = 0;
     launch_detect_get_accel_xyz(&x, &y, &z);
