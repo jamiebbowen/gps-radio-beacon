@@ -44,13 +44,13 @@
 static char cap[CAP_ROWS][CAP_COLS + 1];
 static uint32_t cap_updates = 0, cap_clears = 0;
 static uint32_t cap_lines = 0, cap_circles = 0, cap_texts = 0, cap_pixels = 0;
-static uint32_t cap_rects = 0, cap_fillrects = 0, cap_chars = 0;
+static uint32_t cap_chars = 0;
 
 static void cap_clear(void)
 {
     memset(cap, 0, sizeof(cap));
     cap_updates = cap_clears = cap_lines = cap_circles = 0;
-    cap_texts = cap_pixels = cap_rects = cap_fillrects = cap_chars = 0;
+    cap_texts = cap_pixels = cap_chars = 0;
 }
 
 void Display_Clear(void) { cap_clears++; memset(cap, 0, sizeof(cap)); }
@@ -68,10 +68,6 @@ void Display_DrawPixel(uint8_t x, uint8_t y, uint8_t c)
 { (void)x; (void)y; (void)c; cap_pixels++; }
 void Display_DrawLine(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, uint8_t c)
 { (void)x0; (void)y0; (void)x1; (void)y1; (void)c; cap_lines++; }
-void Display_DrawRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t c)
-{ (void)x; (void)y; (void)w; (void)h; (void)c; cap_rects++; }
-void Display_FillRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t c)
-{ (void)x; (void)y; (void)w; (void)h; (void)c; cap_fillrects++; }
 void Display_DrawCircle(uint8_t x0, uint8_t y0, uint8_t r, uint8_t c)
 { (void)x0; (void)y0; (void)r; (void)c; cap_circles++; }
 void Display_DrawChar(uint8_t x, uint8_t y, char c)

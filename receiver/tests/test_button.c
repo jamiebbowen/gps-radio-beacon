@@ -77,8 +77,6 @@ TEST(test_init_centered_is_released)
     Button_Update();
 
     CHECK(stick_dir_engaged == STICK_CENTERED);
-    CHECK(Button_GetState() == BUTTON_RELEASED);
-    CHECK(Button_GetState() == BUTTON_RELEASED);
     CHECK(Button_WasPressed() == 0);
     CHECK(Button_WasLongPressed() == 0);
     CHECK(Button2_WasPressed() == 0);
@@ -88,8 +86,7 @@ TEST(test_flick_up_fires_once_on_edge)
 {
     reset_all();
     flick_up();
-    CHECK(stick_dir_engaged == STICK_UP);
-    CHECK(Button_GetState() == BUTTON_PRESSED);   /* still held */
+    CHECK(stick_dir_engaged == STICK_UP);         /* still held */
     CHECK(Button_WasPressed() == 1);              /* one-shot consumed */
     CHECK(Button_WasPressed() == 0);              /* not latched */
 

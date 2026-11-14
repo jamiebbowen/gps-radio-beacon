@@ -39,7 +39,6 @@ void Display_Update(void);
 /* No rotation functions - display is fixed in 90 degree orientation */
 void Display_DrawPixel(uint8_t x, uint8_t y, uint8_t color);
 void Display_DrawLine(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, uint8_t color);
-void Display_DrawRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t color);
 void Display_DrawCircle(uint8_t x0, uint8_t y0, uint8_t r, uint8_t color);
 void Display_DrawChar(uint8_t x, uint8_t y, char c);
 void Display_DrawText(uint8_t x, uint8_t y, const char *text);

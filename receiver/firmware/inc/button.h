@@ -20,15 +20,8 @@
  * (The v1.x Select/Home button that used to live here is now the jogpad's
  * Z click / B button.) */
 
-/* Button states */
-typedef enum {
-    BUTTON_RELEASED = 0,
-    BUTTON_PRESSED = 1
-} Button_State_t;
-
 /* Function prototypes */
 void Button_Init(void);
-Button_State_t Button_GetState(void);
 uint8_t Button_WasPressed(void);      /* Debounced short-press detection (fires at release) */
 uint8_t Button_WasLongPressed(void);  /* Long-press detection (fires while held, ~700ms) */
 uint8_t Button2_WasPressed(void);     /* Second button press detection (fires on press) */

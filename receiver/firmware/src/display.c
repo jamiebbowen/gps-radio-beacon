@@ -221,23 +221,6 @@ void Display_DrawLine(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, uint8_t co
 }
 
 /**
- * @brief Draw a rectangle
- * @param x X coordinate of top-left corner
- * @param y Y coordinate of top-left corner
- * @param w Width of rectangle
- * @param h Height of rectangle
- * @param color Rectangle color (0 = off, 1 = on)
- * @retval None
- */
-void Display_DrawRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t color)
-{
-  Display_DrawLine(x, y, x + w - 1, y, color);
-  Display_DrawLine(x, y + h - 1, x + w - 1, y + h - 1, color);
-  Display_DrawLine(x, y, x, y + h - 1, color);
-  Display_DrawLine(x + w - 1, y, x + w - 1, y + h - 1, color);
-}
-
-/**
  * @brief Draw a circle using Bresenham's algorithm
  * @param x0 Center X coordinate
  * @param y0 Center Y coordinate

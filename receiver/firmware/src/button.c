@@ -51,18 +51,6 @@ void Button_Init(void)
 }
 
 /**
- * @brief Get current "button 1" state (stick flicked up/down, or A held)
- * @retval Button_State_t Current state
- */
-Button_State_t Button_GetState(void)
-{
-  if (stick_dir_engaged != STICK_CENTERED || Jogpad_ButtonHeld(JOGPAD_BTN_A)) {
-    return BUTTON_PRESSED;
-  }
-  return BUTTON_RELEASED;
-}
-
-/**
  * @brief Poll the pad and turn stick motion / button edges into events.
  * @retval None
  * @note Called from the main loop. The pad itself holds state - no IRQs.
