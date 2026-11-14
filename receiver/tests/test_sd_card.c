@@ -64,6 +64,8 @@ static uint8_t bd_storage[BD_BLOCK_COUNT * BD_BLOCK_SIZE];
 static int bd_init_result     = 0;   /* lfs_sd_bd_init return knob      */
 static int bd_prog_fail       = 0;   /* all writes fail                 */
 static int bd_prog_fail_until_stepdown = 0; /* writes fail until the bus steps down */
+static int bd_prog_calls      = 0;   /* progs attempted since start     */
+static int bd_prog_fail_from  = 0;   /* 0=off; N=prog #N onwards fails  */
 static int bd_sync_count      = 0;   /* syncs seen since reset          */
 static int bd_corrupt_at_sync = 0;   /* 0=off; N=corrupt on the Nth sync */
 
@@ -79,7 +81,9 @@ static int ram_prog(const struct lfs_config *c, lfs_block_t block,
                     lfs_off_t off, const void *buffer, lfs_size_t size)
 {
     (void)c;
+    bd_prog_calls++;
     if (bd_prog_fail || bd_prog_fail_until_stepdown) return LFS_ERR_IO;
+    if (bd_prog_fail_from && bd_prog_calls >= bd_prog_fail_from) return LFS_ERR_IO;
     memcpy(&bd_storage[block * BD_BLOCK_SIZE + off], buffer, size);
     return 0;
 }
@@ -579,7 +583,7 @@ TEST(test_rotation_launchflag_and_write_failure)
     /* Opening a second log file closes the first (sd_card.c:241-242) */
     CHECK(SD_Card_EnsureLogFile() == SD_CARD_OK);
     CHECK(log_file_open == 1);
-    CHECK(sd_open_new_log_file(NULL, 0) == SD_CARD_OK);   /* rotation */
+    CHECK(sd_open_new_log_file() == SD_CARD_OK);           /* rotation */
     CHECK(log_file_open == 1);
 
     /* Launch flag without fused data: FusedFlags column shows 0x10 (:481) */
@@ -787,6 +791,53 @@ static int count_in(const char *buf, int n, const char *needle)
     return k;
 }
 
+TEST(test_new_log_file_fault_sweep)
+{
+    /* The card dies after 1, 2, 3... more programs while a session file
+     * is being created (directory commit, then the header sync): every
+     * failure must leave no half-open handle and no session name, and a
+     * healthy card afterwards must still get a file. */
+    int failures = 0, created = 0;
+    for (int n = 1; n <= 16 && !created; n++) {
+        wipe_card();
+        CHECK(SD_Card_Init() == SD_CARD_OK);
+        bd_prog_fail_from = bd_prog_calls + n;
+        SD_Card_Status st = SD_Card_EnsureLogFile();
+        bd_prog_fail_from = 0;
+        if (st == SD_CARD_OK) {
+            created = 1;
+        } else {
+            failures++;
+            CHECK(log_file_open == 0);
+            CHECK(sd_info.current_log_file[0] == '\0');
+        }
+    }
+    CHECK(failures >= 2);          /* both the open and the sync can fail */
+    CHECK(created == 1);
+}
+
+TEST(test_recovery_when_session_file_vanished)
+{
+    /* The ladder's full climb: the handle is lost AND the session file is
+     * gone, so the append-reopen fails, the mount is cycled, and the
+     * reopen fails again - EnsureLogFile reports the error (it never
+     * starts a second file mid-session), and the next write is refused
+     * while the recovery backoff holds. */
+    wipe_card();
+    Test_SetTick(100000);
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+    CHECK(SD_Card_EnsureLogFile() == SD_CARD_OK);
+    CHECK(SD_Card_LogEvent("row in the doomed file") == SD_CARD_OK);
+    lfs_file_close(&lfs, &log_file);
+    log_file_open = 0;
+    CHECK(lfs_remove(&lfs, sd_info.current_log_file) == 0);
+    last_recovery_ms = 0;
+    CHECK(SD_Card_EnsureLogFile() == SD_CARD_ERROR);
+    CHECK(lfs_mounted == 1);                      /* remounted fine */
+    CHECK(log_file_open == 0);
+    CHECK(SD_Card_LogEvent("refused during backoff") == SD_CARD_ERROR);
+}
+
 TEST(test_io_error_retry_keeps_the_row)
 {
     /* The third consecutive write error steps the bus down and logs it.
@@ -969,6 +1020,8 @@ int main(void)
     run_test_write_recovers_lost_mount();
     run_test_dirty_card_boot_preserves_history();
     run_test_declination_loader();
+    run_test_new_log_file_fault_sweep();
+    run_test_recovery_when_session_file_vanished();
     run_test_io_error_retry_keeps_the_row();
     run_test_failed_sync_counts_and_recovers();
     run_test_io_error_streak_steps_bus_down();

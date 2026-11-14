@@ -162,7 +162,7 @@ static const char SD_NAV_ROW_FMT[] =
 /* Private function prototypes -----------------------------------------------*/
 static SD_Card_Status SD_Card_WriteLogEntry(const char *entry);
 static void           SD_Card_UpdateInfo(void);
-static SD_Card_Status sd_open_new_log_file(char *filename_out, uint32_t max_len);
+static SD_Card_Status sd_open_new_log_file(void);
 
 /* ========================================================================= */
 /* Init / deinit / presence                                                  */
@@ -281,7 +281,7 @@ static void SD_Card_UpdateInfo(void)
  * LittleFS has no 8.3 restriction, but we keep the old naming scheme so
  * existing post-flight tooling still works.
  */
-static SD_Card_Status sd_open_new_log_file(char *filename_out, uint32_t max_len)
+static SD_Card_Status sd_open_new_log_file(void)
 {
     if (!sd_initialized || !lfs_mounted) return SD_CARD_ERROR;
 
@@ -346,10 +346,6 @@ static SD_Card_Status sd_open_new_log_file(char *filename_out, uint32_t max_len)
     sd_info.files_logged++;
     sd_info.bytes_written += (uint32_t)written;
 
-    if (filename_out && max_len) {
-        strncpy(filename_out, filename, max_len - 1);
-        filename_out[max_len - 1] = '\0';
-    }
     return SD_CARD_OK;
 }
 
@@ -691,7 +687,7 @@ SD_Card_Status SD_Card_EnsureLogFile(void)
         return sd_try_log_recovery() ? SD_CARD_OK : SD_CARD_ERROR;
     }
     if (!lfs_mounted) return SD_CARD_ERROR;
-    return sd_open_new_log_file(NULL, 0);
+    return sd_open_new_log_file();
 }
 
 /* ========================================================================= */
@@ -711,7 +707,7 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
          * file when there is nothing to resume or the recovery was
          * rate-limited but the card is healthy (log continuity wins). */
         if (sd_info.current_log_file[0] == '\0' || !sd_try_log_recovery()) {
-            if (sd_open_new_log_file(NULL, 0) != SD_CARD_OK) return SD_CARD_ERROR;
+            if (sd_open_new_log_file() != SD_CARD_OK) return SD_CARD_ERROR;
         }
     }
 

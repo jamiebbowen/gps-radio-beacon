@@ -777,8 +777,21 @@ TEST(test_quat_heading_candidate_all_conventions)
     CHECK_NEAR(Compass_QuatHeadingCandidate(0, 0.0f, 1.0f),  0.0f, 0.01);
 }
 
+TEST(test_calibration_status_unpacks_each_field)
+{
+    /* The compass page shows S/G/A/M accuracy: 2 bits each, packed */
+    compass_debug.calib_status = (uint8_t)((3u << 6) | (2u << 4) | (1u << 2) | 0u);
+    uint8_t sc = 9, gc = 9, ac = 9, mc = 9;
+    CHECK(Compass_GetCalibrationStatus(&sc, &gc, &ac, &mc) == COMPASS_OK);
+    CHECK(sc == 3 && gc == 2 && ac == 1 && mc == 0);
+    /* every output is optional */
+    CHECK(Compass_GetCalibrationStatus(NULL, NULL, NULL, NULL) == COMPASS_OK);
+    compass_debug.calib_status = 0;
+}
+
 int main(void)
 {
+    run_test_calibration_status_unpacks_each_field();
     run_test_quat_heading_candidate_all_conventions();
     run_test_init_success_default_address();
     run_test_init_alternate_address();
