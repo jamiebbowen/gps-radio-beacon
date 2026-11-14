@@ -146,6 +146,7 @@ static uint8_t  hb_prev_reset_info = 0;
 /* Flight-window forensics: inertial trace + certified launch T0 */
 static ImuTracePacket_t last_imu_trace;
 static uint8_t imu_pending = 0;
+static uint8_t last_imu_fmt = 0;    /* 1 = V1, 2 = pre-V3 units, 3 = V3 */
 static uint32_t last_imu_time = 0;
 static LaunchT0Packet_t last_launch_t0;
 static uint8_t launch_t0_pending = 0;
@@ -535,6 +536,8 @@ uint8_t RF_Receiver_DataAvailable(void)
          * carries a trailing temp_c10; V2 (18 B) leaves it zero-filled. */
         memset(&last_imu_trace, 0, sizeof(last_imu_trace));
         memcpy(&last_imu_trace, last_packet.data, last_packet.length);
+        last_imu_fmt = (last_packet.length == IMU_TRACE_PACKET_SIZE_V1) ? 1 :
+                       ((last_imu_trace.ts_ms & IMU_TS_V3_FLAG) ? 3 : 2);
         if (RF_RocketFilter(1, last_imu_trace.rocket_id)) {
           imu_pending = 1;
           last_imu_time = HAL_GetTick();
@@ -951,10 +954,11 @@ uint8_t RF_Receiver_GetLastHeartbeat(HeartbeatPacket_t *hb, uint32_t *age_ms)
   return 1;
 }
 
-uint8_t RF_Receiver_GetImuTrace(ImuTracePacket_t *imu)
+uint8_t RF_Receiver_GetImuTrace(ImuTracePacket_t *imu, uint8_t *fmt)
 {
   if (!imu_pending || imu == NULL) return 0;
   memcpy(imu, &last_imu_trace, sizeof(*imu));
+  if (fmt) *fmt = last_imu_fmt;
   imu_pending = 0;
   return 1;
 }

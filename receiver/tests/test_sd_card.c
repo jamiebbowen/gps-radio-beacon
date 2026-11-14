@@ -352,12 +352,12 @@ TEST(test_all_log_row_formats)
      * SNR both ride the row - during boost the noise floor rises and RSSI
      * alone can't show it. */
     ImuTracePacket_t imu; memset(&imu, 0, sizeof(imu));
-    imu.ts_ms = 512;
+    imu.ts_ms = (uint16_t)(512 | IMU_TS_V3_FLAG);  /* V3 marker is masked */
     imu.accel_x_cg = 55;  imu.accel_y_cg = -125; imu.accel_z_cg = 980;
     imu.gyro_x_dds = 57;  imu.gyro_y_dds = -114; imu.gyro_z_dds = 12;
     imu.peak_accel_mg = 1350; imu.temp_c10 = 231;
-    CHECK(SD_Card_LogImuTrace(&imu, -95, -12) == SD_CARD_OK);
-    CHECK(SD_Card_LogImuTrace(NULL, 0, 0) == SD_CARD_ERROR);
+    CHECK(SD_Card_LogImuTrace(&imu, 3, -95, -12) == SD_CARD_OK);
+    CHECK(SD_Card_LogImuTrace(NULL, 3, 0, 0) == SD_CARD_ERROR);
 
     /* BASE (operator-position walk forensics) row */
     base.hdop = 0.9f;
@@ -371,7 +371,7 @@ TEST(test_all_log_row_formats)
     CHECK(strstr(big, "ERROR,test error") != NULL);
     CHECK(strstr(big, "NAV,FUS,39.9") != NULL);
     CHECK(strstr(big, "12.50,-3.25,40.00") != NULL);      /* velocities */
-    CHECK(strstr(big, ",IMU,512,55,-125,980,57,-114,12,1350,231,-95,-12\n")
+    CHECK(strstr(big, ",IMU,512,55,-125,980,57,-114,12,1350,231,-95,-12,3\n")
           != NULL);                                       /* full IMU row */
     CHECK(strstr(big, ",BASE,") != NULL);
     CHECK(strstr(big, "1650.0,0,0.9") != NULL);   /* alt, sats, hdop */

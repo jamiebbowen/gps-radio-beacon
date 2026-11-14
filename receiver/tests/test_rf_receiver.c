@@ -882,21 +882,31 @@ TEST(test_imu_trace_and_launch_t0)
     run_for(500, 250);
 
     ImuTracePacket_t out;
-    CHECK(RF_Receiver_GetImuTrace(&out) == 1);
+    uint8_t fmt = 0;
+    CHECK(RF_Receiver_GetImuTrace(&out, &fmt) == 1);
+    CHECK(fmt == 2);             /* pre-V3 units: no ts_ms marker */
     CHECK(out.rocket_id == OUR_ROCKET_ID);
     CHECK(out.ts_ms == 500);
     CHECK(out.accel_x_cg == 6234 && out.accel_z_cg == -9800);
     CHECK(out.gyro_y_dds == 34);
     CHECK(out.peak_accel_mg == 31000);
     CHECK(out.temp_c10 == 0);    /* V2 wire has no temp field (zero-filled) */
-    CHECK(RF_Receiver_GetImuTrace(&out) == 0);    /* one-shot */
+    CHECK(RF_Receiver_GetImuTrace(&out, NULL) == 0);    /* one-shot */
 
     /* Legacy V1 (20 B, with temp_c10) still decodes while the fleet rolls */
     inject_imu_trace(OUR_ROCKET_ID, 500, 6234, -9800);
     fake_pkt.length = IMU_TRACE_PACKET_SIZE_V1;
     run_for(250, 250);
-    CHECK(RF_Receiver_GetImuTrace(&out) == 1);
+    CHECK(RF_Receiver_GetImuTrace(&out, &fmt) == 1);
     CHECK(out.temp_c10 == 250);
+    CHECK(fmt == 1);             /* 20-byte legacy layout */
+
+    /* V3 (true g units, 0.1 deg/s gyro): bit 15 of ts_ms marks it */
+    inject_imu_trace(OUR_ROCKET_ID, (uint16_t)(500 | IMU_TS_V3_FLAG), 6234, -9800);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetImuTrace(&out, &fmt) == 1);
+    CHECK(fmt == 3);
+    CHECK((out.ts_ms & IMU_TS_MS_MASK) == 500);
 
     /* Packet-liveliness latch updated even though nav state was untouched */
     CHECK(RF_Receiver_GetLastPacketTime() != 0);
@@ -921,7 +931,7 @@ TEST(test_imu_trace_foreign_id_dropped)
     inject_imu_trace(FOREIGN_ROCKET_ID, 123, 9999, -9999);
     run_for(500, 250);
     ImuTracePacket_t out;
-    CHECK(RF_Receiver_GetImuTrace(&out) == 0);
+    CHECK(RF_Receiver_GetImuTrace(&out, NULL) == 0);
 }
 
 TEST(test_two_way_ack_lifecycle)

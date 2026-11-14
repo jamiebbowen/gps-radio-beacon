@@ -80,7 +80,10 @@ uint8_t RF_Receiver_GetLastHeartbeat(HeartbeatPacket_t *hb, uint32_t *age_ms);
 /* Flight-window forensics: inertial trace (one-shot; 1 = new trace) and
  * certified T0 declaration (one-shot; 1 = a new T0 was packaged). The IMU
  * row goes straight to the SD log from main.c; T0 fires one event row. */
-uint8_t RF_Receiver_GetImuTrace(ImuTracePacket_t *imu);
+/* fmt (may be NULL): 1 = legacy 20-byte V1, 2 = V2 with pre-V3 units
+ * (accel cm/s^2, gyro 0.01 deg/s, peak mm/s^2), 3 = V3 units (centi-g,
+ * 0.1 deg/s, milli-g; IMU_TS_V3_FLAG set in ts_ms). */
+uint8_t RF_Receiver_GetImuTrace(ImuTracePacket_t *imu, uint8_t *fmt);
 uint8_t RF_Receiver_GetLaunchT0(LaunchT0Packet_t *t0);
 
 /* Certified flight events: apogee / drogue / main / landed one-shots and

@@ -1057,11 +1057,12 @@ int main(void)
         SD_Card_LogEvent(t0_msg);
       }
       ImuTracePacket_t imu;
-      if (RF_Receiver_GetImuTrace(&imu)) {
+      uint8_t imu_fmt = 0;
+      if (RF_Receiver_GetImuTrace(&imu, &imu_fmt)) {
         int16_t ir; int8_t isn;
         RF_Receiver_GetSignalQuality(&ir, &isn);
         SD_Card_EnsureLogFile();
-        SD_Card_LogImuTrace(&imu, ir, isn);
+        SD_Card_LogImuTrace(&imu, imu_fmt, ir, isn);
       }
       /* Certified flight events (apogee / drogue / main / landed + anomaly
        * codes). The beacon repeats one-shots by design; each copy is a
