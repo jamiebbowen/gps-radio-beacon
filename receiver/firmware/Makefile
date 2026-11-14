@@ -49,8 +49,6 @@ PROJECT_SOURCES = \
 	$(SRC_DIR)/display_modes/rf_mode.c \
 	$(SRC_DIR)/display_modes/navigation_mode.c \
 	$(SRC_DIR)/display_modes/test_pattern.c \
-	$(SRC_DIR)/display_modes/i2c_devices.c \
-	$(SRC_DIR)/display_modes/imu_test_mode.c \
 	$(SRC_DIR)/display_modes/sd_card_mode.c \
 	$(SRC_DIR)/display_modes/channel_mode.c \
 	$(SRC_DIR)/display_modes/rf_stats_mode.c \

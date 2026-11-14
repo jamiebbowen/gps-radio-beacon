@@ -111,22 +111,12 @@ static uint8_t active_addr = COMPASS_I2C_ADDR;
 
 typedef struct {
   uint8_t active_addr;
-  uint8_t raw_bytes[6];
-  uint8_t status_reg;
   uint8_t calib_status;     /* packed S/G/A/M, same bit layout as before */
   uint8_t calib_sys;
   uint8_t calib_gyro;
   uint8_t calib_accel;
   uint8_t calib_mag;
-  uint8_t sys_status;
   uint8_t found_device_count;
-  int16_t mag_data[3];
-  int16_t accel_data[3];
-  int16_t gyro_data[3];
-  float heading;
-  float roll;
-  float pitch;
-  char debug_messages[8][64];
   char error_message[64];
   uint8_t error_code;
 } Compass_Debug_t;
@@ -138,7 +128,6 @@ static float heading_offset = 0.0f;
 
 static uint8_t decl_location_applied = 0;
 
-static void Compass_SetDebug(uint8_t msg_type, const char *msg);
 
 uint8_t Compass_UpdateLocation(float lat_deg, float lon_deg)
 {
@@ -151,7 +140,6 @@ uint8_t Compass_UpdateLocation(float lat_deg, float lon_deg)
   decl_location_applied = 1;
   char msg[48];
   snprintf(msg, sizeof(msg), "Site declination: %+.1f deg", (double)decl);
-  Compass_SetDebug(3, msg);
   return COMPASS_OK;
 }
 
@@ -181,7 +169,6 @@ static uint8_t Compass_ScanI2C(uint8_t *detected_addrs, uint8_t max_addrs)
 {
   HAL_StatusTypeDef hal_status;
   uint8_t devices_found = 0;
-  char debug_msg[100];
 
   for (uint8_t addr = 1; addr < 128 && devices_found < max_addrs; addr++) {
     /* Single quick probe per address: a healthy bus answers NACK in
@@ -194,16 +181,10 @@ static uint8_t Compass_ScanI2C(uint8_t *detected_addrs, uint8_t max_addrs)
       detected_addrs[devices_found] = addr;
       devices_found++;
 
-      snprintf(debug_msg, sizeof(debug_msg), "I2C device found at address 0x%02X, stored at index %d",
-               addr, devices_found-1);
-      Compass_SetDebug(6, debug_msg);
     }
   }
 
   if (devices_found > 0) {
-    snprintf(debug_msg, sizeof(debug_msg), "Detected addrs: 0x%02X 0x%02X",
-             detected_addrs[0], (devices_found > 1) ? detected_addrs[1] : 0);
-    Compass_SetDebug(7, debug_msg);
   }
 
   compass_debug.found_device_count = devices_found;
@@ -212,8 +193,6 @@ static uint8_t Compass_ScanI2C(uint8_t *detected_addrs, uint8_t max_addrs)
     Compass_SetError(COMPASS_ERROR_I2C_INIT, "No I2C devices found", 0);
     return 0;
   } else {
-    snprintf(debug_msg, sizeof(debug_msg), "Found %d I2C device(s)", devices_found);
-    Compass_SetDebug(6, debug_msg);
     return devices_found;
   }
 }
@@ -227,35 +206,6 @@ static void Compass_SetError(uint8_t error_code, const char *error_msg, uint8_t 
   memcpy(compass_debug.error_message, error_msg, n);
   compass_debug.error_message[n] = '\0';
   compass_debug.error_code = error_code;
-}
-
-static void Compass_SetDebug(uint8_t msg_type, const char *msg)
-{
-  if (msg_type < 8) {
-    const size_t cap = sizeof(compass_debug.debug_messages[0]) - 1;
-    size_t n = strlen(msg);
-    if (n > cap) n = cap;
-    memcpy(compass_debug.debug_messages[msg_type], msg, n);
-    compass_debug.debug_messages[msg_type][n] = '\0';
-  }
-}
-
-const char* Compass_GetDebugMessage(void)
-{
-  return compass_debug.debug_messages[0];
-}
-
-const char* Compass_GetDebugMessageByIndex(uint8_t index)
-{
-  if (index < 8) {
-    return compass_debug.debug_messages[index];
-  }
-  return "";
-}
-
-uint32_t Compass_GetDebugTimestamp(void)
-{
-  return debug_timestamp;
 }
 
 /* -----------------------------------------------------------------------
@@ -276,14 +226,12 @@ uint8_t Compass_HasHostCalOffsets(void)
 uint8_t Compass_GetCalibrationData(uint8_t *data, uint8_t len)
 {
   (void)data; (void)len;
-  Compass_SetDebug(3, "BNO085: no host cal offsets");
   return COMPASS_ERROR;
 }
 
 uint8_t Compass_SetCalibrationData(const uint8_t *data, uint8_t len)
 {
   (void)data; (void)len;
-  Compass_SetDebug(3, "BNO085: cal not host-loadable");
   return COMPASS_ERROR;
 }
 
@@ -302,7 +250,6 @@ static uint8_t Compass_Recover(void)
   if (BNO085_Recover() != BNO085_OK) {
     return COMPASS_ERROR;
   }
-  Compass_SetDebug(2, "BNO085 recovered after I2C error streak");
   return COMPASS_OK;
 }
 
@@ -358,7 +305,6 @@ static BNO085_State s_bno;
  */
 uint8_t Compass_Init(void)
 {
-  char debug_msg[100];
   int retry;
 
   uint8_t detected_addrs[16] = {0};
@@ -369,8 +315,6 @@ uint8_t Compass_Init(void)
     return COMPASS_ERROR;
   }
 
-  snprintf(debug_msg, sizeof(debug_msg), "Found %d I2C device(s), proceeding with init", device_count);
-  Compass_SetDebug(0, debug_msg);
 
   /* Find the BNO085 on either strap address. The hub answers I2C quickly
    * after power-up, but a fresh boot may still be composing its packet
@@ -393,8 +337,6 @@ uint8_t Compass_Init(void)
   }
 
   compass_debug.active_addr = active_addr;
-  snprintf(debug_msg, sizeof(debug_msg), "Using I2C address: 0x%02X for BNO085", active_addr);
-  Compass_SetDebug(0, debug_msg);
 
   memset(&s_bno, 0, sizeof(s_bno));
 
@@ -428,9 +370,6 @@ uint8_t Compass_Init(void)
                              ((s_bno.accuracy_rv    & 0x3) << 6));
 
   heading_offset = COMPASS_MAGNETIC_DECLINATION_DEG + COMPASS_MOUNTING_OFFSET_DEG;
-  snprintf(debug_msg, sizeof(debug_msg), "Heading offset: %.1f deg (decl+mount)", heading_offset);
-  Compass_SetDebug(3, debug_msg);
-  Compass_SetDebug(2, "BNO085 SH-2 fusion running");
 
   return COMPASS_OK;
 }
@@ -444,7 +383,6 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
 {
   /* Latched once calibration is PROVEN this session (RV accuracy >= 1). */
   static uint8_t compass_cal_proven = 0;
-  char debug_msg[100];
   uint32_t current_time = HAL_GetTick();
   float dt = 0.0f;
 
@@ -517,10 +455,6 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
   if (sp < -1.0f) sp = -1.0f;
   float pitch = asinf(sp) * (180.0f / (float)M_PI);
 
-  compass_debug.heading = heading;
-  compass_debug.roll = roll;
-  compass_debug.pitch = pitch;
-
   heading += heading_offset;
   heading = Compass_Normalize360(heading);
 
@@ -562,12 +496,8 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
   compass_debug.calib_gyro  = gyro_cal;
   compass_debug.calib_accel = accel_cal;
   compass_debug.calib_mag   = mag_cal;
-  compass_debug.sys_status  = 0x05;  /* fusion running (report arrival proved) */
   debug_timestamp = current_time;
 
-  snprintf(debug_msg, sizeof(debug_msg), "Cal: S%d G%d A%d M%d",
-           sys_cal, gyro_cal, accel_cal, mag_cal);
-  Compass_SetDebug(0, debug_msg);
 
   /* Latch calibration once PROVEN this session, identical semantics to
    * the BNO055 build: RV accuracy is a live confidence score that decays
@@ -580,104 +510,10 @@ uint8_t Compass_Update(Compass_Data *compass_data_ptr)
   compass_data_ptr->heading_stale = 0;  /* live data */
   compass_data_ptr->mag_cal = mag_cal;
 
-  snprintf(debug_msg, sizeof(debug_msg), "Heading: %.1f deg, P:%.1f R:%.1f",
-           compass_data_ptr->heading, compass_data_ptr->pitch, compass_data_ptr->roll);
-  Compass_SetDebug(4, debug_msg);
 
   compass_data_ptr->timestamp = HAL_GetTick();
 
   return COMPASS_OK;
-}
-
-/**
- * @brief Calibration status + instructions (refresh of debug strings).
- *        BNO085 calibrates dynamically; there is no host choreography.
- * @retval COMPASS_OK when fusion (sys) accuracy is full (3)
- */
-uint8_t Compass_Calibrate(void)
-{
-  uint8_t sys_cal, gyro_cal, accel_cal, mag_cal;
-  char debug_msg[100];
-
-  Compass_GetCalibrationStatus(&sys_cal, &gyro_cal, &accel_cal, &mag_cal);
-
-  compass_debug.calib_sys = sys_cal;
-  compass_debug.calib_gyro = gyro_cal;
-  compass_debug.calib_accel = accel_cal;
-  compass_debug.calib_mag = mag_cal;
-
-  snprintf(debug_msg, sizeof(debug_msg), "Calibration: SYS=%d GYR=%d ACC=%d MAG=%d",
-           sys_cal, gyro_cal, accel_cal, mag_cal);
-  Compass_SetDebug(0, debug_msg);
-
-  if (sys_cal == 3) {
-    Compass_SetDebug(3, "System fully calibrated!");
-    return COMPASS_OK;
-  }
-
-  if (mag_cal < 3) {
-    switch (mag_cal) {
-      case 0:
-        snprintf(debug_msg, sizeof(debug_msg), "MAG CAL: figure 8 pattern (0/3)");
-        break;
-      case 1:
-        snprintf(debug_msg, sizeof(debug_msg), "MAG CAL: keep moving (1/3)");
-        break;
-      default:
-        snprintf(debug_msg, sizeof(debug_msg), "MAG CAL: almost done (2/3)");
-        break;
-    }
-    Compass_SetDebug(3, debug_msg);
-    Compass_SetDebug(4, "Rotate in all directions");
-    Compass_SetDebug(5, "Away from metal objects");
-  }
-  if (gyro_cal < 3) {
-    snprintf(debug_msg, sizeof(debug_msg), "GYR CAL: keep still (%d/3)", gyro_cal);
-    Compass_SetDebug(6, debug_msg);
-  }
-  if (accel_cal < 3) {
-    snprintf(debug_msg, sizeof(debug_msg), "ACC CAL: place on 6 sides (%d/3)", accel_cal);
-    Compass_SetDebug(7, debug_msg);
-  }
-
-  return COMPASS_ERROR;  /* not fully calibrated yet */
-}
-
-/**
- * @brief Liveness/fusion sanity check (BNO085 has no host-triggerable
- *        self-test register; this verifies the data path instead).
- * @retval COMPASS_OK if the hub answers and rotation vectors are flowing
- */
-uint8_t Compass_SelfTest(void)
-{
-  if (BNO085_IsAlive() != BNO085_OK) {
-    Compass_SetError(COMPASS_ERROR_I2C_INIT, "BNO085 not answering I2C", 0);
-    return COMPASS_ERROR;
-  }
-  if (BNO085_Poll(&s_bno) != BNO085_OK) {
-    Compass_SetError(COMPASS_ERROR_READ_DATA, "BNO085 SHTP read failed", 0);
-    return COMPASS_ERROR;
-  }
-  if (s_bno.rv_count == 0) {
-    Compass_SetError(COMPASS_ERROR_ID_CHECK, "BNO085 alive, no fusion data", 0);
-    return COMPASS_ERROR;
-  }
-  return COMPASS_OK;
-}
-
-/**
- * @brief Get current heading
- * @retval Heading in degrees (0-360)
- */
-float Compass_GetHeading(void)
-{
-  Compass_Data compass_data = {0};
-
-  if (Compass_Update(&compass_data) == 0) {
-    return compass_data.heading;
-  }
-
-  return 0.0f;
 }
 
 uint8_t Compass_GetCalibrationStatus(uint8_t *sys_cal, uint8_t *gyro_cal, uint8_t *accel_cal, uint8_t *mag_cal)
@@ -700,21 +536,10 @@ uint8_t Compass_GetCalibrationStatus(uint8_t *sys_cal, uint8_t *gyro_cal, uint8_
   return COMPASS_OK;
 }
 
-uint8_t Compass_SetHeadingOffset(float offset_deg)
-{
-  heading_offset = offset_deg;
-  return COMPASS_OK;
-}
-
 uint8_t Compass_SetDeclination(float decl_deg)
 {
   heading_offset = decl_deg + COMPASS_MOUNTING_OFFSET_DEG;
   return COMPASS_OK;
-}
-
-uint8_t Compass_GetLastErrorCode(void)
-{
-  return compass_debug.error_code;
 }
 
 const char* Compass_GetErrorMessage(void)
@@ -725,24 +550,6 @@ const char* Compass_GetErrorMessage(void)
 uint8_t Compass_GetErrorCode(void)
 {
   return compass_debug.error_code;
-}
-
-void Compass_GetDebugInfo(uint8_t *active_addr_out, uint8_t *raw_bytes, uint8_t *status_reg, uint8_t *calib_status)
-{
-  if (active_addr_out != NULL) {
-    *active_addr_out = compass_debug.active_addr;
-  }
-  if (raw_bytes != NULL) {
-    for (int i = 0; i < 6; i++) {
-      raw_bytes[i] = compass_debug.raw_bytes[i];
-    }
-  }
-  if (status_reg != NULL) {
-    *status_reg = compass_debug.status_reg;
-  }
-  if (calib_status != NULL) {
-    *calib_status = compass_debug.calib_status;
-  }
 }
 
 /** Rotation-vector samples received this boot (diagnostics). */
@@ -761,7 +568,6 @@ uint8_t Compass_DisplayI2CScan(void)
   char line1[22];
   char line2[22];
   char line3[22];
-  char debug_msg[100];
 
   Display_Clear();
   Display_DrawText(0, 0, "I2C Bus Scan");
@@ -797,11 +603,6 @@ uint8_t Compass_DisplayI2CScan(void)
         strcat(line3, addr_str);
       }
 
-      snprintf(debug_msg, sizeof(debug_msg), "Addresses: %02X %02X %02X %02X",
-               detected_addrs[0], detected_addrs[1],
-               (count > 2) ? detected_addrs[2] : 0,
-               (count > 3) ? detected_addrs[3] : 0);
-      Compass_SetDebug(5, debug_msg);
 
       Display_DrawText(0, 30, line2);
       if (count > 4) {
@@ -844,23 +645,3 @@ uint8_t Compass_GetSystemStatus(uint8_t *system_status, uint8_t *self_test_resul
   return COMPASS_OK;
 }
 
-uint8_t Compass_GetOperationMode(uint8_t *op_mode)
-{
-  if (op_mode == NULL) return COMPASS_ERROR;
-  *op_mode = 0x0C;  /* 9-axis fusion (SH2_ROTATION_VECTOR) */
-  return COMPASS_OK;
-}
-
-uint8_t Compass_GetPowerMode(uint8_t *pwr_mode)
-{
-  if (pwr_mode == NULL) return COMPASS_ERROR;
-  *pwr_mode = 0x00;  /* normal */
-  return COMPASS_OK;
-}
-
-uint8_t Compass_GetTemperature(int8_t *temp)
-{
-  /* The BNO085 exposes no temperature register - do not fabricate one. */
-  if (temp == NULL) return COMPASS_ERROR;
-  return COMPASS_ERROR;
-}

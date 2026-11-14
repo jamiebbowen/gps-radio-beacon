@@ -26,9 +26,6 @@
 #include "display_modes/sd_card_mode.h"
 #include "display_modes/rf_mode.h"
 #include "display_modes/compass_mode.h"
-#include "display_modes/i2c_devices.h"
-#include "display_modes/spi_test_mode.h"
-#include "display_modes/imu_test_mode.h"
 #include "display_modes/test_pattern.h"
 #include "gps.h"
 #include "compass.h"
@@ -85,7 +82,7 @@ void Display_DrawText(uint8_t x, uint8_t y, const char *t)
 static const char *row(int r) { return cap[r]; }
 
 /* ------------------------------------------------------------------ */
-/* HAL GPIO/SPI fakes (sd_card_mode + spi_test_mode read real pins)    */
+/* HAL GPIO/SPI fakes (sd_card_mode reads real pins)                 */
 /* ------------------------------------------------------------------ */
 
 static uint8_t pin_level[8][16];   /* [port sel][pin idx]: 0/1 */
@@ -221,17 +218,14 @@ SD_Card_Status SD_Card_GetInfo(SD_Card_Info *info)
 }
 
 static uint8_t  fake_compass_update = COMPASS_OK;
-static uint8_t  fake_selftest = COMPASS_OK;
 static uint8_t  fake_cal[4] = {3, 3, 3, 3};
 static uint8_t  fake_cal_restored = 0;
 static uint32_t fake_rv_count = 0;
 static uint8_t  fake_sys = 5, fake_self = 0x0F, fake_syserr = 0;
-static uint8_t  fake_addr = 0x28;
 static const char *fake_errmsg = "none";
 static uint8_t  fake_errcode = 0;
 
 uint8_t Compass_Update(Compass_Data *d) { (void)d; return fake_compass_update; }
-uint8_t Compass_SelfTest(void)          { return fake_selftest; }
 uint8_t Compass_GetCalibrationStatus(uint8_t *s, uint8_t *g, uint8_t *a, uint8_t *m)
 {
     if (s) *s = fake_cal[0];
@@ -251,11 +245,6 @@ uint8_t Compass_WasCalRestored(void)      { return fake_cal_restored; }
 uint32_t Compass_GetRvSampleCount(void)   { return fake_rv_count; }
 const char* Compass_GetErrorMessage(void) { return fake_errmsg; }
 uint8_t Compass_GetErrorCode(void)        { return fake_errcode; }
-void Compass_GetDebugInfo(uint8_t *a, uint8_t *r, uint8_t *s, uint8_t *c)
-{
-    if (a) *a = fake_addr;
-    (void)r; (void)s; (void)c;
-}
 
 static void reset_fakes(void)
 {
@@ -273,10 +262,10 @@ static void reset_fakes(void)
     fake_p_null = 0;
     memset(&fake_sd, 0, sizeof(fake_sd));
     fake_sd_status = SD_CARD_OK;
-    fake_compass_update = fake_selftest = COMPASS_OK;
+    fake_compass_update = COMPASS_OK;
     fake_cal[0] = fake_cal[1] = fake_cal[2] = fake_cal[3] = 3;
     fake_cal_restored = 0; fake_rv_count = 0;
-    fake_sys = 5; fake_self = 0x0F; fake_syserr = 0; fake_addr = 0x28;
+    fake_sys = 5; fake_self = 0x0F; fake_syserr = 0;
     fake_errmsg = "none"; fake_errcode = 0;
 }
 
@@ -624,58 +613,8 @@ TEST(compass_visual_rose_and_invalid_heading)
 }
 
 /* ------------------------------------------------------------------ */
-/* i2c_devices / spi_test_mode / imu_test_mode / test_pattern          */
+/* test_pattern                                                       */
 /* ------------------------------------------------------------------ */
-
-TEST(i2c_devices_scan_layout_and_clamp)
-{
-    reset_fakes();
-    uint8_t none[] = {0};
-    Display_ShowI2CDevices(none, 0);
-    CHECK(strstr(row(2), "No devices found") != NULL);
-
-    uint8_t devs[10] = {0x28, 0x29, 0x5A, 0x3C, 0x3D, 0x40, 0x41, 0x42, 0x70, 0x77};
-    cap_clear();
-    Display_ShowI2CDevices(devs, 10);    /* >8: rows 4-7 clamp at 8 */
-    CHECK(strstr(row(2), "Found 10 devices") != NULL);
-    CHECK(strstr(row(4), "0x28") && strstr(row(4), "0x29"));
-    CHECK(strstr(row(7), "0x41") && strstr(row(7), "0x42"));
-}
-
-TEST(spi_test_pass_and_fail_rows)
-{
-    reset_fakes();
-    fake_spi_rx = 0xA5;
-    DisplayMode_SPITest();
-    CHECK(strstr(row(0), "SPI Hardware Test") != NULL);
-    CHECK(strstr(row(4), "SPI: OK") != NULL);
-    CHECK(strstr(row(6), "Recv: 0xA5") != NULL);
-    /* CS pin was toggled high->low->high */
-    CHECK(pin_level[port_idx(SD_CS_GPIO_PORT)][pin_idx(SD_CS_PIN)] == 1);
-
-    fake_spi_status = HAL_ERROR;
-    cap_clear();
-    DisplayMode_SPITest();
-    CHECK(strstr(row(4), "SPI: FAIL") != NULL);
-}
-
-TEST(imu_test_pass_and_fail_paths)
-{
-    reset_fakes();
-    fake_rv_count = 5;
-    DisplayMode_IMUTest();
-    CHECK(strstr(row(1), "Check: PASS") != NULL || strstr(row(0), "BNO085") != NULL);
-    CHECK(strstr(row(4), "SH2 fused") != NULL);
-
-    fake_selftest = COMPASS_ERROR;
-    fake_errmsg = "no hub";
-    fake_errcode = 0x2A;
-    cap_clear();
-    DisplayMode_IMUTest();
-    CHECK(strstr(row(1), "Check: FAIL") != NULL);
-    CHECK(strstr(row(2), "no hub") != NULL);
-    CHECK(strstr(row(3), "Err: 0x2A") != NULL);
-}
 
 TEST(test_pattern_corner_layout)
 {
@@ -708,9 +647,6 @@ int main(void)
     run_compass_heading_stale_and_restored_markers();
     run_compass_update_failure_no_response();
     run_compass_visual_rose_and_invalid_heading();
-    run_i2c_devices_scan_layout_and_clamp();
-    run_spi_test_pass_and_fail_rows();
-    run_imu_test_pass_and_fail_paths();
     run_test_pattern_corner_layout();
     return TEST_SUMMARY();
 }

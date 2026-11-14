@@ -61,7 +61,7 @@ $(BUILD)/test_preflight_mode: test_preflight_mode.c \
 # every sensor/RF getter they read (row/col text capture is the oracle).
 MODE_SRCS := $(addprefix $(SRC_DIR)/display_modes/, \
     channel_mode.c rf_stats_mode.c gps_mode.c sd_card_mode.c rf_mode.c \
-    compass_mode.c i2c_devices.c spi_test_mode.c imu_test_mode.c test_pattern.c)
+    compass_mode.c test_pattern.c)
 # -Wno-format: the mode sources print int32_t with %ld, which is correct on
 # the ARM ABI (int32_t = long) but warns on the host ABI.
 $(BUILD)/test_display_modes: test_display_modes.c $(MODE_SRCS) $(HEADERS) | $(BUILD)

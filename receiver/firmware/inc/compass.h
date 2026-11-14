@@ -72,18 +72,13 @@ typedef struct {
 /* Function prototypes */
 uint8_t Compass_Init(void);
 uint8_t Compass_Update(Compass_Data *compass_data);
-uint8_t Compass_Calibrate(void);
-uint8_t Compass_SelfTest(void);
 uint8_t Compass_GetCalibrationStatus(uint8_t *sys_cal, uint8_t *gyro_cal, uint8_t *accel_cal, uint8_t *mag_cal);
-float Compass_GetHeading(void);
 const char* Compass_GetErrorMessage(void);
 uint8_t Compass_GetErrorCode(void);
-void Compass_GetDebugInfo(uint8_t *active_addr, uint8_t *raw_bytes, uint8_t *status_reg, uint8_t *calib_status);
 uint8_t Compass_GetError(void);
 uint8_t Compass_GetFoundDeviceCount(void);
 const uint8_t* Compass_GetFoundAddresses(void);
 uint8_t Compass_DisplayI2CScan(void);
-uint8_t Compass_SetHeadingOffset(float offset_deg);
 /** Set the magnetic-declination term only; mounting offset stays baked in. */
 uint8_t Compass_SetDeclination(float decl_deg);
 /** Position-aware declination: applies the CONUS bilinear grid value for
@@ -116,20 +111,10 @@ uint8_t Compass_HasHostCalOffsets(void);
 /** Rotation-vector samples received since init (bring-up diagnostics). */
 uint32_t Compass_GetRvSampleCount(void);
 
-/* Error reporting functions */
-uint8_t Compass_GetLastErrorCode(void);
 const char* Compass_GetErrorMessage(void);
-
-/* Debug functions */
-const char* Compass_GetDebugMessage(void);
-const char* Compass_GetDebugMessageByIndex(uint8_t index);
-uint32_t Compass_GetDebugTimestamp(void);
 
 /* System status functions */
 uint8_t Compass_GetSystemStatus(uint8_t *system_status, uint8_t *self_test_result, uint8_t *system_error);
-uint8_t Compass_GetOperationMode(uint8_t *op_mode);
-uint8_t Compass_GetPowerMode(uint8_t *pwr_mode);
-uint8_t Compass_GetTemperature(int8_t *temp);
 
 #ifdef __cplusplus
 }

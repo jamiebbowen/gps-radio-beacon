@@ -327,7 +327,6 @@ TEST(test_init_success_default_address)
     CHECK(Compass_GetFoundDeviceCount() >= 1);
     /* declination 8.5 + mounting 90.0 */
     CHECK_NEAR(heading_offset, 98.5, 0.01);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(2), "fusion running") != NULL);
     CHECK(Compass_GetRvSampleCount() >= 1);
 }
 
@@ -347,7 +346,7 @@ TEST(test_init_no_devices)
     present_28 = 0;
     present_29 = 0;
     CHECK(Compass_Init() == COMPASS_ERROR);
-    CHECK(Compass_GetLastErrorCode() == COMPASS_ERROR_I2C_INIT);
+    CHECK(compass_debug.error_code == COMPASS_ERROR_I2C_INIT);
     CHECK(strstr(Compass_GetErrorMessage(), "No I2C devices") != NULL);
 }
 
@@ -417,12 +416,12 @@ TEST(test_update_heading_offset_and_wrap)
 
     /* Negative wrap: offset override makes a small heading go negative.
      * Raw 10 deg = yaw 80 deg: w=cos(40), z=sin(40). */
-    Compass_SetHeadingOffset(-200.0f);
+    heading_offset = -200.0f;
     set_quat(0.7660f, 0.0f, 0.0f, 0.6428f);
     CHECK(Compass_Update(&d) == COMPASS_OK);
     CHECK_NEAR(d.heading, 170.0, 1.5);
 
-    Compass_SetHeadingOffset(98.5f);   /* restore */
+    heading_offset = 98.5f;            /* restore */
 }
 
 TEST(test_set_declination_overrides_site)
@@ -625,7 +624,6 @@ TEST(test_i2c_error_streak_recovers)
     nak_rx_once = 1;
     Test_SetTick(HAL_GetTick() + 6000);   /* pass the recover interval gate */
     CHECK(Compass_Update(&d) == COMPASS_ERROR);  /* recovery attempt runs */
-    CHECK(strstr(Compass_GetDebugMessageByIndex(2), "recovered") != NULL);
     /* Hub streams again */
     Test_SetTick(HAL_GetTick() + 200);
     CHECK(Compass_Update(&d) == COMPASS_OK);
@@ -661,116 +659,6 @@ TEST(test_stale_heading_flagged_on_comm_loss)
 /* Calibrate / self-test                                               */
 /* ------------------------------------------------------------------ */
 
-TEST(test_calibrate_fully_calibrated)
-{
-    fresh_init();
-    rv_acc = 3; acc_acc = 3; gyro_acc = 3;
-    Compass_Data d = {0};
-    for (int i = 0; i < 4; i++) {          /* let all streams arrive */
-        Test_SetTick(HAL_GetTick() + 50);
-        CHECK(Compass_Update(&d) == COMPASS_OK);
-    }
-    CHECK(Compass_Calibrate() == COMPASS_OK);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(0), "SYS=3") != NULL);
-
-    uint8_t s, g, a, m;
-    Compass_GetCalibrationStatus(&s, &g, &a, &m);
-    CHECK(s == 3 && g == 3 && a == 3 && m == 3);
-    Compass_GetCalibrationStatus(NULL, NULL, NULL, NULL);  /* null-safe */
-}
-
-TEST(test_calibrate_partial_guidance)
-{
-    fresh_init();
-    Compass_Data d = {0};
-    rv_acc = 1; gyro_acc = 0; acc_acc = 0;
-    Test_SetTick(HAL_GetTick() + 50);
-    CHECK(Compass_Update(&d) == COMPASS_OK);
-
-    CHECK(Compass_Calibrate() == COMPASS_ERROR);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "MAG CAL") != NULL);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(6), "GYR CAL") != NULL);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(7), "ACC CAL") != NULL);
-}
-
-TEST(test_selftest)
-{
-    fresh_init();
-    CHECK(Compass_SelfTest() == COMPASS_OK);   /* alive + fusion flowing */
-
-    present_28 = 0;                      /* hub gone */
-    CHECK(Compass_SelfTest() == COMPASS_ERROR);
-    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_I2C_INIT);
-    present_28 = 1;
-}
-
-TEST(test_selftest_error_paths)
-{
-    /* Init with the fusion stream off fails, but not before memset'ing
-     * s_bno - which leaves rv_count = 0 for the SelfTest check below.
-     * (rv_count is cumulative, so this is the only deterministic route
-     * to "alive but no fusion data" once any init has succeeded.) */
-    fake_reset();
-    stream_off = 1;
-    compass_cal_restored = 0;
-    Test_SetTickAutoAdvance(5);
-    (void)Compass_Init();
-    Test_SetTickAutoAdvance(0);
-
-    /* Hub answers the probe and polls clean, yet no RVs were counted. */
-    CHECK(Compass_SelfTest() == COMPASS_ERROR);
-    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_ID_CHECK);
-
-    /* SHTP reads NAK while the address probe ACKs: read-data fault. */
-    stream_off = 0;
-    nak_rx = 1;
-    CHECK(Compass_SelfTest() == COMPASS_ERROR);
-    CHECK(Compass_GetErrorCode() == COMPASS_ERROR_READ_DATA);
-    nak_rx = 0;
-}
-
-TEST(test_calibrate_mag_guidance_variants)
-{
-    /* The mag_cal digit tracks RV accuracy (SH-2 reports mag cal on the
-     * RV report's accuracy byte). Drive the 0/3 and 2/3 guidance rows
-     * the partial-calibration test skips. */
-    fresh_init();
-    Compass_Data d = {0};
-
-    rv_acc = 0;
-    for (int i = 0; i < 4; i++) {
-        Test_SetTick(HAL_GetTick() + 50);
-        (void)Compass_Update(&d);
-    }
-    CHECK(Compass_Calibrate() == COMPASS_ERROR);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "figure 8") != NULL);
-
-    rv_acc = 2;
-    for (int i = 0; i < 4; i++) {
-        Test_SetTick(HAL_GetTick() + 50);
-        (void)Compass_Update(&d);
-    }
-    CHECK(Compass_Calibrate() == COMPASS_ERROR);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "almost done") != NULL);
-}
-
-TEST(test_debug_getters_and_heading_failure)
-{
-    fresh_init();
-    Compass_Data d = {0};
-    Test_SetTick(HAL_GetTick() + 50);
-    CHECK(Compass_Update(&d) == COMPASS_OK);
-
-    /* debug message 0 carries the Cal: line; timestamp advances on update */
-    CHECK(strstr(Compass_GetDebugMessage(), "Cal:") != NULL);
-    CHECK(Compass_GetDebugTimestamp() == HAL_GetTick());
-
-    /* Dead bus: GetHeading falls back to 0.0f */
-    present_28 = 0;
-    CHECK_NEAR(Compass_GetHeading(), 0.0f, 0.001);
-    present_28 = 1;
-}
-
 TEST(test_display_i2c_scan_multi_device)
 {
     fresh_init();
@@ -804,7 +692,6 @@ TEST(test_cal_data_unsupported_contract)
     CHECK(Compass_GetCalibrationData(buf, sizeof(buf)) == COMPASS_ERROR);
     CHECK(Compass_SetCalibrationData(buf, sizeof(buf)) == COMPASS_ERROR);
     CHECK(Compass_WasCalRestored() == 0);
-    CHECK(strstr(Compass_GetDebugMessageByIndex(3), "BNO085") != NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -815,27 +702,10 @@ TEST(test_accessors)
 {
     fresh_init();
 
-    uint8_t st, self, err, mode, pwr;
-    int8_t temp = -99;
+    uint8_t st, self, err;
     CHECK(Compass_GetSystemStatus(&st, &self, &err) == COMPASS_OK);
     CHECK(st == 5 && self == 0x0F && err == 0);   /* streaming, alive */
-    CHECK(Compass_GetOperationMode(&mode) == COMPASS_OK && mode == 0x0C);
-    CHECK(Compass_GetPowerMode(&pwr) == COMPASS_OK && pwr == 0);
-    /* No temperature register on the BNO085: must fail, not fabricate */
-    CHECK(Compass_GetTemperature(&temp) == COMPASS_ERROR);
-    CHECK(Compass_GetOperationMode(NULL) == COMPASS_ERROR);
-    CHECK(Compass_GetPowerMode(NULL) == COMPASS_ERROR);
-
-    uint8_t addr = 0, raw[6], sreg = 0, cal = 0;
-    Compass_GetDebugInfo(&addr, raw, &sreg, &cal);
-    CHECK(addr == 0x28);
-    Compass_GetDebugInfo(NULL, NULL, NULL, NULL);      /* null-safe */
-    CHECK(Compass_GetDebugMessageByIndex(99)[0] == '\0');
-
-    /* GetHeading returns the corrected value: identity quat = raw 90 deg
-     * (conv 5: 90 - yaw=0) + 98.5 offset = 188.5 */
-    set_quat(1.0f, 0.0f, 0.0f, 0.0f);
-    CHECK_NEAR(Compass_GetHeading(), 188.5, 1.5);
+    CHECK(compass_debug.active_addr == 0x28);
 
     const uint8_t *found = Compass_GetFoundAddresses();
     CHECK(found != NULL);
@@ -943,14 +813,8 @@ int main(void)
     run_test_i2c_error_streak_recovers();
     run_test_stale_heading_flagged_on_comm_loss();
 
-    run_test_calibrate_fully_calibrated();
-    run_test_calibrate_partial_guidance();
-    run_test_calibrate_mag_guidance_variants();
-    run_test_selftest();
-    run_test_selftest_error_paths();
     run_test_cal_data_unsupported_contract();
     run_test_accessors();
-    run_test_debug_getters_and_heading_failure();
     run_test_display_i2c_scan();
     run_test_display_i2c_scan_multi_device();
     run_test_recover_failure_paths();

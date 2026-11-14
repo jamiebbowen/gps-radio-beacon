@@ -42,7 +42,6 @@ extern SPI_HandleTypeDef hspi1;  /* shared SPI1 handle (main.c) */
 
 static uint8_t display_buffer[SHARP_BUFFER_SIZE];
 static uint8_t sharp_vcom = 0;       /* 0 or SHARP_CMD_VCOM - frame polarity */
-static uint32_t sharp_err_count = 0; /* observability only: SPI can't wedge */
 
 /** Reverse a byte (SHARP wants LSB-first; SPI1 peripheral is MSB-first). */
 static inline uint8_t sharp_rev8(uint8_t b)
@@ -78,10 +77,9 @@ static void sharp_deselect(void)
 
 static void sharp_write(const uint8_t *buf, uint16_t len)
 {
-  if (HAL_SPI_Transmit(&hspi1, (uint8_t *)buf, len, SHARP_SPI_TIMEOUT_MS)
-      != HAL_OK) {
-    sharp_err_count++;
-  }
+  /* A failed frame needs no handling: the panel is redrawn in full on the
+   * next 250 ms refresh, and SPI (unlike I2C) cannot wedge the bus. */
+  (void)HAL_SPI_Transmit(&hspi1, (uint8_t *)buf, len, SHARP_SPI_TIMEOUT_MS);
 }
 
 /**
@@ -240,24 +238,6 @@ void Display_DrawRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t color)
 }
 
 /**
- * @brief Fill a rectangle
- * @param x X coordinate of top-left corner
- * @param y Y coordinate of top-left corner
- * @param w Width of rectangle
- * @param h Height of rectangle
- * @param color Rectangle color (0 = off, 1 = on)
- * @retval None
- */
-void Display_FillRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t color)
-{
-  for (uint8_t i = 0; i < w; i++) {
-    for (uint8_t j = 0; j < h; j++) {
-      Display_DrawPixel(x + i, y + j, color);
-    }
-  }
-}
-
-/**
  * @brief Draw a circle using Bresenham's algorithm
  * @param x0 Center X coordinate
  * @param y0 Center Y coordinate
@@ -411,26 +391,3 @@ void Display_DrawDirectionIndicator(uint8_t x, uint8_t y, float angle)
   Display_DrawPixel(x - radius + 1, y, 1);
 }
 
-/**
- * @brief Show boot screen with logo and version info
- * @retval None
- */
-void Display_ShowBootScreen(void)
-{
-  Display_Clear();
-
-  /* Draw border */
-  Display_DrawRect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, 1);
-
-  /* Draw title */
-  Display_DrawTextRowCol(1, 1, "GPS RADIO BEACON");
-  Display_DrawTextRowCol(2, 5, "RECEIVER");
-
-  /* Draw version info */
-  Display_DrawTextRowCol(5, 3, "FW v1.0.0");
-
-  Display_Update();
-}
-
-/** Error counter for bring-up visibility (counts HAL failures only). */
-uint32_t Display_GetErrorCount(void) { return sharp_err_count; }
