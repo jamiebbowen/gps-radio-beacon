@@ -147,7 +147,7 @@ void launch_detect_get_gyro_rads(float *x, float *y, float *z)
 static float fake_total_accel = 1.25f;
 float launch_detect_get_current_accel(void) { return fake_total_accel; }
 static float fake_peak_accel = 1.25f;
-float launch_detect_take_peak_accel(void) { return fake_peak_accel; }
+float launch_detect_take_peak_accel(imu_peak_consumer_t who) { (void)who; return fake_peak_accel; }
 
 static uint32_t fake_gps_rejects = 0;
 uint32_t nav_get_gps_rejects(void) { return fake_gps_rejects; }

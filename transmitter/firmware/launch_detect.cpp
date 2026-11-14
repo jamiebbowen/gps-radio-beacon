@@ -73,7 +73,11 @@ static float accel_x = 0.0f;
 static float accel_y = 0.0f;
 static float accel_z = 0.0f;
 static float total_accel = 0.0f;
-static float peak_accel = 0.0f;   /* max |linear accel| since the last take */
+/* Per-report peaks, one window per consumer (launch_detect.h), so taking
+ * one consumer's peak never steals another's */
+static float peak_accel[IMU_PEAK_CONSUMERS];   /* max |linear accel|, m/s^2 */
+static float gyro_mag = 0.0f;                  /* |gyro| of the last report */
+static float peak_gyro[IMU_PEAK_CONSUMERS];    /* max |gyro|, rad/s         */
 
 /* Inertial-trace bookkeeping. During the flight window every degree of
  * rotation and burst of thrust matters for post-shred forensics; the radio
@@ -112,7 +116,8 @@ static float    land_window_max = 0.0f;
 void launch_detect_init(void) {
     Serial.println("[Launch] Initializing BNO085 IMU...");
     total_accel = 0.0f;
-    peak_accel = 0.0f;
+    gyro_mag = 0.0f;
+    for (int c = 0; c < IMU_PEAK_CONSUMERS; c++) peak_accel[c] = peak_gyro[c] = 0.0f;
     
     // Initialize I2C. Try 400 kHz first (BNO085 supports fast mode); the
     // long-wire risk is NAKs / corrupted reads, so probe with a chip-ID
@@ -244,6 +249,10 @@ void launch_detect_update(uint32_t system_time_seconds) {
         gyro_y = sensorValue.un.gyroscope.y;
         gyro_z = sensorValue.un.gyroscope.z;
         last_gyro_ms = millis();
+        gyro_mag = sqrtf(gyro_x * gyro_x + gyro_y * gyro_y + gyro_z * gyro_z);
+        for (int c = 0; c < IMU_PEAK_CONSUMERS; c++) {
+            if (gyro_mag > peak_gyro[c]) peak_gyro[c] = gyro_mag;
+        }
     }
 
     // Process linear acceleration data (gravity already removed by sensor)
@@ -255,7 +264,9 @@ void launch_detect_update(uint32_t system_time_seconds) {
         
         // Calculate total acceleration magnitude
         total_accel = sqrt(accel_x * accel_x + accel_y * accel_y + accel_z * accel_z);
-        if (total_accel > peak_accel) peak_accel = total_accel;
+        for (int c = 0; c < IMU_PEAK_CONSUMERS; c++) {
+            if (total_accel > peak_accel[c]) peak_accel[c] = total_accel;
+        }
         
         // State machine for launch detection
         switch (current_state) {
@@ -514,12 +525,20 @@ uint32_t launch_detect_get_time_since_launch(uint32_t system_time_seconds) {
 /**
  * Get current total acceleration magnitude (m/s²)
  */
-/* Peak |linear accel| (m/s^2) since the previous call - every report
- * counts, not just the one current when the IMU trace packet is built.
- * The next window starts at the current magnitude. */
-float launch_detect_take_peak_accel(void) {
-    float p = (total_accel > peak_accel) ? total_accel : peak_accel;
-    peak_accel = total_accel;
+/* Peak |linear accel| (m/s^2) / |gyro| (rad/s) since `who` last took it -
+ * every report counts, not just the one current when the consumer looks.
+ * The consumer's next window starts at the current magnitude. */
+float launch_detect_take_peak_accel(imu_peak_consumer_t who) {
+    if ((unsigned)who >= IMU_PEAK_CONSUMERS) return 0.0f;
+    float p = (total_accel > peak_accel[who]) ? total_accel : peak_accel[who];
+    peak_accel[who] = total_accel;
+    return p;
+}
+
+float launch_detect_take_peak_gyro(imu_peak_consumer_t who) {
+    if ((unsigned)who >= IMU_PEAK_CONSUMERS) return 0.0f;
+    float p = (gyro_mag > peak_gyro[who]) ? gyro_mag : peak_gyro[who];
+    peak_gyro[who] = gyro_mag;
     return p;
 }
 

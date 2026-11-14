@@ -57,7 +57,15 @@ uint32_t launch_detect_get_time_since_launch(uint32_t system_time_seconds);
 
 // Diagnostic functions
 float launch_detect_get_current_accel(void);      // Get current total acceleration (m/s²)
-float launch_detect_take_peak_accel(void);       // Peak |accel| (m/s²) since the last call; restarts the window
+/* Per-report IMU peaks: each consumer has its own window, so one taking
+ * its peak never steals another's. */
+typedef enum {
+    IMU_PEAK_TRACE = 0,     /* IMU trace packets (beacon.cpp)     */
+    IMU_PEAK_MAXIMA,        /* flight maxima recap (firmware.ino) */
+    IMU_PEAK_CONSUMERS
+} imu_peak_consumer_t;
+float launch_detect_take_peak_accel(imu_peak_consumer_t who);  // Peak |accel| (m/s²) since who's last take
+float launch_detect_take_peak_gyro(imu_peak_consumer_t who);   // Peak |gyro| (rad/s) since who's last take
 bool launch_detect_get_imu_status(void);          // Check if IMU is working
 void launch_detect_get_accel_xyz(float* x, float* y, float* z);  // Get 3-axis acceleration
 void launch_detect_get_gyro_rads(float* x, float* y, float* z);  // Get 3-axis gyro (rad/s, calibrated)

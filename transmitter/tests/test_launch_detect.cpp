@@ -359,16 +359,34 @@ TEST(test_peak_accel_tracks_every_report)
     push_accel(30, 0, 0);                 /* |a| 30 */
     push_accel(0, 6, 8);                  /* |a| 10 */
     tick(10, 0);
-    CHECK(fabsf(launch_detect_take_peak_accel() - 30.0f) < 1e-4f);
+    CHECK(fabsf(launch_detect_take_peak_accel(IMU_PEAK_TRACE) - 30.0f) < 1e-4f);
     /* each window starts at the current |a| */
-    CHECK(fabsf(launch_detect_take_peak_accel() - 10.0f) < 1e-4f);
+    CHECK(fabsf(launch_detect_take_peak_accel(IMU_PEAK_TRACE) - 10.0f) < 1e-4f);
     push_accel(0, 3, 4);                  /* |a| 5  */
     tick(10, 0);
-    CHECK(fabsf(launch_detect_take_peak_accel() - 10.0f) < 1e-4f);
-    CHECK(fabsf(launch_detect_take_peak_accel() - 5.0f) < 1e-4f);
+    CHECK(fabsf(launch_detect_take_peak_accel(IMU_PEAK_TRACE) - 10.0f) < 1e-4f);
+    CHECK(fabsf(launch_detect_take_peak_accel(IMU_PEAK_TRACE) - 5.0f) < 1e-4f);
+
+    /* The maxima recap has its own window: the trace taking its peak
+     * doesn't steal the maxima's (both saw the 30) */
+    CHECK(fabsf(launch_detect_take_peak_accel(IMU_PEAK_MAXIMA) - 30.0f) < 1e-4f);
+    CHECK(fabsf(launch_detect_take_peak_accel(IMU_PEAK_MAXIMA) - 5.0f) < 1e-4f);
+
+    /* gyro magnitude peaks the same way */
+    push_gyro(0, 3, 4);                   /* |w| 5  */
+    push_gyro(1, 0, 0);                   /* |w| 1  */
+    tick(10, 0);
+    CHECK(fabsf(launch_detect_take_peak_gyro(IMU_PEAK_MAXIMA) - 5.0f) < 1e-4f);
+    CHECK(fabsf(launch_detect_take_peak_gyro(IMU_PEAK_MAXIMA) - 1.0f) < 1e-4f);
+
+    /* an unknown consumer is harmless */
+    CHECK(launch_detect_take_peak_accel((imu_peak_consumer_t)7) == 0.0f);
+    CHECK(launch_detect_take_peak_gyro((imu_peak_consumer_t)7) == 0.0f);
+
     /* a re-init starts from zero */
     launch_detect_init();
-    CHECK(launch_detect_take_peak_accel() == 0.0f);
+    CHECK(launch_detect_take_peak_accel(IMU_PEAK_TRACE) == 0.0f);
+    CHECK(launch_detect_take_peak_gyro(IMU_PEAK_MAXIMA) == 0.0f);
 }
 
 TEST(test_sensor_reset_reenables_reports)

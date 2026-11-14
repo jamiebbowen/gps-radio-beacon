@@ -387,6 +387,17 @@ int main(void)
     CHECK(transmit_fast_flag == 0);
     CHECK(radio_enabled_flag == 0);               /* radio released */
 
+    /* The maxima recap sees every IMU report of a pass, not just the last
+     * one: a 20 g spike batched ahead of a calm report still counts. */
+    push_accel(200.0f, 0.0f, 0.0f);
+    push_accel(5.0f, 0.0f, 0.0f);
+    sim_run(20);
+    {
+        MaximaPacket_t mxp;
+        flight_maxima_get(&mxp);
+        CHECK(mxp.max_accel_cg >= 2000);          /* 200 m/s^2 = 20.4 g */
+    }
+
     /* ---------- Descent under chute: fused + paced inertial stream ----- */
     uint32_t fus0 = type_count(PACKET_TYPE_FUSED);
     uint32_t imu0 = type_count(PACKET_TYPE_IMU);

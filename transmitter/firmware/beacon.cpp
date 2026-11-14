@@ -342,7 +342,7 @@ uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast) {
     /* Peak linear accel (m/s^2) since the last IMU packet -> milli-g. The
      * launch-detect layer tracks it on every report; sampling |a| here,
      * once per packet, only ever reported the instantaneous value. */
-    p.peak_accel_mg = sat_i16(launch_detect_take_peak_accel() / MS2_PER_G * 1000.0f);
+    p.peak_accel_mg = sat_i16(launch_detect_take_peak_accel(IMU_PEAK_TRACE) / MS2_PER_G * 1000.0f);
     s_last_imu = p;
 
     if (!transmit_fast) {
