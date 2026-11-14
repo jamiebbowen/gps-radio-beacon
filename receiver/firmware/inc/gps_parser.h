@@ -19,7 +19,8 @@ extern "C" {
 #define GPS_PARSER_ERROR             1
 
 /* Global variables */
-extern uint32_t gps_checksum_errors;
+/** Sentences dropped on a *XX checksum mismatch since boot. */
+uint32_t GPS_Parser_GetChecksumErrors(void);
 extern uint32_t gps_invalid_coordinate_errors;
 
 /* Function prototypes */

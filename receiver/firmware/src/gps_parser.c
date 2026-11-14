@@ -19,7 +19,7 @@
 #define GPS_MAX_VALID_LONGITUDE     180.0f
 
 /* Diagnostic counters */
-uint32_t gps_checksum_errors = 0;
+static uint32_t gps_checksum_errors = 0;
 uint32_t gps_invalid_coordinate_errors = 0;
 
 /* Last known good coordinates */
@@ -511,4 +511,10 @@ static uint8_t GPS_ValidateChecksum(const char* nmea_sentence)
   
   /* Compare calculated and expected checksums */
   return (calculated_checksum == expected_checksum) ? 1 : 0;
+}
+
+/** Sentences dropped on a *XX checksum mismatch since boot. */
+uint32_t GPS_Parser_GetChecksumErrors(void)
+{
+  return gps_checksum_errors;
 }

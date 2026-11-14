@@ -45,6 +45,7 @@
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_spi.h"
 #include "gps.h"
+#include "gps_parser.h"
 #include "compass.h"
 #include "globals.h"
 #include "i2c_bus.h"
@@ -1246,30 +1247,22 @@ int main(void)
           snprintf(nfl_field, sizeof(nfl_field), " nfl=%ddBm", (int)nfl);
         }
 
-        char st_msg[200];
+        char nf_field[12] = "n/a";
         if (RF_Receiver_GetNoiseFloor(&nf)) {
-          snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums sd=%lums syncs=%lu spidiv=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu%s",
-                   (unsigned long)pkts, (unsigned long)irqs,
-                   (unsigned long)RF_Receiver_GetCrcErrors(),
-                   (unsigned long)RF_Receiver_GetWedgesRecovered(), (int)nf,
-                   (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max,
-                   (unsigned long)sd_syncs, (unsigned)SD_FastSpeedEnabled(),
-                   (unsigned long)m_rf, (unsigned long)m_gps,
-                   (unsigned long)m_disp, (unsigned long)m_cmp,
-                   (unsigned long)loops_d, (unsigned long)sd_werr, nfl_field);
-        } else {
-          snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums sd=%lums syncs=%lu spidiv=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu%s",
-                   (unsigned long)pkts, (unsigned long)irqs,
-                   (unsigned long)RF_Receiver_GetCrcErrors(),
-                   (unsigned long)RF_Receiver_GetWedgesRecovered(),
-                   (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max,
-                   (unsigned long)sd_syncs, (unsigned)SD_FastSpeedEnabled(),
-                   (unsigned long)m_rf, (unsigned long)m_gps,
-                   (unsigned long)m_disp, (unsigned long)m_cmp,
-                   (unsigned long)loops_d, (unsigned long)sd_werr, nfl_field);
+          snprintf(nf_field, sizeof(nf_field), "%ddBm", (int)nf);
         }
+
+        char st_msg[200];
+        snprintf(st_msg, sizeof(st_msg),
+                 "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%s vdd=%umV loop=%lums sd=%lums syncs=%lu spidiv=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu%s",
+                 (unsigned long)pkts, (unsigned long)irqs,
+                 (unsigned long)RF_Receiver_GetCrcErrors(),
+                 (unsigned long)RF_Receiver_GetWedgesRecovered(), nf_field,
+                 (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max,
+                 (unsigned long)sd_syncs, (unsigned)SD_FastSpeedEnabled(),
+                 (unsigned long)m_rf, (unsigned long)m_gps,
+                 (unsigned long)m_disp, (unsigned long)m_cmp,
+                 (unsigned long)loops_d, (unsigned long)sd_werr, nfl_field);
         SD_Card_LogEvent(st_msg);
       }
     }
@@ -1406,12 +1399,11 @@ int main(void)
         uint32_t u_bytes, u_sents, u_drops, u_rearm;
         uint16_t u_errs;
         GPS_GetRxStats(&u_bytes, &u_sents, &u_drops, &u_errs, &u_rearm);
-        extern uint32_t gps_checksum_errors;   /* gps_parser.c */
         char gps_msg[128];
         snprintf(gps_msg, sizeof(gps_msg),
                  "Local GPS no fix at 120s: rx=%lu snt=%lu drp=%lu csum=%lu er=%u ra=%lu sats=%d",
                  (unsigned long)u_bytes, (unsigned long)u_sents,
-                 (unsigned long)u_drops, (unsigned long)gps_checksum_errors,
+                 (unsigned long)u_drops, (unsigned long)GPS_Parser_GetChecksumErrors(),
                  (unsigned)u_errs, (unsigned long)u_rearm, (int)gps_data.satellites);
         SD_Card_LogEvent(gps_msg);
       }
@@ -1522,21 +1514,19 @@ int main(void)
               /* Link-edge breadcrumbs: the crossing moments mark the
                * walk-out/walk-back edge without needing post-hoc RSSI
                * archaeology. -85/-80 hysteresis keeps flutter out. */
-              if (sd_card_ok) {
-                static uint8_t link_weak = 0;
-                if (!link_weak && pkt_rssi <= -85) {
-                  link_weak = 1;
-                  char wk[48];
-                  snprintf(wk, sizeof(wk), "LINK WEAK rssi=%ddBm snr=%d",
-                           (int)pkt_rssi, (int)pkt_snr);
-                  SD_Card_LogEvent(wk);
-                } else if (link_weak && pkt_rssi >= -80) {
-                  link_weak = 0;
-                  char wk[48];
-                  snprintf(wk, sizeof(wk), "LINK OK rssi=%ddBm snr=%d",
-                           (int)pkt_rssi, (int)pkt_snr);
-                  SD_Card_LogEvent(wk);
-                }
+              static uint8_t link_weak = 0;
+              if (!link_weak && pkt_rssi <= -85) {
+                link_weak = 1;
+                char wk[48];
+                snprintf(wk, sizeof(wk), "LINK WEAK rssi=%ddBm snr=%d",
+                         (int)pkt_rssi, (int)pkt_snr);
+                SD_Card_LogEvent(wk);
+              } else if (link_weak && pkt_rssi >= -80) {
+                link_weak = 0;
+                char wk[48];
+                snprintf(wk, sizeof(wk), "LINK OK rssi=%ddBm snr=%d",
+                         (int)pkt_rssi, (int)pkt_snr);
+                SD_Card_LogEvent(wk);
               }
 
               /* Log navigation snapshot. Compute distance/bearing from THIS
