@@ -270,7 +270,14 @@ void beacon_poll_commands(uint8_t in_flight)
             if (buf[2] == CMD_PING)        echo = buf[5];
             else if (buf[2] == CMD_TUNE_NEXT_CH) echo = 0xFF; /* unsupported */
             else                           echo = 0xFE;       /* unknown */
+            /* The listen left the radio off again: power it for the ACK
+             * like every slow-path packet. Sent "while disabled" the ACK
+             * left the RF switch on the receive side until the next TX. */
+            radio_enable();
+            delay(10);
             radio_transmit_ack((uint8_t)ROCKET_ID, buf[2], buf[3], buf[4], echo);
+            delay(1);
+            radio_disable();
             Serial.println(F("[2way] CMD answered"));
         }
     }
