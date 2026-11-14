@@ -94,8 +94,8 @@ uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t
      * cast of a non-finite value is undefined behavior - a checksum-valid
      * corrupt sentence could otherwise put garbage coordinates on the
      * air. Out-of-range is rejected too: lat +-90, lon +-180. */
-    float lat_decimal = gps_nmea_to_decimal(coords->lat, coords->lat_dir);
-    float lon_decimal = gps_nmea_to_decimal(coords->lon, coords->lon_dir);
+    double lat_decimal = gps_nmea_to_decimal(coords->lat, coords->lat_dir);
+    double lon_decimal = gps_nmea_to_decimal(coords->lon, coords->lon_dir);
     if (!isfinite(lat_decimal) || !isfinite(lon_decimal) ||
         lat_decimal < -90.0f || lat_decimal > 90.0f ||
         lon_decimal < -180.0f || lon_decimal > 180.0f) {

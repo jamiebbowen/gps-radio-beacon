@@ -114,7 +114,7 @@ uint8_t gps_get_health(void) { return fake_gps_health; }
 static uint32_t fake_fix_age = 250;    /* plausible fix age for T0 test */
 uint32_t gps_get_fix_age_ms(void) { return fake_fix_age; }
 
-float gps_nmea_to_decimal(const char *nmea_coord, char direction)
+double gps_nmea_to_decimal(const char *nmea_coord, char direction)
 {
     /* Reference conversion: ddmm.mmmm -> decimal degrees. (int) of a
      * non-finite value is UB, so "nan"/"inf" fields report NaN, which
@@ -125,7 +125,7 @@ float gps_nmea_to_decimal(const char *nmea_coord, char direction)
     double min = v - deg * 100.0;
     double out = deg + min / 60.0;
     if (direction == 'S' || direction == 'W') out = -out;
-    return (float)out;
+    return out;
 }
 
 static launch_state_t fake_launch_state = LAUNCH_STATE_IDLE;
@@ -657,14 +657,20 @@ TEST(test_fused_non_finite_state_no_tx)
 {
     /* A poisoned filter (NaN/Inf anywhere in position or velocity) must
      * never reach the wire: ENCODE_COORD on NaN is undefined. */
-    float *fields[6] = { &fake_fused.lat_deg, &fake_fused.lon_deg, &fake_fused.alt_m,
-                         &fake_fused.v_n, &fake_fused.v_e, &fake_fused.v_d };
     for (int i = 0; i < 6; i++) {
         reset_tx();
         memset(&fake_fused, 0, sizeof(fake_fused));
         fake_fused.valid = true;
-        fake_fused.lat_deg = 39.89f; fake_fused.lon_deg = -105.11f;
-        *fields[i] = (i % 2) ? INFINITY : NAN;
+        fake_fused.lat_deg = 39.89; fake_fused.lon_deg = -105.11;
+        float bad = (i % 2) ? INFINITY : NAN;
+        switch (i) {
+            case 0: fake_fused.lat_deg = bad; break;
+            case 1: fake_fused.lon_deg = bad; break;
+            case 2: fake_fused.alt_m = bad;   break;
+            case 3: fake_fused.v_n = bad;     break;
+            case 4: fake_fused.v_e = bad;     break;
+            default: fake_fused.v_d = bad;    break;
+        }
         CHECK(beacon_transmit_fused_data(100, 0) == 0);
         CHECK(tx_count == 0);
     }
@@ -925,6 +931,13 @@ TEST(test_airlink_golden_fused_encode)
     CHECK(beacon_transmit_fused_data(100, 1) == 1);
     CHECK(tx_len == sizeof(AIRLINK_FUSED_GOLDEN));
     CHECK(memcmp(tx_buf, AIRLINK_FUSED_GOLDEN, sizeof(AIRLINK_FUSED_GOLDEN)) == 0);
+    if (memcmp(tx_buf, AIRLINK_FUSED_GOLDEN, sizeof(AIRLINK_FUSED_GOLDEN)) != 0) {
+        printf("  sent:  ");
+        for (size_t i = 0; i < sizeof(AIRLINK_FUSED_GOLDEN); i++) printf("%02X ", tx_buf[i]);
+        printf("\n  golden:");
+        for (size_t i = 0; i < sizeof(AIRLINK_FUSED_GOLDEN); i++) printf(" %02X", AIRLINK_FUSED_GOLDEN[i]);
+        printf("\n");
+    }
 }
 
 TEST(test_fused_hexdump_cadence_and_tx_failure)

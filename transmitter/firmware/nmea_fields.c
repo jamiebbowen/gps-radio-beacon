@@ -43,14 +43,14 @@ int nmea_get_field(const char *sentence, uint8_t index,
     return (int)n;
 }
 
-float nmea_coord_to_decimal(const char *nmea_coord, char direction) {
+double nmea_coord_to_decimal(const char *nmea_coord, char direction) {
     if (nmea_coord == NULL || nmea_coord[0] == '\0') {
-        return 0.0f;
+        return 0.0;
     }
 
     /* ddmm.mmmmm: degrees are everything above the hundreds place, minutes
      * are the remainder. Done in double so the ~9 significant digits of an
-     * NMEA coordinate survive until the final rounding to float. */
+     * NMEA coordinate survive (float32 would cost ~0.5 m). */
     double nmea_value = atof(nmea_coord);
     /* Validate BEFORE the (int) cast, which is undefined behaviour for a
      * non-finite or out-of-range value: atof() parses "nan"/"inf"
@@ -72,7 +72,7 @@ float nmea_coord_to_decimal(const char *nmea_coord, char direction) {
         decimal = -decimal;
     }
 
-    return (float)decimal;
+    return decimal;
 }
 
 static int hex_val(char c) {

@@ -613,9 +613,9 @@ next_sentence:
                          * starting with '0' is just 0-9.99 deg */
                         && strcmp(current_coords.lat, "0") != 0
                         && current_coords.lat[0] != '\0') {
-                        float lat = gps_nmea_to_decimal(current_coords.lat,
+                        double lat = gps_nmea_to_decimal(current_coords.lat,
                                                        current_coords.lat_dir);
-                        float lon = gps_nmea_to_decimal(current_coords.lon,
+                        double lon = gps_nmea_to_decimal(current_coords.lon,
                                                        current_coords.lon_dir);
                         float alt = atof(current_coords.altitude);
                         uint8_t sats = nmea_u8_field(current_coords.satellites, 99);
@@ -649,7 +649,7 @@ const GPSCoordinates_t* gps_get_current_coordinates(void) {
  * @param direction Direction character ('N', 'S', 'E', 'W')
  * @return Decimal degrees (negative for S/W)
  */
-float gps_nmea_to_decimal(const char* nmea_coord, char direction) {
+double gps_nmea_to_decimal(const char* nmea_coord, char direction) {
     /* Thin wrapper: the conversion lives in nmea_fields.c so it can be
      * unit-tested on the host (and shares the double-precision math). */
     return nmea_coord_to_decimal(nmea_coord, direction);

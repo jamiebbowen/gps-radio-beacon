@@ -98,13 +98,13 @@ int transmit_string(const char *str)
 
 /* GPS / launch / nav fakes */
 uint8_t gps_get_health(void) { return HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0); }
-float gps_nmea_to_decimal(const char *nmea_coord, char direction)
+double gps_nmea_to_decimal(const char *nmea_coord, char direction)
 {
     double v = atof(nmea_coord);
     int deg = (int)(v / 100.0);
     double out = deg + (v - deg * 100.0) / 60.0;
     if (direction == 'S' || direction == 'W') out = -out;
-    return (float)out;
+    return out;
 }
 
 static launch_state_t fake_launch_state = LAUNCH_STATE_IDLE;

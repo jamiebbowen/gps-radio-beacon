@@ -511,8 +511,8 @@ void loop() {
 
             const GPSCoordinates_t* c = gps_get_current_coordinates();
             if (c->valid) {
-                float lat_d = gps_nmea_to_decimal(c->lat, c->lat_dir);
-                float lon_d = gps_nmea_to_decimal(c->lon, c->lon_dir);
+                double lat_d = gps_nmea_to_decimal(c->lat, c->lat_dir);
+                double lon_d = gps_nmea_to_decimal(c->lon, c->lon_dir);
                 float alt_f = atof(c->altitude);
                 /* Corrupt fields can parse as NaN/Inf; lroundf() on a
                  * non-finite value is UB - skip the record instead. */

@@ -105,7 +105,7 @@ static int log_contains_str(const char *text)
 static int   nav_updates = 0;
 static float nav_last_lat = 0, nav_last_lon = 0, nav_last_alt = 0;
 static uint8_t nav_last_sats = 0, nav_last_fq = 0;
-extern "C" void nav_update_from_gps(float lat_deg, float lon_deg, float alt_m,
+extern "C" void nav_update_from_gps(double lat_deg, double lon_deg, float alt_m,
                                     uint8_t sats, uint8_t fix_quality)
 {
     nav_updates++;

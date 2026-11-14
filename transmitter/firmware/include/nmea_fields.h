@@ -46,7 +46,7 @@ int nmea_get_field(const char *sentence, uint8_t index,
  *         field (non-finite, negative, >= 18100, or minutes >= 60), which
  *         callers reject with isfinite()
  */
-float nmea_coord_to_decimal(const char *nmea_coord, char direction);
+double nmea_coord_to_decimal(const char *nmea_coord, char direction);
 
 /**
  * Validate the trailing *XX checksum of an NMEA sentence.

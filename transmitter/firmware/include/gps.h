@@ -42,7 +42,7 @@ void gps_set_in_flight(uint8_t in_flight);
 uint32_t gps_get_fix_age_ms(void);
 
 // Convert NMEA coordinate to decimal degrees
-float gps_nmea_to_decimal(const char* nmea_coord, char direction);
+double gps_nmea_to_decimal(const char* nmea_coord, char direction);
 
 
 #endif // GPS_H

@@ -226,7 +226,18 @@ TEST(test_u8_field_clamps_and_rejects) {
 
 /* ------------------------------------------------------------------ */
 
+TEST(test_coord_keeps_sub_metre_precision) {
+    /* float32 resolves latitude near 40 deg only to ~4e-6 deg (~0.4 m)
+     * and longitude near 105 deg to ~8e-6 deg (~0.7 m); the ~9 significant
+     * digits of an NMEA coordinate must survive to the nav anchor. */
+    double lat = nmea_coord_to_decimal("3953.402841", 'N');
+    double lon = nmea_coord_to_decimal("10453.110071", 'W');
+    CHECK(fabs(lat - (39.0 + 53.402841 / 60.0)) < 1e-9);
+    CHECK(fabs(lon + (104.0 + 53.110071 / 60.0)) < 1e-9);
+}
+
 int main(void) {
+    run_test_coord_keeps_sub_metre_precision();
     run_test_field_extraction_by_position();
     run_test_empty_fields_do_not_shift_positions();
     run_test_field_terminators();

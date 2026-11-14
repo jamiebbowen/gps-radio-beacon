@@ -21,8 +21,8 @@ extern "C" {
 #endif
 
 typedef struct {
-    float    lat_deg;      /* fused latitude  (deg)          */
-    float    lon_deg;      /* fused longitude (deg)          */
+    double   lat_deg;      /* fused latitude  (deg), double  */
+    double   lon_deg;      /* fused longitude (deg), double  */
     float    alt_m;        /* fused altitude  (m MSL)        */
     float    v_n;          /* velocity north  (m/s)          */
     float    v_e;          /* velocity east   (m/s)          */
@@ -43,7 +43,7 @@ void nav_predict(void);
 
 /* Feed a fresh GPS fix (decimal degrees, meters MSL).  sats/fix_quality are
  * passed through for sanity checks; fix_quality < 1 is ignored. */
-void nav_update_from_gps(float lat_deg, float lon_deg, float alt_m,
+void nav_update_from_gps(double lat_deg, double lon_deg, float alt_m,
                          uint8_t sats, uint8_t fix_quality);
 
 /* Snapshot of the fused state. */
