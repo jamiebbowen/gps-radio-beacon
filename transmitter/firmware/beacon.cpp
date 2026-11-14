@@ -13,159 +13,9 @@
 #include <stdlib.h>
 #include <math.h>
 
-// Checksum function removed - LoRa provides built-in CRC validation
-
 /* 255 is the receiver's "unbound" sentinel for the airframe filter; an
  * airframe claiming it would be invisible to that filter. */
 static_assert(ROCKET_ID != 255, "ROCKET_ID 255 is reserved (RX unbound sentinel)");
-
-/**
- * Transmit GPS data via LoRa beacon with proper framing and checksum
- * @param coords Pointer to GPS coordinates structure
- * @param system_time_seconds Current system time in seconds
- * @param transmit_fast If true, transmit GPS data in fast mode
- * @return 1 if transmission was successful, 0 if coordinates were invalid
- */
-uint8_t beacon_transmit_gps_data(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast) {
-    (void)system_time_seconds; /* kept in the signature for parity with heartbeat/T0 senders */
-    char packet[256];  // LoRa packet buffer (plenty of room)
-    int pos = 0;
-    
-    // Check if we have valid GPS data
-    if (!coords->valid || (coords->lat[0] == '0' && strlen(coords->lat) == 1)) {
-        Serial.print(F("[Beacon] Rejecting GPS - valid="));
-        Serial.print(coords->valid);
-        Serial.print(F(" lat='"));
-        Serial.print(coords->lat);
-        Serial.print(F("' lon='"));
-        Serial.print(coords->lon);
-        Serial.println(F("'"));
-        return 0;
-    }
-    
-    // Require minimum 4 satellites for reliable fix
-    /* Minimum satellites: 4 (3D fix) in flight. Once the landing latch is
-     * set, a 3-sat 2D fix still carries recovery-grade horizontal
-     * coordinates - and a rocket under canopy with 3 sats would otherwise
-     * go position-silent exactly when the crew is walking in (it would
-     * heartbeat instead, with only the stale pre-canopy fix surviving).
-     * The 0x20 flag marks degraded geometry so the log explains itself. */
-    int sat_count = atoi(coords->satellites);
-    int min_sats = launch_detect_has_landed() ? 3 : 4;
-    if (sat_count < min_sats) {
-        Serial.print(F("[Beacon] Rejecting GPS - insufficient satellites: "));
-        Serial.println(sat_count);
-        return 0;
-    }
-    
-    // Check GPS fix quality (GGA field 6)
-    // 0=no fix, 1=GPS fix (SPS), 2=DGPS fix, 3=PPS fix, etc.
-    if (coords->fix_quality < 1) {
-        Serial.print(F("[Beacon] Rejecting GPS - no fix, quality: "));
-        Serial.println(coords->fix_quality);
-        return 0;
-    }
-    
-    // Sanity check altitude (reasonable range: -500m to 50000m)
-    float altitude = atof(coords->altitude);
-    if (!isfinite(altitude) || altitude < -500.0f || altitude > 50000.0f) {
-        Serial.print(F("[Beacon] Rejecting GPS - unreasonable altitude: "));
-        Serial.println(altitude);
-        return 0;
-    }
-    
-    /* Coordinate sanity: atof() parses "nan"/"inf" field text literally,
-     * so a checksum-valid corrupt sentence can carry non-finite or
-     * out-of-range coordinates through the earlier gates. Reject before
-     * the radio is powered rather than put "nan" on the air. */
-    {
-        float lat_d = gps_nmea_to_decimal(coords->lat, coords->lat_dir);
-        float lon_d = gps_nmea_to_decimal(coords->lon, coords->lon_dir);
-        if (!isfinite(lat_d) || !isfinite(lon_d) ||
-            lat_d < -90.0f || lat_d > 90.0f ||
-            lon_d < -180.0f || lon_d > 180.0f) {
-            Serial.println(F("[Beacon] Rejecting GPS - bad coords"));
-            return 0;
-        }
-    }
-    
-    Serial.println(F("[Beacon] GPS data valid, building packet..."));
-    
-    if (!transmit_fast) {
-        // Enable radio
-        radio_enable();
-        delay(10);
-    }
-
-    // Build packet: simple CSV format - LoRa handles framing and CRC
-    // Add latitude with sign
-    if (coords->lat_dir == 'S') {
-        packet[pos++] = '-';
-    }
-    if (strlen(coords->lat) > 0) {
-        for (uint8_t i = 0; coords->lat[i] != '\0'; i++) {
-            packet[pos++] = coords->lat[i];
-        }
-    }
-    
-    packet[pos++] = ',';
-    
-    // Add longitude with sign
-    if (coords->lon_dir == 'W') {
-        packet[pos++] = '-';
-    }
-    if (strlen(coords->lon) > 0) {
-        for (uint8_t i = 0; coords->lon[i] != '\0'; i++) {
-            packet[pos++] = coords->lon[i];
-        }
-    }
-    
-    packet[pos++] = ',';
-    
-    // Add altitude
-    if (strlen(coords->altitude) > 0) {
-        for (uint8_t i = 0; coords->altitude[i] != '\0'; i++) {
-            packet[pos++] = coords->altitude[i];
-        }
-    }
-
-    if (!transmit_fast) {
-        packet[pos++] = ',';
-        
-        // Add satellite count (only in full packets)
-        if (strlen(coords->satellites) > 0) {
-            for (uint8_t i = 0; coords->satellites[i] != '\0'; i++) {
-                packet[pos++] = coords->satellites[i];
-            }
-        }
-    }
-
-#if INCLUDE_CARRIAGE_RETURNS
-    // Add newline (only in testing mode)
-    packet[pos++] = '\r';
-    packet[pos++] = '\n';
-#endif
-    
-    // Null terminate
-    packet[pos] = '\0';
-    
-    // Transmit via LoRa
-    Serial.print("[Beacon] Transmitting GPS packet: ");
-    Serial.println(packet);
-    int result = transmit_string(packet);
-    
-    if (result != 0) {
-        Serial.print(F("[Beacon] ✗ Transmission failed, error code: "));
-        Serial.println(result);
-    }
-    
-    if (!transmit_fast) {
-        delay(1);
-        radio_disable();
-    }
-    
-    return (result == 0) ? 1 : 0;  // RadioLib returns 0 on success
-}
 
 /**
  * Transmit GPS data in binary format (13 bytes)
@@ -656,9 +506,6 @@ void beacon_transmit_callsign(uint8_t transmit_fast) {
     Serial.println(callsign_msg);
     transmit_string(callsign_msg);
     
-#if INCLUDE_CARRIAGE_RETURNS
-    transmit_string("\r\n");
-#endif
     
     if (!transmit_fast) {
         delay(1);

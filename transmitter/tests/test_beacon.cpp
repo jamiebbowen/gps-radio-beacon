@@ -208,77 +208,6 @@ static int16_t get_i16_le(const uint8_t *p)
 }
 
 /* ------------------------------------------------------------------ */
-/* ASCII GPS packet tests                                              */
-/* ------------------------------------------------------------------ */
-
-TEST(test_ascii_full_packet)
-{
-    reset_tx();
-    GPSCoordinates_t c = valid_coords();
-
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 1);
-    CHECK(tx_count == 1);
-    /* West longitude gets a '-' sign; full packet carries sats */
-    CHECK(strcmp((const char *)tx_buf, "3953.40284,-10453.11007,1655.4,8") == 0);
-    /* Slow path power-cycles the radio around the TX */
-    CHECK(radio_enables == 1 && radio_disables == 1);
-}
-
-TEST(test_ascii_fast_packet_and_south)
-{
-    reset_tx();
-    GPSCoordinates_t c = valid_coords();
-    c.lat_dir = 'S';
-    c.lon_dir = 'E';
-
-    CHECK(beacon_transmit_gps_data(&c, 100, 1) == 1);
-    /* Fast packet: no sats field, radio stays enabled (LAUNCH phase) */
-    CHECK(strcmp((const char *)tx_buf, "-3953.40284,10453.11007,1655.4") == 0);
-    CHECK(radio_enables == 0 && radio_disables == 0);
-}
-
-TEST(test_ascii_rejection_paths)
-{
-    reset_tx();
-    GPSCoordinates_t c = valid_coords();
-
-    c.valid = 0;
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-
-    c = valid_coords();
-    strcpy(c.lat, "0");                       /* the "0" placeholder fix */
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-
-    c = valid_coords();
-    strcpy(c.satellites, "3");                /* < 4 sats */
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-
-    c = valid_coords();
-    c.fix_quality = 0;                        /* no fix */
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-
-    c = valid_coords();
-    strcpy(c.altitude, "60000");              /* > 50 km */
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-
-    c = valid_coords();
-    strcpy(c.altitude, "-600");               /* < -500 m */
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-
-    CHECK(tx_count == 0);                     /* nothing ever hit the air */
-}
-
-TEST(test_ascii_tx_failure_reported)
-{
-    reset_tx();
-    tx_result = -707;                         /* RadioLib error */
-    GPSCoordinates_t c = valid_coords();
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-    CHECK(strstr(Serial.log, "-707") != NULL);
-    tx_result = 0;
-}
-
-/* ------------------------------------------------------------------ */
 /* Binary GPS packet tests                                             */
 /* ------------------------------------------------------------------ */
 
@@ -408,14 +337,6 @@ TEST(test_non_finite_and_range_coords_rejected)
     CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 0);
     CHECK(tx_count == 0);
 
-    /* ASCII path: same garbage must not be put on the wire as text. */
-    c = valid_coords();
-    strcpy(c.lat, "nan");
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-    c = valid_coords();
-    strcpy(c.altitude, "inf");
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-    CHECK(tx_count == 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1081,10 +1002,6 @@ TEST(test_slow_path_powers_radio_up_and_down)
 
 int main(void)
 {
-    run_test_ascii_full_packet();
-    run_test_ascii_fast_packet_and_south();
-    run_test_ascii_rejection_paths();
-    run_test_ascii_tx_failure_reported();
     run_test_binary_packet_fields();
     run_test_binary_altitude_clamps();
     run_test_binary_launch_flag();

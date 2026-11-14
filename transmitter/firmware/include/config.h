@@ -220,10 +220,6 @@
     #define BATTERY_SAVE_INTERVAL_SEC       30    // 30 seconds between transmissions in battery save
     #define CALLSIGN_TRANSMIT_INTERVAL_SEC  30    // 30 seconds between callsign transmissions
     
-    // Debug features enabled in testing mode
-    #define DEBUG_OUTPUT_ENABLED        1     // Enable debug output
-    #define INCLUDE_CARRIAGE_RETURNS    1     // Include \r\n for terminal debugging
-    
 #else
     // Production Configuration - Conservative intervals for flight
     #define PRE_LAUNCH_INTERVAL_SEC         5     // 5 s between raw GPS packets on the pad
@@ -233,10 +229,6 @@
     #define POST_LAUNCH_RECOVERY_DURATION_SEC 600 // 10 minutes duration in post-launch state
     #define BATTERY_SAVE_INTERVAL_SEC       60    // 60 seconds between transmissions in battery save
     #define CALLSIGN_TRANSMIT_INTERVAL_SEC  300   // 5 minutes between callsign transmissions
-    
-    // Debug features disabled in production mode
-    #define DEBUG_OUTPUT_ENABLED        0     // Disable debug output
-    #define INCLUDE_CARRIAGE_RETURNS    0     // No \r\n in production (RF efficiency)
     
 #endif
 

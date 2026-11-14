@@ -3,9 +3,6 @@
 
 #include <stdint.h>
 
-// Packet format selection
-#define USE_BINARY_PACKETS  1  // Set to 1 for binary, 0 for ASCII
-
 /* Binary GPS packet structure: V2 = 14 bytes, V1 (legacy, no rocket_id)
  * = 13 bytes. rocket_id lets the receiver ignore a foreign beacon on the
  * same channel running this same firmware. Valid IDs are 0..254; 255 is

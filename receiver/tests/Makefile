@@ -77,7 +77,7 @@ $(BUILD)/test_rf_receiver: test_rf_receiver.c $(SRC_DIR)/rf_receiver.c \
 # the RF/ASCII/NMEA parsers under ASan+UBSan. Links the real parser sources
 # (no include trick - no statics needed) and deliberately skips COVFLAGS:
 # coverage+sanitizer instrumentation don't mix. Soak with FUZZ_ITERS=2000000.
-FUZZ_SAN := -fsanitize=address,undefined -fno-sanitize-recover=all
+FUZZ_SAN := -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all
 $(BUILD)/test_fuzz_parsers: test_fuzz_parsers.c $(SRC_DIR)/rf_parser.c \
                             $(SRC_DIR)/gps_parser.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) $(FUZZ_SAN) -o $@ $< \

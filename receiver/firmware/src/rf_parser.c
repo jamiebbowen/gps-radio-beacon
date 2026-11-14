@@ -36,70 +36,6 @@ static uint32_t parse_failures_null_packet = 0;
 static uint32_t parse_failures_insufficient_fields = 0;
 
 /**
- * @brief Convert NMEA coordinate format to decimal degrees (handles signed coordinates)
- * @param nmea_coord NMEA coordinate string (e.g. "3953.40284" or "-3953.40284")
- * @retval Decimal degrees value (positive or negative)
- */
-static float nmea_to_decimal_degrees(const char* nmea_coord) {
-  if (!nmea_coord || !*nmea_coord) {
-    return 0.0f;
-  }
-  
-  /* Check for negative sign */
-  int is_negative = 0;
-  const char* coord_ptr = nmea_coord;
-  
-  if (*coord_ptr == '-') {
-    is_negative = 1;
-    coord_ptr++; /* Skip the minus sign */
-  }
-  
-  /* Check if we have valid data after processing sign */
-  /* NMEA coordinates need at least 7 characters: DDMM.MM or DDDMM.M */
-  if (strlen(coord_ptr) < 7) {
-    return 0.0f; /* Invalid coordinate format */
-  }
-  
-  /* Convert in DOUBLE precision. NMEA ddmm.mmmmm carries ~9 significant
-   * digits; single-precision float only holds ~7, which both loses ~1 m of
-   * coordinate precision and can round invalid minutes (e.g. 3999.99999 ->
-   * 4000.0f) past the minutes-range validation below. */
-  double nmea_value = atof(coord_ptr);
-  
-  /* Validate that we have a reasonable NMEA value */
-  /* Should be at least 100.0 for valid DDMM.MMMMM format */
-  /* isfinite first: atof() parses "nan"/"inf" literally - the (int) cast
-   * below is UB on non-finite input, and a NaN result would slip every
-   * range check since NaN comparisons are all false. */
-  if (!isfinite(nmea_value) || nmea_value < 100.0) {
-    return 0.0f; /* Invalid NMEA format */
-  }
-  
-  /* For NMEA format, we need to extract degrees and minutes */
-  /* Degrees are the integer part of dividing by 100 */
-  int degrees = (int)(nmea_value / 100.0);
-  
-  /* Minutes are the remainder after removing degrees*100 */
-  double minutes = nmea_value - (degrees * 100.0);
-  
-  /* Validate minutes are in valid range (0-59.999...) */
-  if (minutes < 0.0 || minutes >= 60.0) {
-    return 0.0f; /* Invalid minutes value */
-  }
-  
-  /* Convert to decimal degrees using the formula: degrees + minutes/60,
-   * rounding to float only once at the very end. */
-  double value = (double)degrees + (minutes / 60.0);
-  
-  /* Apply sign if negative */
-  if (is_negative) {
-    value = -value;
-  }
-  
-  return (float)value;
-}
-
-/**
  * @brief Initialize RF parser
  * @retval Status code
  */
@@ -124,11 +60,11 @@ uint8_t RF_Parser_Init(void)
 }
 
 /**
- * @brief Parse ASCII packet into GPS data structure
- * @param packet ASCII packet string to parse
- * @retval Status code (RF_PARSER_OK if successful, RF_PARSER_ERROR otherwise)
+ * @brief Parse an ASCII packet. The only ASCII packet on the air is the
+ *        beacon callsign ("CALLSIGN-<id> CH<n>", no commas).
+ * @param packet NUL-terminated packet text
+ * @retval RF_PARSER_OK for a callsign, RF_PARSER_ERROR otherwise
  */
-
 uint8_t RF_Parser_ParseAsciiPacket(const char *packet) {
   parse_attempts++;
   
@@ -144,133 +80,21 @@ uint8_t RF_Parser_ParseAsciiPacket(const char *packet) {
   strncpy(last_raw_packet, packet, RF_PARSER_BUFFER_SIZE - 1);
   last_raw_packet[RF_PARSER_BUFFER_SIZE - 1] = '\0';
   
-  /* Expected formats (LoRa handles framing and CRC):
-   * Fast packet: "±ddmm.mmmmm,±dddmm.mmmmm,alt" (3 fields)
-   * Full packet: "±ddmm.mmmmm,±dddmm.mmmmm,alt,sats" (4 fields)
-   * Callsign: "CALLSIGN" (no commas)
-   */
-  char *token;
-  char packet_copy[RF_PARSER_BUFFER_SIZE];
-  
-  /* Make a copy of the packet for strtok_r which modifies the string */
-  strncpy(packet_copy, packet, RF_PARSER_BUFFER_SIZE - 1);
-  packet_copy[RF_PARSER_BUFFER_SIZE - 1] = '\0';
-  
-  /* Check if this is a callsign packet (no commas) */
-  if (strchr(packet_copy, ',') == NULL) {
-    /* Callsign packet - extract callsign and return. Cannot be empty:
-     * NULL/empty packets were rejected at function entry above. */
-    strncpy(parsed_callsign, packet_copy, RF_PARSER_MAX_CALLSIGN_LEN - 1);
-    parsed_callsign[RF_PARSER_MAX_CALLSIGN_LEN - 1] = '\0';
-    parsed_data_ready = 1;
-    parse_successes++;
-    return RF_PARSER_OK;
-  }
-  
-  /* Reset parsed_data_ready flag when starting new packet parsing */
-  parsed_data_ready = 0;
-
-  /* Reset only the fields this NMEA-style parser is responsible for writing.
-   * Crucially we do NOT touch v_north / v_east / v_down / is_fused / fused_*
-   * here - those fields are owned by the FUSED-packet parser and must
-   * persist across GPS packets so the navigation display can show the last
-   * known ground speed even while GPS packets are arriving. A blanket memset
-   * zeroed them every GPS packet, which made "S:13 12.3m/s" flicker back
-   * to "S:13  0.0m/s" on every GPS update. */
-  parsed_gps_data.latitude  = 0.0f;
-  parsed_gps_data.longitude = 0.0f;
-  parsed_gps_data.altitude  = 0.0f;
-  parsed_gps_data.satellites = 0;
-  parsed_gps_data.fix = 0;
-  parsed_gps_data.launch_detected = 0;
-  parsed_gps_data.time_since_launch = 0;
-  
-  /* Start tokenizing the GPS data by commas */
-  char *saveptr;
-  token = strtok_r(packet_copy, ",", &saveptr);
-  
-  /* Track which field we're processing - positional parsing */
-  int field_index = 0;
-  
-  /* Process GPS data tokens: lat,lon,alt[,sats] */
-  while (token != NULL) {
-    switch (field_index) {
-      case 0: /* Latitude */
-        parsed_gps_data.latitude = nmea_to_decimal_degrees(token);
-        break;
-        
-      case 1: /* Longitude */
-        parsed_gps_data.longitude = nmea_to_decimal_degrees(token);
-        break;
-        
-      case 2: /* Altitude */
-        {
-          float a = atof(token);
-          /* atof("nan")/"inf" is legal C and lands NaN in the packet -
-           * clamp to "unknown" rather than persist it to BEACON.TXT. */
-          parsed_gps_data.altitude = isfinite(a) ? a : 0.0f;
-        }
-        break;
-        
-      case 3: /* Satellites (optional - only in full packets) */
-        {
-          /* strtol saturates (atoi is UB out of int range); cap at 99 so a
-           * corrupt field can't wrap at the uint8_t store. */
-          long v = strtol(token, NULL, 10);
-          parsed_gps_data.satellites =
-              (v < 0) ? 0 : (v > 99 ? 99 : (uint8_t)v);
-        }
-        break;
-        
-      default:
-        /* Ignore extra fields */
-        break;
-    }
-    
-    /* Get next token */
-    token = strtok_r(NULL, ",", &saveptr);
-    field_index++;
-  }
-  
-  /* Set default values for fields not present in fast packets */
-  if (field_index == 3) {
-    /* Fast packet - set defaults for missing fields */
-    parsed_gps_data.satellites = 0;  /* Unknown */
-    parsed_gps_data.fix = 1;         /* Assume valid fix */
-    parsed_gps_data.launch_detected = 1;  /* Fast packets only sent during launch */
-    parsed_gps_data.time_since_launch = 0; /* Unknown */
-  } else if (field_index == 4) {
-    /* Full packet - set defaults for launch status */
-    parsed_gps_data.fix = 1;         /* Assume valid fix */
-    parsed_gps_data.launch_detected = 0;  /* Full packets sent in non-launch states */
-    parsed_gps_data.time_since_launch = 0;
-  }
-  
-  /* Check if we have at least 3 fields (lat,lon,alt) */
-  if (field_index < 3) {
-    parse_failures++;
-    parse_failures_insufficient_fields++;
-    return RF_PARSER_ERROR;
-  }
-  
-  /* Validate coordinates before accepting the packet */
-  if (parsed_gps_data.latitude == 0.0f || parsed_gps_data.longitude == 0.0f || 
-      parsed_gps_data.latitude < -90.0f || parsed_gps_data.latitude > 90.0f ||
-      parsed_gps_data.longitude < -180.0f || parsed_gps_data.longitude > 180.0f) {
+  /* Positions are binary-only (RF_Parser_ParseBinaryPacket /
+   * RF_Parser_ParseFusedPacket). The legacy comma-separated ASCII position
+   * format is no longer sent by any beacon firmware, so it is rejected. */
+  if (strchr(packet, ',') != NULL) {
     parse_failures++;
     return RF_PARSER_ERROR;
   }
   
-  /* Store the last valid packet */
+  strncpy(parsed_callsign, packet, RF_PARSER_MAX_CALLSIGN_LEN - 1);
+  parsed_callsign[RF_PARSER_MAX_CALLSIGN_LEN - 1] = '\0';
+  /* The callsign is the last valid ASCII packet (shown on the RF page). */
   strncpy(last_valid_packet, packet, RF_PARSER_BUFFER_SIZE - 1);
   last_valid_packet[RF_PARSER_BUFFER_SIZE - 1] = '\0';
-  
-  /* Mark data as ready */
   parsed_data_ready = 1;
-  
-  /* Update diagnostic counters */
   parse_successes++;
-  
   return RF_PARSER_OK;
 }
 

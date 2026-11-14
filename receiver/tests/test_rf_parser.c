@@ -3,7 +3,7 @@
  * @brief Host-side unit tests for the receiver RF packet parser.
  *
  * Exercises all three wire formats accepted from the transmitter:
- *   1. ASCII CSV packets  (RF_Parser_ParseAsciiPacket)
+ *   1. ASCII callsign packets (RF_Parser_ParseAsciiPacket)
  *   2. Binary GPS packets (RF_Parser_ParseBinaryPacket, V2 14 bytes / legacy V1 13)
  *   3. Fused EKF packets  (RF_Parser_ParseFusedPacket, V2 20 bytes / legacy V1 19)
  *
@@ -91,44 +91,22 @@ TEST(test_ascii_null_and_empty_rejected) {
     CHECK(nulls == 2);
 }
 
-TEST(test_ascii_fast_packet) {
+TEST(test_ascii_position_packets_rejected) {
     RF_Parser_Reset();
-    /* Fast packet: lat,lon,alt - transmitted continuously during LAUNCH */
-    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,1234.5") == RF_PARSER_OK);
-
+    /* Comma-separated ASCII positions are retired: rejected, never stored. */
+    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,1234.5,8")
+          == RF_PARSER_ERROR);
     GPS_Data gps;
-    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
-    /* 39°53.40284' = 39.8900473°, 104°07.38970' = 104.1231617° (west) */
-    CHECK_NEAR(gps.latitude, 39.8900473, 1e-4);
-    CHECK_NEAR(gps.longitude, -104.1231617, 1e-4);
-    CHECK_NEAR(gps.altitude, 1234.5, 1e-3);
-    CHECK(gps.satellites == 0);        /* unknown in fast packets */
-    CHECK(gps.fix == 1);               /* assumed valid */
-    CHECK(gps.launch_detected == 1);   /* fast packets imply launch */
-}
+    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 0);
+    uint32_t attempts = 0, successes = 0, failures = 0;
+    RF_Parser_GetDiagnostics(&attempts, &successes, &failures);
+    CHECK(attempts == 1 && successes == 0 && failures == 1);
 
-TEST(test_ascii_full_packet) {
-    RF_Parser_Reset();
-    /* Full packet: lat,lon,alt,sats - transmitted in non-launch states */
-    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,10407.38970,1671.7,12") == RF_PARSER_OK);
-
-    GPS_Data gps;
-    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
-    CHECK_NEAR(gps.latitude, 39.8900473, 1e-4);
-    CHECK_NEAR(gps.longitude, 104.1231617, 1e-4);
-    CHECK(gps.satellites == 12);
-    CHECK(gps.launch_detected == 0);   /* full packets imply pre/post-launch */
-}
-
-TEST(test_ascii_southern_western_hemisphere) {
-    RF_Parser_Reset();
-    CHECK(RF_Parser_ParseAsciiPacket("-3345.55000,-5830.25000,10.0") == RF_PARSER_OK);
-
-    GPS_Data gps;
-    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
-    /* Buenos Aires-ish: 33°45.55'S, 58°30.25'W */
-    CHECK_NEAR(gps.latitude, -(33.0 + 45.55 / 60.0), 1e-4);
-    CHECK_NEAR(gps.longitude, -(58.0 + 30.25 / 60.0), 1e-4);
+    /* The callsign is the last valid ASCII packet (RF page readout). */
+    CHECK(RF_Parser_ParseAsciiPacket("KE0MZS-0 CH0") == RF_PARSER_OK);
+    char buf[32];
+    CHECK(RF_Parser_GetLastValidPacket(buf, sizeof(buf)) == strlen("KE0MZS-0 CH0"));
+    CHECK(strcmp(buf, "KE0MZS-0 CH0") == 0);
 }
 
 TEST(test_ascii_callsign_packet) {
@@ -139,98 +117,6 @@ TEST(test_ascii_callsign_packet) {
     char callsign[RF_PARSER_MAX_CALLSIGN_LEN] = {0};
     CHECK(RF_Parser_GetParsedData(&gps, callsign, sizeof(callsign), NULL) == 1);
     CHECK(strcmp(callsign, "KD0ABC") == 0);
-}
-
-TEST(test_ascii_insufficient_fields_rejected) {
-    RF_Parser_Reset();
-    uint32_t insufficient = 0;
-
-    /* Two fields only (has a comma so it isn't treated as a callsign) */
-    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,1234") == RF_PARSER_ERROR);
-
-    RF_Parser_GetDetailedFailures(NULL, &insufficient, NULL, NULL, NULL);
-    CHECK(insufficient == 1);
-}
-
-TEST(test_ascii_invalid_coordinates_rejected) {
-    RF_Parser_Reset();
-
-    /* Latitude > 90° (9100.0 NMEA = 91°) */
-    CHECK(RF_Parser_ParseAsciiPacket("9100.00000,-10407.38970,100") == RF_PARSER_ERROR);
-    /* Longitude > 180° */
-    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-18100.00000,100") == RF_PARSER_ERROR);
-    /* Zero coordinates ("Null Island" guard) */
-    CHECK(RF_Parser_ParseAsciiPacket("0000.00000,0000.00000,100") == RF_PARSER_ERROR);
-    /* Minutes field >= 60 is not valid NMEA */
-    CHECK(RF_Parser_ParseAsciiPacket("3999.99999,-10407.38970,100") == RF_PARSER_ERROR);
-    /* Coordinate string too short to be DDMM.MM */
-    CHECK(RF_Parser_ParseAsciiPacket("123.45,-10407.38970,100") == RF_PARSER_ERROR);
-    /* atof() parses "nan"/"inf" literally - they must not survive as
-     * coordinates (NaN slips every range check; the (int) cast inside
-     * nmea_to_decimal_degrees would be UB on it). */
-    CHECK(RF_Parser_ParseAsciiPacket("nan,-10407.38970,100") == RF_PARSER_ERROR);
-    CHECK(RF_Parser_ParseAsciiPacket("inf,-10407.38970,100") == RF_PARSER_ERROR);
-    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-nan,100") == RF_PARSER_ERROR);
-
-    uint32_t ok = 0, attempts = 0, fails = 0;
-    RF_Parser_GetDiagnostics(&attempts, &ok, &fails);
-    CHECK(attempts == 8);
-    CHECK(ok == 0);
-    CHECK(fails == 8);
-}
-
-TEST(test_ascii_nan_altitude_clamped_not_stored) {
-    RF_Parser_Reset();
-    GPS_Data gps;
-
-    /* A corrupt altitude field must not reach GPS_Data as NaN - the wire
-     * packet's lat/lon stay usable; altitude degrades to "unknown". */
-    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,nan,8") == RF_PARSER_OK);
-    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
-    CHECK(gps.altitude == 0.0f);
-    CHECK(gps.altitude == gps.altitude);   /* explicitly: not NaN */
-
-    RF_Parser_Reset();
-    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,inf,8") == RF_PARSER_OK);
-    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
-    CHECK(gps.altitude == 0.0f);
-}
-
-TEST(test_ascii_satellites_clamped) {
-    RF_Parser_Reset();
-    GPS_Data gps;
-
-    /* Corrupt sats field "999" must saturate to 99, not wrap modulo 256
-     * at the uint8_t store. */
-    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,1671.7,999") == RF_PARSER_OK);
-    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
-    CHECK(gps.satellites == 99);
-
-    RF_Parser_Reset();
-    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,1671.7,-5") == RF_PARSER_OK);
-    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
-    CHECK(gps.satellites == 0);
-}
-
-TEST(test_ascii_last_packet_bookkeeping) {
-    RF_Parser_Reset();
-    char buf[RF_PARSER_BUFFER_SIZE];
-
-    /* A failed parse should still be visible as the last RAW packet... */
-    CHECK(RF_Parser_ParseAsciiPacket("garbage,with,commas") == RF_PARSER_ERROR);
-    CHECK(RF_Parser_GetLastRawPacket(buf, sizeof(buf)) > 0);
-    CHECK(strcmp(buf, "garbage,with,commas") == 0);
-
-    /* ...but must NOT become the last VALID packet. */
-    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,100") == RF_PARSER_OK);
-    CHECK(RF_Parser_GetLastValidPacket(buf, sizeof(buf)) > 0);
-    CHECK(strcmp(buf, "3953.40284,-10407.38970,100") == 0);
-
-    /* Truncation must stay within the caller's buffer and null-terminate. */
-    char tiny[8];
-    uint16_t n = RF_Parser_GetLastValidPacket(tiny, sizeof(tiny));
-    CHECK(n == sizeof(tiny) - 1);
-    CHECK(tiny[sizeof(tiny) - 1] == '\0');
 }
 
 /* ------------------------------------------------------------------ */
@@ -757,8 +643,7 @@ TEST(test_init_resets_diagnostics_and_marks_packet) {
     CHECK(insufficient == 0);
 
     /* A fresh parse after Init must work (state really was cleared). */
-    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,1234.5")
-          == RF_PARSER_OK);
+    CHECK(RF_Parser_ParseAsciiPacket("KD0ABC") == RF_PARSER_OK);
 }
 
 TEST(test_checksum_errors_always_zero_with_lora) {
@@ -768,25 +653,6 @@ TEST(test_checksum_errors_always_zero_with_lora) {
     RF_Parser_GetChecksumErrors(&errors);
     CHECK(errors == 0);
     RF_Parser_GetChecksumErrors(NULL); /* must not crash */
-}
-
-TEST(test_nmea_helper_defensive_guards) {
-    /* Direct calls: strtok_r never hands the helper NULL or "" (empty
-     * fields are skipped), but the guard stays as insurance against
-     * future callers. */
-    CHECK(nmea_to_decimal_degrees(NULL) == 0.0f);
-    CHECK(nmea_to_decimal_degrees("") == 0.0f);
-}
-
-TEST(test_ascii_extra_fields_ignored) {
-    RF_Parser_Reset();
-    /* 6 fields: trailing ones beyond sats must be ignored, not rejected */
-    CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,1234.5,8,99,77")
-          == RF_PARSER_OK);
-
-    GPS_Data gps;
-    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 1);
-    CHECK(gps.satellites == 8);
 }
 
 TEST(test_raw_packet_truncated_to_buffer) {
@@ -818,15 +684,8 @@ int main(void) {
     run_test_init_resets_diagnostics_and_marks_packet();
     run_test_checksum_errors_always_zero_with_lora();
     run_test_ascii_null_and_empty_rejected();
-    run_test_ascii_fast_packet();
-    run_test_ascii_full_packet();
-    run_test_ascii_southern_western_hemisphere();
+    run_test_ascii_position_packets_rejected();
     run_test_ascii_callsign_packet();
-    run_test_ascii_insufficient_fields_rejected();
-    run_test_ascii_invalid_coordinates_rejected();
-    run_test_ascii_nan_altitude_clamped_not_stored();
-    run_test_ascii_satellites_clamped();
-    run_test_ascii_last_packet_bookkeeping();
     run_test_binary_valid_packet();
     run_test_binary_negative_altitude();
     run_test_binary_layouts_and_malformed();
@@ -847,8 +706,6 @@ int main(void) {
     run_test_fused_does_not_clobber_gps_fix();
     run_test_gps_does_not_clobber_fused_velocity();
     run_test_reset_clears_state();
-    run_test_nmea_helper_defensive_guards();
-    run_test_ascii_extra_fields_ignored();
     run_test_raw_packet_truncated_to_buffer();
     run_test_detailed_failures_deprecated_counters_zero();
 

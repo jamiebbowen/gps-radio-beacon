@@ -486,7 +486,6 @@ uint8_t RF_Receiver_DataAvailable(void)
       }
       
       /* Parse packet based on format */
-#if USE_BINARY_PACKETS
       /* Binary packet format - dispatch by type + length. Both the legacy
        * (V1, no rocket_id) and current (V2) layouts are accepted; V2
        * packets pass through the airframe filter first so a foreign beacon
@@ -664,20 +663,6 @@ uint8_t RF_Receiver_DataAvailable(void)
           }
         }
       }
-#else
-      /* ASCII packet format */
-      if (last_packet.length < RF_ASCII_BUFFER_SIZE) {
-        memcpy(rf_ascii_buffer, last_packet.data, last_packet.length);
-        rf_ascii_buffer[last_packet.length] = '\0';
-        
-        /* Parse ASCII packet */
-        if (RF_Parser_ParseAsciiPacket(rf_ascii_buffer) == RF_PARSER_OK) {
-          rf_packet_ready = 1;
-          rf_header_matches++;
-          last_packet_time = HAL_GetTick();
-        }
-      }
-#endif
     }
   }
   

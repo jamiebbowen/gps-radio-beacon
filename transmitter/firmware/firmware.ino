@@ -549,11 +549,7 @@ void loop() {
         } else {
             gps_poll_rx();
 
-#if USE_BINARY_PACKETS
         uint8_t tx_result = beacon_transmit_gps_data_binary(gps_get_current_coordinates(), system_time_seconds, transmit_fast_flag);
-#else
-        uint8_t tx_result = beacon_transmit_gps_data(gps_get_current_coordinates(), system_time_seconds, transmit_fast_flag);
-#endif
 
         Serial.print(F("[Beacon] Transmission result: "));
         Serial.println(tx_result);

@@ -3,9 +3,6 @@
 
 #include <stdint.h>
 
-// Packet format selection (must match transmitter!)
-#define USE_BINARY_PACKETS  1  // Set to 1 for binary, 0 for ASCII
-
 /* Binary GPS packet structure: V2 = 14 bytes, V1 (legacy, no rocket_id)
  * = 13 bytes. rocket_id lets us drop a foreign beacon on the same channel
  * running this same firmware (see the airframe binding in rf_receiver.c).
