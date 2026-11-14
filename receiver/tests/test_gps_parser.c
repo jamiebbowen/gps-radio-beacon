@@ -147,20 +147,18 @@ TEST(test_gga_southern_western_hemisphere) {
     char s[128];
     memset(&gps, 0, sizeof(gps));
 
-    /* Same fixture area mirrored S/W would trip the jump filter, so this
-     * uses tiny offsets from the fixture instead: sign handling is exercised
-     * against a jump-filter-reset-free parser via N->S / E->W indicators on
-     * a fresh sentence whose magnitude matches the fixture. The jump filter
-     * WILL reject it (48N->48S is a huge jump), which itself verifies sign
-     * handling occurred before validation. */
-    uint32_t coord_errors_before = gps_invalid_coordinate_errors;
+    /* The fixture area mirrored S/W: drop the jump-filter anchor first
+     * (48N -> 48S would be a teleport), and again afterwards so the next
+     * test re-anchors at the shared fixture area. Rejected positions are
+     * never committed, so the signs are checked on an accepted fix. */
+    has_last_valid_position = 0;
+    jump_candidate_valid = 0;
     make_sentence(s, sizeof(s),
         "$GPGGA,123521,4807.038,S,01131.000,W,1,08,0.9,545.4,M,46.9,M,,");
-    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_ERROR);   /* jump rejected */
-    CHECK(gps_invalid_coordinate_errors == coord_errors_before + 1);
-    /* But the parsed (pre-validation) values must carry the negative signs */
+    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_OK);
     CHECK_NEAR(gps.latitude, -FIX_LAT, 1e-4);
     CHECK_NEAR(gps.longitude, -FIX_LON, 1e-4);
+    has_last_valid_position = 0;
 }
 
 TEST(test_gga_nan_fields_never_reach_gps_data) {
@@ -234,6 +232,67 @@ TEST(test_rmc_void_status_rejected) {
 /* Coordinate validation / jump filter                                 */
 /* ------------------------------------------------------------------ */
 
+TEST(test_rejected_fix_is_not_committed) {
+    /* The parser used to write lat/lon/fix into the caller's struct BEFORE
+     * validating, so a rejected teleport still overwrote the position and
+     * left fix=1 for GPS_IsFixed()/main.c to pick up. */
+    GPS_Data gps;
+    char s[128];
+    memset(&gps, 0, sizeof(gps));
+    has_last_valid_position = 0;
+    jump_candidate_valid = 0;
+    make_sentence(s, sizeof(s),
+        "$GPGGA,123530,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_OK);
+    make_sentence(s, sizeof(s),
+        "$GPGGA,123531,5007.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_ERROR);
+    CHECK_NEAR(gps.latitude, FIX_LAT, 1e-4);     /* position untouched */
+    CHECK_NEAR(gps.longitude, FIX_LON, 1e-4);
+    CHECK(gps.fix == 0);                         /* not a usable fix */
+}
+
+TEST(test_relocation_reanchors_after_two_agreeing_fixes) {
+    /* Powering up 200 km from the last anchor (drove to the launch site
+     * with the fix lost) used to be rejected forever: the filter only
+     * moved its anchor on an ACCEPTED fix. Two consecutive fixes that
+     * agree with each other at the new site now re-anchor it. */
+    GPS_Data gps;
+    char s[128];
+    memset(&gps, 0, sizeof(gps));
+    has_last_valid_position = 0;
+    jump_candidate_valid = 0;
+    make_sentence(s, sizeof(s),
+        "$GPGGA,123540,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_OK);
+    make_sentence(s, sizeof(s),
+        "$GPGGA,123541,5007.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_ERROR);   /* first: suspect */
+    make_sentence(s, sizeof(s),
+        "$GPGGA,123542,5007.100,N,01131.050,E,1,08,0.9,546.0,M,46.9,M,,");
+    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_OK);      /* agrees: accept */
+    CHECK_NEAR(gps.latitude, 50.0 + 7.100 / 60.0, 1e-4);
+    CHECK(gps.fix == 1);
+    has_last_valid_position = 0;                         /* leave no anchor */
+    jump_candidate_valid = 0;
+}
+
+TEST(test_prime_meridian_longitude_accepted) {
+    /* Longitudes between 0 and +-1 deg were rejected as "parsing errors" -
+     * a receiver in London could never get a fix. */
+    GPS_Data gps;
+    char s[128];
+    memset(&gps, 0, sizeof(gps));
+    has_last_valid_position = 0;
+    jump_candidate_valid = 0;
+    make_sentence(s, sizeof(s),
+        "$GPGGA,123550,5130.000,N,00007.500,W,1,08,0.9,20.0,M,46.9,M,,");
+    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_OK);
+    CHECK_NEAR(gps.longitude, -0.125, 1e-4);
+    has_last_valid_position = 0;
+    jump_candidate_valid = 0;
+}
+
 TEST(test_jump_filter_rejects_teleport) {
     GPS_Data gps;
     char s[128];
@@ -290,14 +349,15 @@ TEST(test_rmc_southern_western_hemisphere) {
     char s[128];
     memset(&gps, 0, sizeof(gps));
 
-    /* Same approach as the GGA S/W test: the jump filter rejects the
-     * 48N→48S flip, which proves the sign was applied BEFORE
-     * validation — and the parsed values must carry the minus signs. */
+    /* Same approach as the GGA S/W test: no anchor, accepted fix */
+    has_last_valid_position = 0;
+    jump_candidate_valid = 0;
     make_sentence(s, sizeof(s),
         "$GPRMC,123519,A,4807.038,S,01131.000,W,022.4,084.4,230324,003.1,W");
-    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_ERROR);   /* jump rejected */
+    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_OK);
     CHECK_NEAR(gps.latitude, -FIX_LAT, 1e-4);
     CHECK_NEAR(gps.longitude, -FIX_LON, 1e-4);
+    has_last_valid_position = 0;
 }
 
 TEST(test_coordinate_without_decimal_point_rejected) {
@@ -366,18 +426,26 @@ TEST(test_latitude_out_of_range_rejected) {
     CHECK(gps_invalid_coordinate_errors > errors_before);
 }
 
-TEST(test_subdegree_longitude_rejected) {
+TEST(test_subdegree_longitude_dropped_digit_caught) {
     GPS_Data gps;
     char s[128];
     memset(&gps, 0, sizeof(gps));
-    uint32_t errors_before = gps_invalid_coordinate_errors;
 
-    /* 0.5°E is almost certainly a dropped digit ("00131" -> "00031")
-     * — the parser rejects 0 < |lon| < 1 as a common error pattern. */
+    /* 0.5 deg E right after a Munich fix is almost certainly a dropped
+     * digit ("01131" -> "00030"). Sub-degree longitudes are legal (London),
+     * so it is the ~820 km jump from the anchor that rejects it. */
+    has_last_valid_position = 0;
+    jump_candidate_valid = 0;
+    make_sentence(s, sizeof(s),
+        "$GPGGA,123532,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+    CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_OK);
+    uint32_t errors_before = gps_invalid_coordinate_errors;
     make_sentence(s, sizeof(s),
         "$GPGGA,123533,4807.038,N,00030.000,E,1,08,0.9,545.4,M,46.9,M,,");
     CHECK(GPS_ParseNMEA(s, &gps) == GPS_PARSER_ERROR);
     CHECK(gps_invalid_coordinate_errors > errors_before);
+    CHECK_NEAR(gps.longitude, FIX_LON, 1e-4);    /* not committed */
+    jump_candidate_valid = 0;
 }
 
 TEST(test_origin_coordinates_rejected) {
@@ -446,13 +514,16 @@ int main(void) {
     run_test_rmc_void_status_rejected();
     run_test_rmc_southern_western_hemisphere();
     run_test_jump_filter_rejects_teleport();
+    run_test_rejected_fix_is_not_committed();
+    run_test_relocation_reanchors_after_two_agreeing_fixes();
+    run_test_prime_meridian_longitude_accepted();
     run_test_malformed_coordinate_strings_rejected();
     run_test_coordinate_without_decimal_point_rejected();
     run_test_coordinate_all_zeroes_rejected();
     run_test_degrees_above_180_rejected();
     run_test_decimal_result_above_180_rejected();
     run_test_latitude_out_of_range_rejected();
-    run_test_subdegree_longitude_rejected();
+    run_test_subdegree_longitude_dropped_digit_caught();
     run_test_origin_coordinates_rejected();
     run_test_truncated_checksum_rejected();
     run_test_coordinate_helper_defensive_guards();

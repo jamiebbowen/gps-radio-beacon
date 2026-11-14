@@ -152,6 +152,28 @@ TEST(test_init_success_and_failure_paths)
     CHECK(uart_rearm_failures == ra0 + 1);
 }
 
+TEST(test_rejected_fix_does_not_latch_isfixed)
+{
+    /* A teleporting fix is rejected by the parser; it must not leave
+     * GPS_IsFixed() reporting a fix main.c would then trust. */
+    CHECK(GPS_Init() == GPS_OK);
+    GPS_Data gps;
+    memset(&gps, 0, sizeof(gps));
+    feed_sentence("$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+    CHECK(GPS_Update(&gps) == GPS_OK);
+    CHECK(GPS_IsFixed() == 1);
+
+    feed_sentence("$GPGGA,123520,5807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+    (void)GPS_Update(&gps);
+    CHECK(GPS_IsFixed() == 0);                 /* rejected: no fix */
+    CHECK(gps.latitude > 48.0f && gps.latitude < 48.2f);   /* kept */
+
+    /* Back at the anchor: the fix returns */
+    feed_sentence("$GPGGA,123521,4807.040,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,");
+    CHECK(GPS_Update(&gps) == GPS_OK);
+    CHECK(GPS_IsFixed() == 1);
+}
+
 TEST(test_complete_sentence_parsed)
 {
     CHECK(GPS_Init() == GPS_OK);
@@ -495,6 +517,7 @@ int main(void)
     run_test_init_success_and_failure_paths();
     run_test_init_sends_ubx_msg_config();
     run_test_complete_sentence_parsed();
+    run_test_rejected_fix_does_not_latch_isfixed();
     run_test_pending_fifo_survives_stall_and_drops_oldest_none();
     run_test_unparseable_sentence_reports_error();
     run_test_framing_error_byte_dropped();
