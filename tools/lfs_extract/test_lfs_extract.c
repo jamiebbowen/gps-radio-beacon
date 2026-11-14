@@ -19,27 +19,6 @@
 #include <sys/stat.h>
 
 #include "lfs.h"
-#include <stdarg.h>
-
-/* Extractor internals (lfs_extract.c is a single TU). */
-static FILE *summ_out;             /* extractor output also lands here */
-
-static int printf_spy(const char *fmt, ...) {
-    char b[320];
-    va_list ap; va_start(ap, fmt);
-    vsnprintf(b, sizeof(b), fmt, ap);
-    va_end(ap);
-    if (summ_out) fputs(b, summ_out);
-    return printf("%s", b);
-}
-static int fprintf_spy(FILE *f, const char *fmt, ...) {
-    char b[320];
-    va_list ap; va_start(ap, fmt);
-    vsnprintf(b, sizeof(b), fmt, ap);
-    va_end(ap);
-    if (summ_out) fputs(b, summ_out);
-    return fprintf(f, "%s", b);
-}
 
 int run_extract(const char *device, const char *outdir);
 static int failures = 0;
@@ -115,7 +94,18 @@ static int read_back(const char *dir, const char *name, char *buf, size_t cap) {
 static void rm_rf(const char *dir) {
     char cmd[600];
     snprintf(cmd, sizeof(cmd), "rm -rf '%s'", dir);
-    system(cmd);
+    if (system(cmd) != 0) fprintf(stderr, "warning: cleanup of %s failed\n", dir);
+}
+
+/* Temp fixtures: a failed mkstemp/mkdtemp would leave the XXXXXX template
+ * as the path, so stop rather than run the test somewhere unintended. */
+static void make_tmpfile(char *tmpl) {
+    int fd = mkstemp(tmpl);
+    if (fd < 0) { perror("mkstemp"); exit(2); }
+    close(fd);
+}
+static void make_tmpdir(char *tmpl) {
+    if (mkdtemp(tmpl) == NULL) { perror("mkdtemp"); exit(2); }
 }
 
 /* ---- the four scenarios ------------------------------------------------ */
@@ -132,8 +122,8 @@ static void test_clean_roundtrip(void) {
 
     char img[] = "/tmp/lfsx_clean_XXXXXX";
     char out[] = "/tmp/lfsx_cout_XXXXXX";
-    int fdi = mkstemp(img); close(fdi);
-    mkdtemp(out);
+    make_tmpfile(img);
+    make_tmpdir(out);
     CHECK(write_img(img) == 0, "fixture image written");
 
     int rc = run_extract(img, out);
@@ -178,8 +168,8 @@ static void test_mid_file_corruption_graceful(void) {
 
     char img[] = "/tmp/lfsx_corr_XXXXXX";
     char out[] = "/tmp/lfsx_corrout_XXXXXX";
-    int fdi = mkstemp(img); close(fdi);
-    mkdtemp(out);
+    make_tmpfile(img);
+    make_tmpdir(out);
     write_img(img);
 
     int rc = run_extract(img, out);
@@ -196,8 +186,8 @@ static void test_unmountable_image(void) {
     memset(ram, 0x00, sizeof(ram));   /* erased cards read 0xFF; 0x00 is worse */
     char img[] = "/tmp/lfsx_dead_XXXXXX";
     char out[] = "/tmp/lfsx_deadout_XXXXXX";
-    int fdi = mkstemp(img); close(fdi);
-    mkdtemp(out);
+    make_tmpfile(img);
+    make_tmpdir(out);
     write_img(img);
 
     int rc = run_extract(img, out);
@@ -221,8 +211,8 @@ static void test_claimed_overlap_pair(void) {
 
     char img[] = "/tmp/lfsx_ovr_XXXXXX";
     char out[] = "/tmp/lfsx_ovrout_XXXXXX";
-    int fdi = mkstemp(img); close(fdi);
-    mkdtemp(out);
+    make_tmpfile(img);
+    make_tmpdir(out);
     write_img(img);
 
     /* Heavyweight deadlock check would fork+timeout; per the project's
