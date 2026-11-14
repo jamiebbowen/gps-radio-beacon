@@ -62,6 +62,9 @@ static uint8_t nak_rx = 0;          /* Master_Receive NAKs  */
 static uint8_t nak_rx_once = 0;     /* NAK exactly one receive, then clear */
 static uint8_t reset_dies = 0;      /* hub never confirms reset */
 static uint8_t stream_off = 0;      /* features on, but no reports stream */
+static uint8_t nak_cargo = 0;       /* header peek fine, cargo read NAKs */
+static uint8_t nak_set_feature = 0; /* SetFeature writes NAK (control ch) */
+static uint8_t batch_rv_accel = 0;  /* RV + accel batched in one cargo */
 
 static uint8_t feat_rv = 0, feat_accel = 0, feat_gyro = 0, feat_mag = 0;
 
@@ -77,10 +80,33 @@ static uint8_t acc_acc = 0, gyro_acc = 0, mag_acc = 0;
 static uint8_t q_buf[8];
 static uint8_t q_len = 0;           /* payload length queued */
 
-/* Current packet being clocked out over two-phase (header/body) reads */
-static uint8_t  rpkt[64];           /* full packet incl. 4-byte header */
-static uint16_t rpkt_len = 0;
-static uint16_t rpkt_pos = 0;
+/* The packet the hub is currently offering. As on the real BNO08x, every
+ * read transaction starts at the packet's first byte: a 4-byte read only
+ * peeks at the header, and the cargo read returns the header AGAIN ahead
+ * of the cargo (Adafruit's i2chal_read and SparkFun's getData both skip
+ * it). A cargo read shorter than the packet leaves the rest offered as a
+ * continuation packet (bit 15 of the length set). */
+static uint8_t  rpkt[256];          /* full packet incl. 4-byte header */
+static uint16_t rpkt_len = 0;       /* 0 = nothing offered */
+static uint16_t rpkt_off = 0;       /* cargo bytes already delivered */
+static int32_t  hdr_len_override = -1;  /* >=0: next header's length field */
+static uint8_t  reset_noise = 0;    /* 1: control-ch packet, 2: wrong exe
+                                     * byte, 3: empty exe packet - each
+                                     * arrives ahead of the reset response */
+
+/* A raw packet (header included) served before anything else */
+static uint8_t  raw_pkt[256];
+static uint16_t raw_len = 0;
+static void raw_push(uint8_t channel, const uint8_t *cargo, uint16_t clen)
+{
+    uint16_t len = (uint16_t)(4 + clen);
+    raw_pkt[0] = (uint8_t)(len & 0xFF);
+    raw_pkt[1] = (uint8_t)(len >> 8);
+    raw_pkt[2] = channel;
+    raw_pkt[3] = 0;
+    if (clen) memcpy(&raw_pkt[4], cargo, clen);
+    raw_len = len;
+}
 
 static void fake_reset(void)
 {
@@ -88,12 +114,15 @@ static void fake_reset(void)
     extra_addr_count = 0;
     nak_tx = nak_rx = 0; nak_rx_once = 0;
     reset_dies = 0; stream_off = 0;
+    nak_cargo = 0; nak_set_feature = 0; batch_rv_accel = 0;
+    raw_len = 0;
     feat_rv = feat_accel = feat_gyro = feat_mag = 0;
     fq_w = 1.0f; fq_x = fq_y = fq_z = 0.0f;
     rv_acc = 0;
     memset(fa, 0, sizeof(fa)); memset(fg, 0, sizeof(fg)); memset(fm, 0, sizeof(fm));
     acc_acc = gyro_acc = mag_acc = 0;
-    q_len = 0; rpkt_len = 0; rpkt_pos = 0;
+    q_len = 0; rpkt_len = 0; rpkt_off = 0;
+    hdr_len_override = -1; reset_noise = 0;
 }
 
 static uint8_t addr_present(uint16_t addr8)
@@ -118,7 +147,17 @@ static void rpkt_build(uint8_t channel, const uint8_t *payload, uint8_t plen)
     rpkt[3] = hub_seq++;
     memcpy(&rpkt[4], payload, plen);
     rpkt_len = len;
-    rpkt_pos = 0;
+    rpkt_off = 0;
+}
+
+/* Input reports arrive as a cargo of records led by a 0xFB base-timestamp
+ * reference (5 bytes), as the hub sends them. */
+static void rpkt_build_input(const uint8_t *report, uint8_t rlen)
+{
+    uint8_t c[40];
+    c[0] = 0xFB; c[1] = 0x10; c[2] = 0; c[3] = 0; c[4] = 0;
+    memcpy(&c[5], report, rlen);
+    rpkt_build(CH_INPUT_REPORTS, c, (uint8_t)(5 + rlen));
 }
 
 static void put_i16(uint8_t *p, int16_t v)
@@ -130,6 +169,13 @@ static void put_i16(uint8_t *p, int16_t v)
 /* Fill rpkt with the next packet the hub would emit, or 0 if none. */
 static uint8_t gen_next_packet(void)
 {
+    if (raw_len > 0) {
+        memcpy(rpkt, raw_pkt, raw_len);
+        rpkt_len = raw_len;
+        rpkt_off = 0;
+        raw_len = 0;
+        return 1;
+    }
     if (q_len > 0) {
         uint8_t p[8];
         memcpy(p, q_buf, q_len);
@@ -150,7 +196,17 @@ static uint8_t gen_next_packet(void)
             put_i16(&p[8],  (int16_t)(fq_z * 16384.0f));   /* k */
             put_i16(&p[10], (int16_t)(fq_w * 16384.0f));   /* real */
             put_i16(&p[12], 0);                            /* accuracy est */
-            rpkt_build(CH_INPUT_REPORTS, p, sizeof(p));
+            if (batch_rv_accel && feat_accel) {
+                uint8_t c[40];
+                c[0] = 0xFB; c[1] = 0x10; c[2] = 0; c[3] = 0; c[4] = 0;
+                memcpy(&c[5], p, sizeof(p));
+                uint8_t *a = &c[5 + sizeof(p)];
+                a[0] = RID_ACCEL; a[1] = 0; a[2] = acc_acc; a[3] = 0;
+                put_i16(&a[4], fa[0]); put_i16(&a[6], fa[1]); put_i16(&a[8], fa[2]);
+                rpkt_build(CH_INPUT_REPORTS, c, (uint8_t)(5 + sizeof(p) + 10));
+            } else {
+                rpkt_build_input(p, sizeof(p));
+            }
             phase = (uint8_t)((phase + 1) & 3);
             return 1;
         }
@@ -158,7 +214,7 @@ static uint8_t gen_next_packet(void)
             uint8_t p[10];
             p[0] = RID_ACCEL; p[1] = 0; p[2] = acc_acc; p[3] = 0;
             put_i16(&p[4], fa[0]); put_i16(&p[6], fa[1]); put_i16(&p[8], fa[2]);
-            rpkt_build(CH_INPUT_REPORTS, p, sizeof(p));
+            rpkt_build_input(p, sizeof(p));
             phase = (uint8_t)((phase + 1) & 3);
             return 1;
         }
@@ -166,7 +222,7 @@ static uint8_t gen_next_packet(void)
             uint8_t p[10];
             p[0] = RID_GYRO; p[1] = 0; p[2] = gyro_acc; p[3] = 0;
             put_i16(&p[4], fg[0]); put_i16(&p[6], fg[1]); put_i16(&p[8], fg[2]);
-            rpkt_build(CH_INPUT_REPORTS, p, sizeof(p));
+            rpkt_build_input(p, sizeof(p));
             phase = (uint8_t)((phase + 1) & 3);
             return 1;
         }
@@ -174,7 +230,7 @@ static uint8_t gen_next_packet(void)
             uint8_t p[10];
             p[0] = RID_MAG; p[1] = 0; p[2] = mag_acc; p[3] = 0;
             put_i16(&p[4], fm[0]); put_i16(&p[6], fm[1]); put_i16(&p[8], fm[2]);
-            rpkt_build(CH_INPUT_REPORTS, p, sizeof(p));
+            rpkt_build_input(p, sizeof(p));
             phase = (uint8_t)((phase + 1) & 3);
             return 1;
         }
@@ -204,6 +260,15 @@ HAL_StatusTypeDef HAL_I2C_Master_Transmit(I2C_HandleTypeDef *hi2c, uint16_t addr
     uint16_t plen = (uint16_t)(size - 4);
 
     if (channel == CH_EXECUTABLE && plen == 1 && payload[0] == EXE_CMD_RESET) {
+        if (reset_noise == 1) {
+            const uint8_t c[2] = { 0xF1, 0x00 };   /* control-channel chatter */
+            raw_push(CH_CONTROL, c, sizeof(c));
+        } else if (reset_noise == 2) {
+            const uint8_t c[1] = { 0x02 };         /* exe channel, not a reset */
+            raw_push(CH_EXECUTABLE, c, sizeof(c));
+        } else if (reset_noise == 3) {
+            raw_push(CH_EXECUTABLE, NULL, 0);      /* exe channel, no cargo */
+        }
         if (!reset_dies) {
             /* Queue the reset-complete response */
             q_buf[0] = EXE_CMD_RESET;     /* response id 0x01 */
@@ -212,6 +277,7 @@ HAL_StatusTypeDef HAL_I2C_Master_Transmit(I2C_HandleTypeDef *hi2c, uint16_t addr
         /* A real reset clears feature enables; the hub starts empty. */
         feat_rv = feat_accel = feat_gyro = feat_mag = 0;
     }
+    if (channel == CH_CONTROL && nak_set_feature) return HAL_ERROR;
     if (channel == CH_CONTROL && plen >= 2 && payload[0] == SH2_SET_FEATURE) {
         switch (payload[1]) {
             case RID_RV:    feat_rv = 1;    break;
@@ -230,32 +296,30 @@ HAL_StatusTypeDef HAL_I2C_Master_Receive(I2C_HandleTypeDef *hi2c, uint16_t addr,
     (void)hi2c; (void)timeout;
     if (!addr_present(addr) || nak_rx) return HAL_ERROR;
     if (nak_rx_once) { nak_rx_once = 0; return HAL_ERROR; }
+    if (nak_cargo && size > 4) return HAL_ERROR;
 
-    if (size == 4) {
-        /* New packet request: if the previous one was fully clocked out,
-         * generate the next. */
-        if (rpkt_pos >= rpkt_len) {
-            if (!gen_next_packet()) {
-                memset(data, 0xFF, 4);    /* nothing queued */
-                return HAL_OK;
-            }
-        }
-        memcpy(data, rpkt, 4);
-        rpkt_pos = 4;
+    if (rpkt_len == 0 && !gen_next_packet()) {
+        memset(data, 0xFF, size);         /* nothing queued */
         return HAL_OK;
     }
-
-    /* Continuation read: serve the rest of the current packet */
-    if (rpkt_pos < rpkt_len) {
-        uint16_t avail = (uint16_t)(rpkt_len - rpkt_pos);
-        uint16_t n = (size < avail) ? size : avail;
-        memcpy(data, &rpkt[rpkt_pos], n);
-        rpkt_pos = (uint16_t)(rpkt_pos + n);
-        if (size > n) memset(data + n, 0xFF, size - n);
-        return HAL_OK;
+    /* Every transaction: a fresh header for what is left (bit 15 = this
+     * is a continuation), then the next cargo bytes. */
+    uint16_t rem  = (uint16_t)(rpkt_len - 4 - rpkt_off);
+    uint16_t hlen = (uint16_t)(4 + rem);
+    if (hdr_len_override >= 0) hlen = (uint16_t)hdr_len_override;
+    uint8_t hdr[4] = { (uint8_t)(hlen & 0xFF),
+                       (uint8_t)((hlen >> 8) | (rpkt_off ? 0x80 : 0)),
+                       rpkt[2], rpkt[3] };
+    memcpy(data, hdr, size < 4 ? size : 4);
+    if (size > 4) {
+        uint16_t want = (uint16_t)(size - 4);
+        uint16_t n = (want < rem) ? want : rem;
+        memcpy(data + 4, &rpkt[4 + rpkt_off], n);
+        if (want > n) memset(data + 4 + n, 0, want - n);
+        rpkt_off = (uint16_t)(rpkt_off + n);
+        rem = (uint16_t)(rem - n);
     }
-
-    memset(data, 0xFF, size);
+    if (rem == 0) { rpkt_len = 0; rpkt_off = 0; }
     return HAL_OK;
 }
 
@@ -789,8 +853,155 @@ TEST(test_calibration_status_unpacks_each_field)
     compass_debug.calib_status = 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* SHTP transport and SH-2 record framing (bno085.c)                   */
+/* ------------------------------------------------------------------ */
+
+static void hub_up_quiet(void)
+{
+    fake_reset();
+    CHECK(BNO085_Init(&hi2c_display, 0x28) == BNO085_OK);
+    stream_off = 1;                 /* only scripted packets from here on */
+    rpkt_len = 0; rpkt_off = 0;
+}
+
+/* SH-2 rotation vector record (14 B): id, seq, status, delay, i j k real
+ * (Q14), accuracy estimate */
+static void rv_record(uint8_t *r, uint8_t id, float k, float real, uint8_t acc)
+{
+    memset(r, 0, 14);
+    r[0] = id; r[2] = acc;
+    put_i16(&r[8],  (int16_t)(k * 16384.0f));
+    put_i16(&r[10], (int16_t)(real * 16384.0f));
+}
+
+static const uint8_t TS_REF[5] = { 0xFB, 0x10, 0x00, 0x00, 0x00 };
+
+TEST(test_bno085_batched_cargo_after_base_timestamp)
+{
+    /* One cargo: the 0xFB timestamp record, then RV and accel batched */
+    hub_up_quiet();
+    uint8_t c[5 + 14 + 10];
+    memcpy(c, TS_REF, 5);
+    rv_record(&c[5], RID_RV, 0.7071f, 0.7071f, 3);
+    uint8_t *a = &c[19];
+    a[0] = RID_ACCEL; a[1] = 0; a[2] = 2; a[3] = 0;
+    put_i16(&a[4], 512); put_i16(&a[6], 0); put_i16(&a[8], 0);
+    raw_push(CH_INPUT_REPORTS, c, sizeof(c));
+
+    BNO085_State st;
+    memset(&st, 0, sizeof(st));
+    CHECK(BNO085_Poll(&st) == BNO085_OK);
+    CHECK(st.rv_count == 1);
+    CHECK(fabsf(st.quat_k - 0.7071f) < 0.001f);
+    CHECK(st.accuracy_rv == 3);
+    CHECK(st.accel_raw[0] == 512);
+    CHECK(st.accuracy_accel == 2);
+}
+
+TEST(test_bno085_rebase_game_rv_and_unframeable_cargo)
+{
+    hub_up_quiet();
+    BNO085_State st;
+    memset(&st, 0, sizeof(st));
+
+    /* A 0xFA rebase record, then a game rotation vector (12 B) */
+    uint8_t c1[5 + 14];
+    c1[0] = 0xFA; c1[1] = 1; c1[2] = 0; c1[3] = 0; c1[4] = 0;
+    rv_record(&c1[5], 0x08, 0.0f, 1.0f, 1);
+    raw_push(CH_INPUT_REPORTS, c1, 5 + 12);
+    CHECK(BNO085_Poll(&st) == BNO085_OK);
+    CHECK(st.rv_count == 1);
+    CHECK(fabsf(st.quat_real - 1.0f) < 0.001f);
+
+    /* An unknown record id loses the framing: what follows is not used */
+    uint8_t c2[5 + 10 + 14];
+    memcpy(c2, TS_REF, 5);
+    memset(&c2[5], 0, 10); c2[5] = 0x99;
+    rv_record(&c2[15], RID_RV, 0.5f, 0.5f, 3);
+    raw_push(CH_INPUT_REPORTS, c2, sizeof(c2));
+    CHECK(BNO085_Poll(&st) == BNO085_OK);
+    CHECK(st.rv_count == 1);
+
+    /* A record cut short by the end of the cargo is dropped */
+    uint8_t c3[5 + 14];
+    memcpy(c3, TS_REF, 5);
+    rv_record(&c3[5], RID_RV, 0.5f, 0.5f, 3);
+    raw_push(CH_INPUT_REPORTS, c3, 5 + 10);
+    CHECK(BNO085_Poll(&st) == BNO085_OK);
+    CHECK(st.rv_count == 1);
+}
+
+TEST(test_bno085_long_packet_tail_is_drained_not_parsed)
+{
+    /* Longer than one read: the hub offers the tail as a continuation
+     * packet, which must be drained but never parsed as reports (here it
+     * would start exactly on a valid-looking RV record). */
+    hub_up_quiet();
+    uint8_t c[200];
+    memset(c, 0, sizeof(c));
+    memcpy(c, TS_REF, 5);
+    rv_record(&c[5], RID_RV, 0.7071f, 0.7071f, 3);
+    rv_record(&c[128], RID_RV, 0.5f, 0.5f, 3);
+    raw_push(CH_INPUT_REPORTS, c, sizeof(c));
+
+    BNO085_State st;
+    memset(&st, 0, sizeof(st));
+    CHECK(BNO085_Poll(&st) == BNO085_OK);
+    CHECK(st.rv_count == 1);
+    CHECK(rpkt_len == 0);                   /* nothing left offered */
+}
+
+TEST(test_bno085_malformed_header_and_cargo_nak)
+{
+    hub_up_quiet();
+    uint8_t c[5 + 14];
+    memcpy(c, TS_REF, 5);
+    rv_record(&c[5], RID_RV, 0.7071f, 0.7071f, 3);
+    raw_push(CH_INPUT_REPORTS, c, sizeof(c));
+    BNO085_State st;
+    memset(&st, 0, sizeof(st));
+
+    hdr_len_override = 2;                   /* shorter than a header */
+    CHECK(BNO085_Poll(&st) == BNO085_OK);
+    CHECK(st.rv_count == 0);
+    hdr_len_override = 0;                   /* "nothing queued" */
+    CHECK(BNO085_Poll(&st) == BNO085_OK);
+    CHECK(st.rv_count == 0);
+    hdr_len_override = -1;
+
+    nak_cargo = 1;                          /* header fine, cargo NAKs */
+    CHECK(BNO085_Poll(&st) == BNO085_ERROR);
+    nak_cargo = 0;
+    CHECK(BNO085_Poll(&st) == BNO085_OK);   /* still offered: parsed now */
+    CHECK(st.rv_count == 1);
+}
+
+TEST(test_bno085_init_ignores_chatter_before_reset_complete)
+{
+    /* Only a non-empty executable-channel packet starting 0x01 counts */
+    for (uint8_t noise = 1; noise <= 3; noise++) {
+        fake_reset();
+        reset_noise = noise;
+        CHECK(BNO085_Init(&hi2c_display, 0x28) == BNO085_OK);
+    }
+}
+
+TEST(test_bno085_init_fails_when_set_feature_naks)
+{
+    fake_reset();
+    nak_set_feature = 1;
+    CHECK(BNO085_Init(&hi2c_display, 0x28) == BNO085_ERROR);
+}
+
 int main(void)
 {
+    run_test_bno085_batched_cargo_after_base_timestamp();
+    run_test_bno085_rebase_game_rv_and_unframeable_cargo();
+    run_test_bno085_long_packet_tail_is_drained_not_parsed();
+    run_test_bno085_malformed_header_and_cargo_nak();
+    run_test_bno085_init_ignores_chatter_before_reset_complete();
+    run_test_bno085_init_fails_when_set_feature_naks();
     run_test_calibration_status_unpacks_each_field();
     run_test_quat_heading_candidate_all_conventions();
     run_test_init_success_default_address();
