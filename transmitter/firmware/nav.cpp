@@ -115,6 +115,16 @@ void nav_init(void) {
     s_anchor_pending   = false;
 }
 
+/* A blocking SF10 transmit holds the loop ~1.1 s, and ekf_predict rejects
+ * any single step over 1 s - so long gaps are integrated in sub-steps
+ * instead of being dropped. The latest acceleration is held for at most
+ * NAV_ACCEL_HOLD_S of a gap (past that it says nothing about the airframe);
+ * the rest coasts on velocity. NAV_MAX_GAP_S bounds the work after an
+ * abnormal stall. */
+#define NAV_PREDICT_SUBSTEP_S  0.25f
+#define NAV_ACCEL_HOLD_S       1.5f
+#define NAV_MAX_GAP_S          30.0f
+
 void nav_predict(void) {
     uint32_t now = millis();
     if (!s_have_any_predict) {
@@ -125,6 +135,7 @@ void nav_predict(void) {
     uint32_t dt_ms = now - s_last_predict_ms;
     if (dt_ms == 0) return;
     float dt = (float)dt_ms * 0.001f;
+    if (dt > NAV_MAX_GAP_S) dt = NAV_MAX_GAP_S;
     s_last_predict_ms = now;
 
     if (!s_anchored) return;  /* can't predict meaningfully without anchor */
@@ -161,7 +172,14 @@ void nav_predict(void) {
         }
     }
 
-    ekf_predict(&s_ekf, a_earth_ned, dt);
+    static const float coast[3] = {0, 0, 0};
+    float done = 0.0f;
+    while (done < dt) {
+        float h = dt - done;
+        if (h > NAV_PREDICT_SUBSTEP_S) h = NAV_PREDICT_SUBSTEP_S;
+        ekf_predict(&s_ekf, (done < NAV_ACCEL_HOLD_S) ? a_earth_ned : coast, h);
+        done += h;
+    }
 }
 
 void nav_update_from_gps(float lat_deg, float lon_deg, float alt_m,
