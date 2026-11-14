@@ -109,9 +109,23 @@ uint8_t radio_get_channel(void) { return 0; }
 static uint32_t last_id_ms = 0;
 static uint32_t max_unid_ms = 0;
 
+/* LoRa time on air at the beacon's settings (SF10, 62.5 kHz, CR 4/8,
+ * explicit header, CRC on, LDRO on, 8-symbol preamble), per the SX126x
+ * datasheet formula. The real transmit blocks the loop this long. */
+static uint32_t lora_toa_ms(size_t pl)
+{
+    const double tsym_ms = 1024.0 / 62.5;                 /* 2^SF / BW */
+    long num = 8L * (long)pl - 4L * 10 + 28 + 16;         /* CRC on, explicit hdr */
+    long den = 4L * (10 - 2);                             /* LDRO on */
+    long blocks = num > 0 ? (num + den - 1) / den : 0;
+    double symbols = 8 + 4.25 + 8 + blocks * (4 + 4);     /* CR 4/8 */
+    return (uint32_t)(symbols * tsym_ms + 0.5);
+}
+
 int transmit_packet(const uint8_t *data, size_t length)
 {
     uint8_t t = data[0];
+    wdt_delay_since_feed += lora_toa_ms(length);   /* blocking airtime */
     if (sim_ms - last_id_ms > max_unid_ms) max_unid_ms = sim_ms - last_id_ms;
     if (t >= 0x20 && t <= 0x7E) last_id_ms = sim_ms;
     if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_HELLO) {
