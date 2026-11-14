@@ -59,7 +59,7 @@ TEST(test_cadence_table_pins)
     CHECK(flight_cadence_fused_interval_ms(BEACON_STATE_PRE_LAUNCH)  == 0);
     CHECK(flight_cadence_fused_interval_ms(BEACON_STATE_LAUNCH)      == 1500);
     CHECK(flight_cadence_fused_interval_ms(BEACON_STATE_POST_LAUNCH) == 1500);
-    CHECK(flight_cadence_fused_interval_ms(BEACON_STATE_BATTERY_SAVE)== 5000);
+    CHECK(flight_cadence_fused_interval_ms(BEACON_STATE_BATTERY_SAVE)== 30000);
 
     /* Heartbeat cadence: dense during the boot grace minute, quiet pad */
     CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_TURN_ON, 0)     == 5);
@@ -91,6 +91,18 @@ TEST(test_cadence_table_pins)
      * the fast LAUNCH phase, which is seconds long). */
     CHECK(flight_cadence_callsign_interval_s() == 300);
     CHECK(flight_cadence_callsign_interval_s() <= 600);
+}
+
+TEST(test_fused_allowed_rule)
+{
+    /* Dead-reckoned fused packets on the ground carry no information (the
+     * receiver holds the last real fix for them) and cost ~1 s of PA each */
+    CHECK(flight_cadence_fused_allowed(BEACON_STATE_BATTERY_SAVE, 1) == 0);
+    CHECK(flight_cadence_fused_allowed(BEACON_STATE_BATTERY_SAVE, 0) == 1);
+    /* In flight the DR stream still flies: velocity and flags matter */
+    CHECK(flight_cadence_fused_allowed(BEACON_STATE_LAUNCH, 1) == 1);
+    CHECK(flight_cadence_fused_allowed(BEACON_STATE_POST_LAUNCH, 1) == 1);
+    CHECK(flight_cadence_fused_allowed(BEACON_STATE_POST_LAUNCH, 0) == 1);
 }
 
 TEST(test_cadence_phase_exits)
@@ -235,8 +247,8 @@ TEST(test_scripted_flight_timeline)
      * deterministic count for this script is 376. The pad states stay
      * silent by construction (interval 0). */
     CHECK(launch_fused == 376);
-    /* ...then 5 s spacing on the ground */
-    CHECK(save_fused >= 21 && save_fused <= 25);
+    /* ...then 30 s spacing on the ground (~115 s of BATTERY_SAVE here) */
+    CHECK(save_fused >= 3 && save_fused <= 5);
 
     /* FCC ID cadence: boot ID plus t = 300, 600 */
     CHECK(callsigns == 3);
@@ -245,6 +257,7 @@ TEST(test_scripted_flight_timeline)
 int main(void)
 {
     run_test_cadence_table_pins();
+    run_test_fused_allowed_rule();
     run_test_cadence_phase_exits();
     run_test_cadence_pa_airtime_margin();
     run_test_descent_airtime_budget();

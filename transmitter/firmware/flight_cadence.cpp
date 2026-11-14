@@ -25,6 +25,11 @@ uint32_t flight_cadence_fused_interval_ms(beacon_state_t state)
     }
 }
 
+int flight_cadence_fused_allowed(beacon_state_t state, int dead_reckoning)
+{
+    return !(state == BEACON_STATE_BATTERY_SAVE && dead_reckoning);
+}
+
 uint32_t flight_cadence_heartbeat_interval_s(beacon_state_t state, uint32_t s_in_state)
 {
     switch (state) {

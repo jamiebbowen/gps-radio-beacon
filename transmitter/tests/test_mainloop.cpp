@@ -534,7 +534,7 @@ int main(void)
     uint32_t gps1 = type_count(PACKET_TYPE_GPS);
     sim_run(540000);                            /* 9 min on the ground */
     uint32_t fus_save = type_count(PACKET_TYPE_FUSED) - fus1;
-    CHECK(fus_save >= 106 && fus_save <= 110);             /* 5 s idle cadence */
+    CHECK(fus_save >= 17 && fus_save <= 19);               /* 30 s idle cadence */
     uint32_t gps_save = type_count(PACKET_TYPE_GPS) - gps1;
     CHECK(gps_save >= 8 && gps_save <= 11);                /* ~60 s spacing */
 
@@ -542,6 +542,23 @@ int main(void)
     CHECK(tx_callsigns == 3);                     /* boot + 300 s + 600 s */
     CHECK(tx_other == 0);                         /* nothing unaccounted */
     CHECK(flog_landed_marks == 1);                /* state row -> LANDED */
+
+    /* GPS lost on the ground: the EKF coasts, and a dead-reckoned position
+     * of a beacon lying in a field means nothing (the receiver holds the
+     * last real fix for it) - no fused packet goes out; heartbeats carry
+     * the beacon. With the fix back, the fused stream resumes. */
+    fake_fix_ok = 0;
+    fake_coords.valid = 0;
+    sim_run(5000);                                /* past NAV_DR_TIMEOUT_S */
+    uint32_t fus_dr0 = type_count(PACKET_TYPE_FUSED);
+    uint32_t hb_dr0 = type_count(PACKET_TYPE_HEARTBEAT);
+    sim_run(90000);
+    CHECK(type_count(PACKET_TYPE_FUSED) == fus_dr0);
+    CHECK(type_count(PACKET_TYPE_HEARTBEAT) > hb_dr0);
+    fake_fix_ok = 1;
+    script_fix(SIM_LAT, SIM_LON, SIM_ALT, 9, 1);
+    sim_run(35000);
+    CHECK(type_count(PACKET_TYPE_FUSED) > fus_dr0);
 
     /* ---------- Mid-flight reboot-resume -----------------------------
      * A WDT bite / brown-out / battery bounce while airborne used to

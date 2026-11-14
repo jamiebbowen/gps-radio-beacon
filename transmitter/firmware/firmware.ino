@@ -634,7 +634,13 @@ void loop() {
     uint32_t fused_interval_ms = flight_cadence_fused_interval_ms(beacon_state);
     if (fused_interval_ms != 0 && nav_is_valid() &&
         (now_ms - last_fused_tx_ms >= fused_interval_ms)) {
-        beacon_transmit_fused_data(system_time_seconds, transmit_fast_flag);
+        /* On the ground a dead-reckoned slot is skipped, not delayed: the
+         * grid below still advances, and heartbeats carry the beacon. */
+        NavFused_t fs;
+        nav_get_fused(&fs);
+        if (flight_cadence_fused_allowed(beacon_state, fs.dead_reckoning)) {
+            beacon_transmit_fused_data(system_time_seconds, transmit_fast_flag);
+        }
         /* Keep the slot grid: a slot delayed by another packet's ~1 s
          * airtime must not push every later slot back too (re-anchoring on
          * the late send cost ~4 of 20 descent positions per 30 s). Resync
