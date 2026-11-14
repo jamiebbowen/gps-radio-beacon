@@ -55,6 +55,21 @@ TEST(test_contact_lost_once_and_regained_with_full_gap)
     CHECK(strcmp(m, "RF REGAINED after 1114s") == 0);
 }
 
+TEST(test_contact_heartbeat_paced_pad_never_lost)
+{
+    /* main.c feeds the beacon-heard tick: on the pad that is one heartbeat
+     * a minute (a position only every 10 minutes), which is contact, not a
+     * series of 5-minute blackouts. */
+    LogPolicy_Contact_t st = {0};
+    char m[48];
+    uint32_t heard = 10000;
+    for (uint32_t now = 10000; now < 3600000u; now += 1000) {
+        if (now - heard >= 60000u) heard = now;          /* next heartbeat */
+        CHECK(LogPolicy_Contact(&st, heard, now, m, sizeof(m)) == 0);
+    }
+    CHECK(st.lost == 0);
+}
+
 TEST(test_rfstats_row_format)
 {
     LogPolicy_RfStats_t s;
@@ -112,6 +127,7 @@ int main(void)
 {
     run_test_link_edge_hysteresis();
     run_test_contact_lost_once_and_regained_with_full_gap();
+    run_test_contact_heartbeat_paced_pad_never_lost();
     run_test_rfstats_row_format();
     run_test_heartbeat_row_format();
     return TEST_SUMMARY();

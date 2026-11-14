@@ -874,6 +874,15 @@ uint32_t RF_Receiver_GetLastPacketTime(void)
 }
 
 /**
+ * @brief Tick of the newest packet heard from our beacon (see header)
+ * @retval HAL tick, 0 = nothing heard in this channel context
+ */
+uint32_t RF_Receiver_GetBeaconHeardTick(void)
+{
+  return last_identified_ms;
+}
+
+/**
  * @brief Common channel-switch path. new_context=1 means "deliberately
  *        looking for a (possibly different) rocket" - drop the airframe
  *        binding so the next ID heard can claim this channel. new_context=0

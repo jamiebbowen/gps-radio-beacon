@@ -154,9 +154,12 @@ static void draw(uint32_t now_ms, uint32_t last_pkt_ms, uint32_t pkt_count)
     /* The shared go/no-go evaluation, built the way main.c builds it */
     Preflight_Inputs_t in;
     memset(&in, 0, sizeof(in));
-    in.link_ok = (last_pkt_ms > 0) && ((now_ms - last_pkt_ms) / 1000u) <= 35u;
-    in.tx_fix = remote_g.fix;
-    in.tx_sats = (uint8_t)remote_g.satellites;
+    in.link_heard = (last_pkt_ms > 0);         /* the position packet is  */
+    in.link_age_s = (now_ms - last_pkt_ms) / 1000u;  /* the newest heard here */
+    in.pos_valid = (last_pkt_ms > 0);
+    in.pos_age_s = in.link_age_s;
+    in.pos_fix = remote_g.fix;
+    in.pos_sats = (uint8_t)remote_g.satellites;
     in.rx_fix_ok = draw_local_live;
     in.compass_ok = compass_data.heading_valid && !compass_data.heading_stale;
     in.rx_vdd_mv = draw_vdd_mv;
@@ -443,7 +446,7 @@ TEST(test_nav_not_ready_names_failed_checks)
     remote_g.fix        = 0;           /* TX no fix */
     remote_g.satellites = 1;
     compass_data.heading_valid = 0;    /* compass uncalibrated */
-    draw(100000, 100000 - 60000, 5);   /* stale link too */
+    draw(100000, 100000 - (PF_LINK_FRESH_S + 5u) * 1000u, 5);  /* stale link too */
 
     ROW_HAS(5, "NOT RDY:");
     ROW_HAS(5, "L");                   /* stale link */
