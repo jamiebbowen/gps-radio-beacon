@@ -157,11 +157,19 @@ B5 62 06 04 04 00 FF FF 02 00 0E 61   cold start (navBbrMask 0xFFFF)
 `test_gps` pins these bytes, the escalation order and the in-flight
 suppression.
 
-### PUBX,41 - Port Configuration
+### Baud self-heal - UBX-CFG-VALSET CFG-UART1-BAUDRATE and PUBX,41
 
-`$PUBX,41,1,0007,0003,115200,0` (UART1, UBX+NMEA+RTCM in, UBX+NMEA out,
-115200 baud) is sent at 9600 and again at 115200 on every `gps_init()`, so a
-module that lost its saved baud comes back.
+Every `gps_init()` sends, at 9600 and again at 115200, so a module that lost
+its saved baud comes back:
+
+```
+B5 62 06 8A 0C 00 00 01 00 00 01 00 52 40 00 C2 01 00 F3 A5
+```
+
+UBX-CFG-VALSET setting CFG-UART1-BAUDRATE (key `0x40520001`) to 115200 in
+the RAM layer - the interface u-blox documents for the M10 - followed by
+`$PUBX,41,1,0007,0003,115200,0` for modules that still honour PUBX (support
+on the MAX-M10S is unconfirmed). Bench-check on a factory-reset module.
 
 ### UBX-CFG-VALSET (class 0x06, id 0x8A) - Messages, Rate, Dynamic Model
 

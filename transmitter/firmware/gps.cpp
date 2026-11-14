@@ -131,6 +131,19 @@ static void gps_recover(uint8_t attempt) {
     gps_init();       /* baud self-heal + message/rate/dynmodel config */
 }
 
+/* CFG-UART1-BAUDRATE (key 0x40520001, U4) = 115200 through UBX-CFG-VALSET,
+ * RAM layer: the configuration interface u-blox documents for the M10.
+ * PUBX,41 stays alongside it for modules that still honour that command
+ * (support on the MAX-M10S is unconfirmed). */
+static void gps_send_baud_valset(void) {
+    const uint8_t valset_baud[] = {
+        0x00, 0x01, 0x00, 0x00,              /* version, layers=RAM, reserved */
+        0x01, 0x00, 0x52, 0x40,              /* CFG-UART1-BAUDRATE key (LE)   */
+        0x00, 0xC2, 0x01, 0x00,              /* 115200 (U4 LE)                */
+    };
+    gps_send_ubx(0x06, 0x8A, valset_baud, sizeof(valset_baud));
+}
+
 // Initialize GPS for u-blox MAX-M10S
 void gps_init(void) {
     /* Baud self-heal. Nothing in this boot path sets the module's baud,
@@ -145,11 +158,13 @@ void gps_init(void) {
      * hears phase 2's. */
     uart_set_baud(9600);
     delay(50);
+    gps_send_baud_valset();          /* M10: VALSET; switches immediately */
     gps_send_pubx("PUBX,41,1,0007,0003,115200,0");  /* UART1, in UBX+NMEA+RTCM, out UBX+NMEA, 115200 */
     delay(250);  /* let the module switch and drain any in-flight bytes */
     uart_set_baud(115200);
     delay(50);
     flush_uart_buffer();
+    gps_send_baud_valset();                         /* idempotent at 115200 */
     gps_send_pubx("PUBX,41,1,0007,0003,115200,0");  /* idempotent at 115200 */
     delay(10);
 

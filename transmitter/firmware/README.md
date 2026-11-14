@@ -9,7 +9,7 @@ and keeps a crash-survivable flight log in the MCU's own flash.
 | Part | Interface | Notes |
 |------|-----------|-------|
 | Adafruit ItsyBitsy M4 Express (SAMD51, 120 MHz) | – | FQBN `adafruit:samd:adafruit_itsybitsy_m4` |
-| u-blox MAX-M10S GPS | `Serial1` (pins 0/1), 115200 | boot self-heals the baud from 9600 via PUBX,41 |
+| u-blox MAX-M10S GPS | `Serial1` (pins 0/1), 115200 | boot self-heals the baud from 9600 (UBX-CFG-VALSET + PUBX,41) |
 | BNO085 IMU | I2C, address `0x4A` | reset pin 10 (optional) |
 | E22-400M33S (SX1268) LoRa | SPI | pins below |
 

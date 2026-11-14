@@ -86,6 +86,16 @@ static int log_contains_bytes(const uint8_t *needle, size_t n)
     }
     return 0;
 }
+static int count_bytes(const uint8_t *needle, size_t n)
+{
+    int k = 0;
+    if (uart_tx_len < n) return 0;
+    for (size_t i = 0; i <= uart_tx_len - n; i++) {
+        if (memcmp((uint8_t*)uart_tx_log + i, needle, n) == 0) k++;
+    }
+    return k;
+}
+
 static int log_contains_str(const char *text)
 {
     return log_contains_bytes((const uint8_t *)text, strlen(text));
@@ -155,7 +165,7 @@ TEST(test_init_sends_ublox_config)
     CHECK(baud_call_count == 2);
     CHECK(baud_calls[0] == 9600);
     CHECK(baud_calls[1] == 115200);
-    CHECK(strstr(uart_tx_log, "$PUBX,41,1,0007,0003,115200,0") != NULL);
+    CHECK(log_contains_str("$PUBX,41,1,0007,0003,115200,0"));
 
     /* M10 honors VALSET only (legacy PUBX,40 is silently ignored - 2026-09-07
      * field log showed default-config GLL still flowing). Check the VALSET
@@ -170,6 +180,12 @@ TEST(test_init_sends_ublox_config)
     CHECK(log_contains_bytes(gll_off,  sizeof(gll_off)));
     CHECK(log_contains_bytes(rmc_on,   sizeof(rmc_on)));
     CHECK(log_contains_bytes(rate_1hz, sizeof(rate_1hz)));
+
+    /* Baud self-heal through UBX-CFG-VALSET CFG-UART1-BAUDRATE = 115200
+     * (RAM layer) - the configuration interface u-blox documents for the
+     * M10 - sent at 9600 and again at 115200, alongside PUBX,41. */
+    static const uint8_t valset_baud[] = { 0xB5, 0x62, 0x06, 0x8A, 0x0C, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x52, 0x40, 0x00, 0xC2, 0x01, 0x00, 0xF3, 0xA5 };
+    CHECK(count_bytes(valset_baud, sizeof(valset_baud)) == 2);
 
     /* No fix has ever landed: fix age reads as "never" (UINT32_MAX),
      * not as a bogus small number that would look fresh. */
