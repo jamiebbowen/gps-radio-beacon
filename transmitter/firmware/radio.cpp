@@ -333,32 +333,39 @@ int radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms) {
         return 0;
     }
 
+    /* Listening needs the radio powered with the RF switch on the LNA side.
+     * Put the caller's power state back afterwards: between pad heartbeats
+     * the radio is normally off, and leaving RXEN high kept the LNA powered
+     * for nothing. */
+    bool was_enabled = radio_enabled;
     if (!radio_enabled) radio_enable();
 
     rf_switch_rx();  // antenna on the LNA side for the listen window
+    int result = 0;
     int state = radio.startReceive();
-    if (state != RADIOLIB_ERR_NONE) return -state;
-
-    /* Poll the RX_DONE / timeout IRQ flags until the window closes. */
-    uint32_t start = millis();
-    while (millis() - start < timeout_ms) {
-        uint32_t flags = radio.getIrqFlags();
-        if (flags & RADIOLIB_SX126X_IRQ_RX_DONE) {
-            if (flags & RADIOLIB_SX126X_IRQ_CRC_ERR) {  /* corrupt: ignore */
-                radio.standby();
-                return 0;
+    if (state != RADIOLIB_ERR_NONE) {
+        result = state;          /* RadioLib error codes are already < 0 */
+    } else {
+        /* Poll the RX_DONE / timeout IRQ flags until the window closes. */
+        uint32_t start = millis();
+        while (millis() - start < timeout_ms) {
+            uint32_t flags = radio.getIrqFlags();
+            if (flags & RADIOLIB_SX126X_IRQ_RX_DONE) {
+                if (!(flags & RADIOLIB_SX126X_IRQ_CRC_ERR)) { /* corrupt: ignore */
+                    size_t n = radio.getPacketLength();
+                    if (n > max_len) n = max_len;
+                    state = radio.readData(out, n);
+                    result = (state == RADIOLIB_ERR_NONE) ? (int)n : state;
+                }
+                break;
             }
-            size_t n = radio.getPacketLength();
-            if (n > max_len) n = max_len;
-            state = radio.readData(out, n);
-            radio.standby();
-            return (state == RADIOLIB_ERR_NONE) ? (int)n : -state;
+            if (flags & RADIOLIB_SX126X_IRQ_TIMEOUT) break;
+            delay(1);
         }
-        if (flags & RADIOLIB_SX126X_IRQ_TIMEOUT) break;
-        delay(1);
+        radio.standby();
     }
-    radio.standby();
-    return 0;
+    if (!was_enabled) radio_disable();
+    return result;
 }
 
 /** Transmit a 6-byte ACK packet as an answer to a parsed command. */

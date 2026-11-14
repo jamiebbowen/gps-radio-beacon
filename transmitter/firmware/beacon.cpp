@@ -239,8 +239,8 @@ void beacon_poll_commands(uint8_t in_flight)
 {
     if (in_flight) return;   /* flight windows are TX-dense; don't listen */
     if (!radio_is_transmitting()) {
-        uint8_t buf[32];
-        int n = radio_poll_rx(buf, sizeof(buf), 40 /*ms*/);
+        uint8_t buf[32] = {0};
+        int n = radio_poll_rx(buf, sizeof(buf), 40 /*ms*/);   /* <0 = error */
         if (n >= CMD_ACK_PACKET_SIZE && buf[0] == PACKET_TYPE_CMD &&
             buf[1] == (uint8_t)ROCKET_ID) {
             uint8_t echo;

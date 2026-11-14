@@ -75,7 +75,7 @@ int  radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms)
 {
     rx_polls++;
     rx_last_window = timeout_ms;
-    if (fake_rx_len <= 0) return 0;
+    if (fake_rx_len <= 0) return fake_rx_len;   /* 0 = nothing, <0 = error */
     size_t n = (size_t)fake_rx_len;
     if (n > max_len) n = max_len;
     memcpy(out, fake_rx_pkt, n);
@@ -1002,6 +1002,11 @@ TEST(test_poll_commands_ignores_other_packets)
     /* Another rocket's command: binding must hold on the uplink too */
     uint8_t other_rocket[6] = { PACKET_TYPE_CMD, (uint8_t)(ROCKET_ID + 1), CMD_PING, 0, 0, 0x55 };
     memcpy(fake_rx_pkt, other_rocket, 6);
+    beacon_poll_commands(0);
+    CHECK(ack_calls == 0);
+
+    /* Radio error (negative return): never parsed as a frame */
+    fake_rx_len = -5;
     beacon_poll_commands(0);
     CHECK(ack_calls == 0);
 

@@ -40,6 +40,7 @@ static int busy_level    = LOW;
 static int txen_level    = -1;
 static int rxen_level    = -1;
 static int txen_high_seen = 0;     /* TXEN asserted at least once (TX burst) */
+static int rxen_high_writes = 0;   /* RXEN driven high (LNA side selected)   */
 
 void pinMode(int pin, int mode) { (void)pin; (void)mode; }
 int digitalRead(int pin)
@@ -51,12 +52,13 @@ int digitalRead(int pin)
 void digitalWrite(int pin, int value)
 {
     if (pin == LORA_TXEN) { txen_level = value; if (value == HIGH) txen_high_seen = 1; }
-    if (pin == LORA_RXEN) rxen_level = value;
+    if (pin == LORA_RXEN) { rxen_level = value; if (value == HIGH) rxen_high_writes++; }
 }
 
 /* RadioLib knobs */
 int     radiolib_begin_result = RADIOLIB_ERR_NONE;
 int     radiolib_start_receive_result = RADIOLIB_ERR_NONE;
+int     radiolib_read_result = RADIOLIB_ERR_NONE;
 uint32_t radiolib_irq_flags = 0;
 uint8_t radiolib_rx_buf[256];
 size_t  radiolib_rx_len = 0;
@@ -94,6 +96,8 @@ static void reset_knobs(void)
     radiolib_set_cl_result = RADIOLIB_ERR_NONE;
     radiolib_time_on_air_us = 1118000;
     radiolib_start_receive_result = RADIOLIB_ERR_NONE;
+    radiolib_read_result = RADIOLIB_ERR_NONE;
+    rxen_high_writes = 0;
     radiolib_irq_flags = 0;
     radiolib_rx_len = 0;
     memset(radiolib_rx_buf, 0, sizeof(radiolib_rx_buf));
@@ -353,10 +357,19 @@ TEST(test_poll_rx_guards)
     CHECK(radio_poll_rx(NULL, sizeof(buf), 50) == 0);
     CHECK(radio_poll_rx(buf, 0, 50) == 0);
 
-    /* startReceive failure: returns -state (positive when state<0) */
+    /* startReceive failure: RadioLib's (negative) code comes back as-is.
+     * The old -state made it positive, which callers read as "N bytes". */
     radiolib_start_receive_result = -2;
-    CHECK(radio_poll_rx(buf, sizeof(buf), 50) == 2);
+    CHECK(radio_poll_rx(buf, sizeof(buf), 50) == -2);
     radiolib_start_receive_result = RADIOLIB_ERR_NONE;
+
+    /* readData failure on a received frame: negative too */
+    radiolib_rx_len = 6;
+    radiolib_irq_flags = RADIOLIB_SX126X_IRQ_RX_DONE;
+    radiolib_read_result = -7;
+    CHECK(radio_poll_rx(buf, sizeof(buf), 50) == -7);
+    radiolib_read_result = RADIOLIB_ERR_NONE;
+    CHECK(radio_enabled == true);              /* was on: left on */
 }
 
 TEST(test_poll_rx_captures_packet_and_switches_rx)
@@ -370,13 +383,16 @@ TEST(test_poll_rx_captures_packet_and_switches_rx)
     radiolib_irq_flags = RADIOLIB_SX126X_IRQ_RX_DONE;
 
     uint8_t buf[32];
-    int standby_before = radiolib_standby_calls;
+    int rxen_before = rxen_high_writes;
     int n = radio_poll_rx(buf, sizeof(buf), 50);
     CHECK(n == 5);
     CHECK(memcmp(buf, cmd, 5) == 0);
-    CHECK(radiolib_standby_calls == standby_before + 1);
-    CHECK(rxen_level == HIGH);                 /* antenna on LNA side */
+    CHECK(rxen_high_writes > rxen_before);     /* LNA side for the window */
     CHECK(txen_level == LOW);
+    /* The radio was off before the listen: it is off again afterwards
+     * (RXEN high between pad heartbeats kept the LNA powered for nothing) */
+    CHECK(radio_enabled == false);
+    CHECK(rxen_level == LOW);
 }
 
 TEST(test_poll_rx_crc_error_and_timeout_paths)

@@ -37,6 +37,7 @@ extern float   radiolib_current_limit;  /* captured mA argument         */
 extern int     radiolib_set_cl_result;  /* scripted return value        */
 extern uint32_t radiolib_time_on_air_us; /* scripted getTimeOnAir() us  */
 extern int     radiolib_start_receive_result; /* startReceive() retval  */
+extern int     radiolib_read_result;          /* readData() retval      */
 extern uint32_t radiolib_irq_flags;     /* getIrqFlags() scripted value */
 extern uint8_t radiolib_rx_buf[256];    /* scripted inbound packet      */
 extern size_t  radiolib_rx_len;         /* scripted packet length       */
@@ -91,7 +92,7 @@ public:
     {
         if (len > radiolib_rx_len) len = radiolib_rx_len;
         memcpy(data, radiolib_rx_buf, len);
-        return RADIOLIB_ERR_NONE;
+        return radiolib_read_result;
     }
 
     int transmit(uint8_t *data, size_t len)
