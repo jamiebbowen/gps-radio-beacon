@@ -56,12 +56,14 @@
  *                  chip reset in mid-air and calls flight_log_resume()
  *                  instead of erasing the surviving log.
  *
- * Erase policy: full-region erase at next launch, INCLUDING the marker
- * row (the arm then rewrites it FLYING). Normal records append only into
- * the first FLOG_BYTES-8KB so a full data region can never clobber the
- * marker. The erase takes NVMCTL row-erase time per row (~20 ms each,
- * ~500 ms total), which happens once at T0 - on the pad the PAYOFF is
- * worth it. In flight every record is programmed as it is logged (two
+ * Erase policy: the previous flight survives until the next launch. Arming
+ * erases only the first data block and the marker row (rewritten FLYING);
+ * each further 8 KB block is erased while the one before it fills, so the
+ * main loop never stalls for the whole region (SAMD51 block erase: 50 ms
+ * typical, 200 ms max). DUMP and resume stop at the first blank slot, so an
+ * older flight's records beyond it are never mistaken for this one's.
+ * Normal records append only into the first FLOG_BYTES-8KB so a full data
+ * region can never clobber the marker. In flight every record is programmed as it is logged (two
  * 16-byte quad words, magic last), so a power loss costs at most the
  * record being written.
  */

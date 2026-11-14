@@ -284,21 +284,23 @@ static const flog_rec_t *state_marker(void)
     return (const flog_rec_t *)(uintptr_t)FLOG_STATE_ADDR;
 }
 
-TEST(arm_erases_full_region_then_arms)
+TEST(arm_erases_only_the_first_block_and_the_marker)
 {
+    /* Arming happens at launch confirmation. Erasing the whole region
+     * there - 32 blocks at 50 ms typical / 200 ms max each (SAMD51 tFEB) -
+     * stalled the main loop ~1.6 s at liftoff. Only the first data block
+     * and the marker row are erased now; the rest just ahead of the writes. */
     reset_all();
     uint32_t magic = FLOG_MAGIC;
-    memcpy(G_FLASH, &magic, sizeof(magic));   /* stale data to erase */
+    memcpy(G_FLASH, &magic, sizeof(magic));              /* stale, block 0 */
+    memcpy(G_FLASH + 5 * 8192u, &magic, sizeof(magic));  /* stale, block 5 */
     flight_log_arm();
     CHECK(armed == 1);
-    /* one EB per row, plus the state row's own rewrite erase */
-    CHECK(nvm_eb_count == HOST_FLOG_BYTES / 8192u + 1);
-    /* erase addresses sweep the whole region in 8 KB steps */
-    for (uint32_t i = 0; i < HOST_FLOG_BYTES / 8192u; i++)
-        CHECK(nvm_eb_hist[i] == (uint32_t)(uintptr_t)G_FLASH + i * 8192u);
-    CHECK(nvm_eb_hist[HOST_FLOG_BYTES / 8192u] ==
-          (uint32_t)(uintptr_t)FLOG_STATE_ADDR);   /* marker rewrite last */
-    CHECK(flash_data_area_erased());
+    CHECK(nvm_eb_count == 2);
+    CHECK(nvm_eb_hist[0] == (uint32_t)(uintptr_t)G_FLASH);
+    CHECK(nvm_eb_hist[1] == (uint32_t)(uintptr_t)FLOG_STATE_ADDR);
+    CHECK(flash_rec(0)->f.magic != FLOG_MAGIC);          /* block 0 clean   */
+    CHECK(memcmp(G_FLASH + 5 * 8192u, &magic, 4) == 0);  /* left for later  */
     /* Every erase and program hit the flight-log region itself. With the
      * SAMD21-style ADDR = addr >> 1 they landed at half the address:
      * nothing ever reached the log, and the arm erase swept the region
@@ -311,6 +313,58 @@ TEST(arm_erases_full_region_then_arms)
     CHECK(state_marker()->f.p.evt.code == FLOG_STATE_FLYING);
     CHECK(flight_log_prev_flying() == 1);
     CHECK(wptr == 0);
+}
+
+TEST(next_block_is_erased_while_the_current_one_fills)
+{
+    reset_all();
+    flight_log_arm();
+    const uint32_t per_block = 8192u / FLOG_RECORD;      /* 256 records */
+    for (uint32_t i = 0; i < per_block / 2 - 1; i++)
+        flight_log_gps(i, 1, 2, 3, 7, 1);
+    CHECK(nvm_eb_count == 2);                            /* not yet      */
+    flight_log_gps(999, 1, 2, 3, 7, 1);                  /* half full    */
+    CHECK(nvm_eb_count == 3);
+    CHECK(nvm_eb_hist[2] == (uint32_t)(uintptr_t)G_FLASH + 8192u);
+    /* one block ahead, never further */
+    for (uint32_t i = 0; i < per_block / 2; i++)
+        flight_log_gps(i, 1, 2, 3, 7, 1);
+    CHECK(nvm_eb_count == 3);
+    CHECK(nvm_stray == 0);
+}
+
+TEST(an_older_flight_beyond_the_log_is_never_read)
+{
+    /* Lazy erase leaves an older flight's records past the current one
+     * until the writes get there. DUMP and resume both stop at the first
+     * blank slot, so they never take them for this flight's, and the
+     * writes erase each block before entering it. */
+    reset_all();
+    for (uint32_t k = 2 * 256; k < 5 * 256; k++) {      /* blocks 2..4 */
+        flog_rec_t r;
+        memset(&r, 0, sizeof(r));
+        r.f.magic = FLOG_MAGIC;
+        r.f.kind  = FLOG_KIND_GPS;
+        r.f.ms    = 424242;
+        memcpy(G_FLASH + k * FLOG_RECORD, &r, sizeof(r));
+    }
+    flight_log_arm();
+    for (uint32_t i = 0; i < 10; i++) flight_log_gps(1000 + i, 5, 6, 7, 8, 1);
+    Serial.clear();
+    flight_log_dump_serial();
+    CHECK(strstr(Serial.log, "424242") == nullptr);
+    CHECK(strstr(Serial.log, "1009,2,5,6,7,8,1") != nullptr);
+    CHECK(strstr(Serial.log, "0,10,1,0") != nullptr);   /* marker row last */
+
+    flight_log_init();                                   /* reboot */
+    CHECK(flight_log_resume() == 1);
+    CHECK(wptr == 10 * FLOG_RECORD);
+    while (wptr < 2 * 8192u + 4 * FLOG_RECORD)
+        flight_log_gps(2000, 9, 9, 9, 7, 1);
+    CHECK(flash_rec(2 * 256)->f.ms == 2000);
+    CHECK(flash_rec(2 * 256 + 3)->f.ms == 2000);
+    CHECK(flash_rec(2 * 256 + 4)->f.magic != FLOG_MAGIC); /* erased, not kept */
+    CHECK(nvm_stray == 0);
 }
 
 TEST(rearm_while_armed_is_noop)
@@ -473,6 +527,11 @@ TEST(region_never_wraps_past_end)
     CHECK(wptr == FLOG_DATA_BYTES);
     CHECK(nvm_wp_count == 1 /* marker */);
     CHECK(nvm_wqw_count == 2 * cap);              /* two quad words each */
+    /* every data block erased exactly once (block 0 at arm, the rest
+     * ahead of the writes), the marker row only at arm */
+    CHECK(nvm_eb_count == FLOG_DATA_BYTES / 8192u + 1);
+    for (uint32_t k = 2; k < nvm_eb_count && k < 64; k++)
+        CHECK(nvm_eb_hist[k] != (uint32_t)(uintptr_t)FLOG_STATE_ADDR);
     CHECK(nvm_stray == 0);
     /* overflow record is held, not wrapped over offset 0 */
     uint32_t wqws = nvm_wqw_count;
@@ -517,6 +576,7 @@ TEST(dump_emits_csv_for_flushed_records_only)
     flight_log_imu(7777, 9, 9, 9, 9, 9, 9, 9);
 
     Serial.clear();
+    wdt_feeds = 0;
     flight_log_dump_serial();
 
     CHECK(strstr(Serial.log, "ms,kind,ax,ay,az,gx,gy,gz,peak") != nullptr);
@@ -540,11 +600,11 @@ TEST(dump_emits_csv_for_flushed_records_only)
     CHECK(lines == 3 + 1 + (int)RECS_PER_PAGE + 1 + 1);
     CHECK(strstr(Serial.log, "0,10,1,0") != nullptr);      /* state row */
 
-    /* The dump feeds the WDT once per record slot - without that the
-     * 16 s watchdog would reset the beacon ~halfway through the ~40 s
-     * printout (the original reason DUMP was unreachable stayed hidden
-     * because no caller existed at all). */
-    CHECK(wdt_feeds == HOST_FLOG_BYTES / FLOG_RECORD);
+    /* The dump feeds the WDT once per slot it reads - the 17 records, the
+     * blank slot that ends the log, and the marker row. A full log is a
+     * ~40 s printout; without the feeds the 16 s watchdog would reset the
+     * beacon partway through. */
+    CHECK(wdt_feeds == 17 + 1 + 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -564,10 +624,10 @@ TEST(arm_commit_reboot_notice_rearm)
     CHECK(armed == 0);
     CHECK(strstr(Serial.log, "[FLOG] previous flight data present") != nullptr);
 
-    /* next flight arm wipes the record for the new flight (second full
-     * erase cycle this boot, plus each arm's marker-row rewrite) */
+    /* next flight arm wipes the record for the new flight (block 0 and
+     * the marker row again: 2 erases per arm) */
     flight_log_arm();
-    CHECK(nvm_eb_count == 2 * (HOST_FLOG_BYTES / 8192u + 1));
+    CHECK(nvm_eb_count == 2 * 2);
     CHECK(flash_data_area_erased());
     CHECK(flight_log_prev_flying() == 1);          /* fresh FLYING marker */
     CHECK(wptr == 0);
@@ -668,7 +728,9 @@ int main(void)
     run_init_blank_flash_reports_nothing();
     run_init_with_previous_data_announces_dump_procedure();
     run_unarmed_appends_are_dropped();
-    run_arm_erases_full_region_then_arms();
+    run_arm_erases_only_the_first_block_and_the_marker();
+    run_next_block_is_erased_while_the_current_one_fills();
+    run_an_older_flight_beyond_the_log_is_never_read();
     run_rearm_while_armed_is_noop();
     run_records_reach_flash_as_they_are_written();
     run_page_boundary_commit_is_byte_exact();

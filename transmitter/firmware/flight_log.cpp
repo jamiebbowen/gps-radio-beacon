@@ -103,6 +103,8 @@ typedef union {
 /* State */
 static volatile uint8_t armed = 0;       /* reset-region armed           */
 static uint32_t wptr = 0;                /* bytes written so far         */
+static uint32_t next_erase = 0;          /* data offset of the next block
+                                          * the look-ahead erase clears   */
 
 /* ------------------------------------------------------------------ */
 /* NVMCTRL helpers (SAMD51 Hardware Asynchronous Access pattern)       */
@@ -194,12 +196,39 @@ static void flog_write_state(uint8_t code)
     (void)nvm_write_page(FLOG_STATE_ADDR, state_page);
 }
 
+/* A 32-byte slot that was never programmed: the end of this flight's log */
+static bool flog_slot_blank(const uint8_t *slot)
+{
+    for (uint32_t k = 0; k < FLOG_RECORD; k++) {
+        if (slot[k] != 0xFF) return false;
+    }
+    return true;
+}
+
+/* Keep the block after the write pointer erased ahead of time: once the
+ * current block is half full, erase the next one - one 50-200 ms stall
+ * every ~128 records instead of the whole region at T0. The marker row at
+ * the end is never touched here. */
+static void flog_erase_ahead(void)
+{
+    if (next_erase < FLOG_DATA_BYTES && wptr + FLOG_ROW / 2 >= next_erase) {
+        (void)nvm_erase_block(FLOG_BASE + next_erase);
+        next_erase += FLOG_ROW;
+    }
+}
+
 void flight_log_arm(void)
 {
     if (armed) return;
-    for (uint32_t row = FLOG_BASE; row < FLOG_BASE + FLOG_BYTES; row += FLOG_ROW) {
-        (void)nvm_erase_block(row);
-    }
+    /* Only the first data block and the marker row are erased here: arming
+     * happens at launch confirmation, and erasing all 32 blocks (SAMD51
+     * tFEB 50 ms typical, 200 ms max each) stalled the main loop ~1.6 s -
+     * up to 6.4 s - right at liftoff. The rest is erased just ahead of the
+     * writes (flog_erase_ahead); DUMP and resume stop at the first blank
+     * slot, so an older flight's records beyond it are never read as this
+     * flight's. */
+    (void)nvm_erase_block(FLOG_BASE);
+    next_erase = FLOG_ROW;
     armed = 1;
     wptr = 0;
     flog_write_state(FLOG_STATE_FLYING);
@@ -224,16 +253,14 @@ uint8_t flight_log_resume(void)
      * programming only clears bits, so it is skipped; DUMP ignores it for
      * lack of a magic. */
     wptr = 0;
-    while (wptr < FLOG_DATA_BYTES) {
-        const uint8_t *slot = (const uint8_t *)(FLOG_BASE + wptr);
-        bool blank = true;
-        for (uint32_t k = 0; k < FLOG_RECORD; k++) {
-            if (slot[k] != 0xFF) { blank = false; break; }
-        }
-        if (blank) break;
+    while (wptr < FLOG_DATA_BYTES &&
+           !flog_slot_blank((const uint8_t *)(FLOG_BASE + wptr))) {
         wptr += FLOG_RECORD;
     }
     armed = 1;
+    /* The reset may have come before this block's look-ahead erase */
+    next_erase = (wptr / FLOG_ROW + 1) * FLOG_ROW;
+    flog_erase_ahead();
     return 1;
 }
 
@@ -258,6 +285,7 @@ static void flog_append_record(const flog_rec_t *rec)
     (void)nvm_write_qword(addr + 16, src + 16);
     (void)nvm_write_qword(addr, src);
     wptr += FLOG_RECORD;
+    flog_erase_ahead();
 }
 
 void flight_log_imu(uint32_t ms,
@@ -330,50 +358,63 @@ void flight_log_fused(uint32_t ms, int32_t lat_e7, int32_t lon_e7,
     flog_append_record(&r);
 }
 
+static void flog_print_record(const flog_rec_t *r)
+{
+    Serial.print(r->f.ms);         Serial.print(',');
+    Serial.print(r->f.kind);       Serial.print(',');
+    if (r->f.kind == FLOG_KIND_IMU) {
+        Serial.print(r->f.p.imu.a_x_cg); Serial.print(',');
+        Serial.print(r->f.p.imu.a_y_cg); Serial.print(',');
+        Serial.print(r->f.p.imu.a_z_cg); Serial.print(',');
+        Serial.print(r->f.p.imu.g_x_dds);Serial.print(',');
+        Serial.print(r->f.p.imu.g_y_dds);Serial.print(',');
+        Serial.print(r->f.p.imu.g_z_dds);Serial.print(',');
+        Serial.print(r->f.p.imu.peak_mg);Serial.print(',');
+        Serial.print(r->f.rsv[0]);
+    } else if (r->f.kind == FLOG_KIND_GPS) {
+        Serial.print(r->f.p.gps.lat_e7); Serial.print(',');
+        Serial.print(r->f.p.gps.lon_e7); Serial.print(',');
+        Serial.print(r->f.p.gps.alt_m);  Serial.print(',');
+        Serial.print(r->f.p.gps.sats);   Serial.print(',');
+        Serial.print(r->f.p.gps.fix_q);
+    } else if (r->f.kind == FLOG_KIND_FUSED) {
+        Serial.print(r->f.p.fus.lat_e7); Serial.print(',');
+        Serial.print(r->f.p.fus.lon_e7); Serial.print(',');
+        Serial.print(r->f.p.fus.alt_m);  Serial.print(',');
+        Serial.print(r->f.p.fus.vn_cms); Serial.print(',');
+        Serial.print(r->f.p.fus.ve_cms); Serial.print(',');
+        Serial.print(r->f.p.fus.vd_cms); Serial.print(',');
+        Serial.print(r->f.p.fus.flags);
+    } else if (r->f.kind == FLOG_KIND_FLIGHT_EVENT ||
+               r->f.kind == FLOG_KIND_BOOT ||
+               r->f.kind == FLOG_KIND_STATE) {
+        Serial.print(r->f.p.evt.code);   Serial.print(',');
+        Serial.print(r->f.p.evt.value);
+    }
+    Serial.println();
+}
+
 void flight_log_dump_serial(void)
 {
-    /* Parse records linearly over the whole region; skip magic-only padding.
-     * 8192 records at 115200 baud is a ~40 s printout - the 16 s WDT would
-     * reboot mid-dump, so feed it on every record (a 2-op register poke). */
+    /* This flight's records run from offset 0 to the first blank slot
+     * (anything beyond it is an older flight not erased yet); a torn record
+     * (power lost between its two quad words) has no magic and is skipped.
+     * The flight-state marker row prints last. A full log at 115200 baud is
+     * a ~40 s printout - the 16 s WDT would reboot mid-dump, so feed it on
+     * every slot (a 2-op register poke). */
     Serial.println(F("# kind 1 (IMU): ax,ay,az centi-g; gx,gy,gz 0.1 deg/s; peak milli-g;"));
     Serial.println(F("#   last column fmt: 3 = these units, 0 = pre-V3 firmware (cm/s^2,"));
     Serial.println(F("#   0.01 deg/s, mm/s^2 - may have wrapped)"));
     Serial.println(F("ms,kind,ax,ay,az,gx,gy,gz,peak,stat_everything"));
-    for (uint32_t off = 0; off < FLOG_BYTES; off += FLOG_RECORD) {
+    for (uint32_t off = 0; off < FLOG_DATA_BYTES; off += FLOG_RECORD) {
         watchdog_feed();
-        const flog_rec_t *r = (const flog_rec_t *)(FLOG_BASE + off);
+        const uint8_t *slot = (const uint8_t *)(FLOG_BASE + off);
+        if (flog_slot_blank(slot)) break;
+        const flog_rec_t *r = (const flog_rec_t *)slot;
         if (r->f.magic != FLOG_MAGIC) continue;
-        Serial.print(r->f.ms);         Serial.print(',');
-        Serial.print(r->f.kind);       Serial.print(',');
-        if (r->f.kind == FLOG_KIND_IMU) {
-            Serial.print(r->f.p.imu.a_x_cg); Serial.print(',');
-            Serial.print(r->f.p.imu.a_y_cg); Serial.print(',');
-            Serial.print(r->f.p.imu.a_z_cg); Serial.print(',');
-            Serial.print(r->f.p.imu.g_x_dds);Serial.print(',');
-            Serial.print(r->f.p.imu.g_y_dds);Serial.print(',');
-            Serial.print(r->f.p.imu.g_z_dds);Serial.print(',');
-            Serial.print(r->f.p.imu.peak_mg);Serial.print(',');
-            Serial.print(r->f.rsv[0]);
-        } else if (r->f.kind == FLOG_KIND_GPS) {
-            Serial.print(r->f.p.gps.lat_e7); Serial.print(',');
-            Serial.print(r->f.p.gps.lon_e7); Serial.print(',');
-            Serial.print(r->f.p.gps.alt_m);  Serial.print(',');
-            Serial.print(r->f.p.gps.sats);   Serial.print(',');
-            Serial.print(r->f.p.gps.fix_q);
-        } else if (r->f.kind == FLOG_KIND_FUSED) {
-            Serial.print(r->f.p.fus.lat_e7); Serial.print(',');
-            Serial.print(r->f.p.fus.lon_e7); Serial.print(',');
-            Serial.print(r->f.p.fus.alt_m);  Serial.print(',');
-            Serial.print(r->f.p.fus.vn_cms); Serial.print(',');
-            Serial.print(r->f.p.fus.ve_cms); Serial.print(',');
-            Serial.print(r->f.p.fus.vd_cms); Serial.print(',');
-            Serial.print(r->f.p.fus.flags);
-        } else if (r->f.kind == FLOG_KIND_FLIGHT_EVENT ||
-                   r->f.kind == FLOG_KIND_BOOT ||
-                   r->f.kind == FLOG_KIND_STATE) {
-            Serial.print(r->f.p.evt.code);   Serial.print(',');
-            Serial.print(r->f.p.evt.value);
-        }
-        Serial.println();
+        flog_print_record(r);
     }
+    watchdog_feed();
+    const flog_rec_t *st = (const flog_rec_t *)FLOG_STATE_ADDR;
+    if (st->f.magic == FLOG_MAGIC) flog_print_record(st);
 }
