@@ -37,24 +37,47 @@
 
 #define HOST_FLOG_BYTES (256u * 1024u)
 
-static uint8_t *const g_flash =
-    (uint8_t *)mmap(nullptr, HOST_FLOG_BYTES, PROT_READ | PROT_WRITE,
-                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+/* 8 KB-aligned like FLOG_BASE (0x40000) on the chip: an erase block is
+ * the 8 KB block containing ADDR, so a merely page-aligned buffer would
+ * have its first erase land partly below it. */
+static uint8_t *flash_alloc(void)
+{
+    uint8_t *raw = (uint8_t *)mmap(nullptr, HOST_FLOG_BYTES + 8192u, PROT_READ | PROT_WRITE,
+                                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+    return (uint8_t *)(((uintptr_t)raw + 8191u) & ~(uintptr_t)8191u);
+}
+static uint8_t *const g_flash = flash_alloc();
 #define G_FLASH g_flash
 
 #define FLOG_BASE ((uint32_t)(uintptr_t)G_FLASH)   /* picked up by flight_log.cpp */
 
 /* ------------------------------------------------------------------ */
-/* NVMCTRL register fake (SAMD51 rev-B command set)                    */
+/* NVMCTRL register fake (SAMD51 command set, CMSIS values)            */
+/*                                                                     */
+/* Modeled on the SAMD51 datasheet and Adafruit's SAMD51 bootloader:   */
+/*  - ADDR holds a BYTE address (the SAMD21 halfword convention does   */
+/*    not apply - the bootloader writes NVMCTRL->ADDR = dst_addr).     */
+/*  - CPU stores into flash land in the page buffer, not in flash;     */
+/*    only WP (whole page) or WQW (16-byte quad word) at ADDR programs */
+/*    them, and programming can only clear bits.                       */
+/*  - EB erases the 8 KB block containing ADDR.                        */
+/* The host flash buffer doubles as the CPU's view, so the fake        */
+/* snapshots it at PBC and, at WP/WQW, moves whatever the CPU stored   */
+/* since then into the page buffer before programming it at ADDR.      */
 /* ------------------------------------------------------------------ */
 
 #define NVMCTRL_CTRLB_CMDEX_KEY 0xA500u
 #define NVMCTRL_CTRLB_CMD_EB    0x0001u   /* erase 8 KB block        */
-#define NVMCTRL_CTRLB_CMD_PBC   0x0003u   /* page buffer clear       */
-#define NVMCTRL_CTRLB_CMD_WP    0x0004u   /* write page              */
+#define NVMCTRL_CTRLB_CMD_WP    0x0003u   /* write page              */
+#define NVMCTRL_CTRLB_CMD_WQW   0x0004u   /* write quad word (16 B)  */
+#define NVMCTRL_CTRLB_CMD_PBC   0x0015u   /* page buffer clear       */
 
 static uint32_t nvm_eb_count = 0;
 static uint32_t nvm_wp_count = 0;
+static uint32_t nvm_wqw_count = 0;
+static uint32_t nvm_stray = 0;             /* programs aimed outside flash */
+static uint8_t  nvm_snap[HOST_FLOG_BYTES]; /* flash as of the last PBC    */
+static uint8_t  nvm_pb[512];               /* page buffer                 */
 static uint32_t nvm_eb_hist[64];           /* byte addrs of first 64 erases */
 
 /* The firmware writes NVMCTRL->ADDR.reg / ->CTRLB.reg directly, so the
@@ -74,20 +97,55 @@ struct FakeNvmctrl {
 static FakeNvmctrl g_nvm;
 #define NVMCTRL (&g_nvm)
 
-/* A real block erase fills the row with 0xFF; model that so the module
- * sees honest "blank flash" between arm cycles. */
+/* Collect the CPU's stores since the last PBC into the page buffer and
+ * put the flash view back to what is really programmed. */
+static void nvm_collect_page_buffer(void)
+{
+    for (uint32_t pg = 0; pg < HOST_FLOG_BYTES; pg += 512) {
+        if (memcmp(G_FLASH + pg, nvm_snap + pg, 512) == 0) continue;
+        for (uint32_t k = 0; k < 512; k++) {
+            if (G_FLASH[pg + k] != nvm_snap[pg + k]) nvm_pb[k] = G_FLASH[pg + k];
+        }
+        memcpy(G_FLASH + pg, nvm_snap + pg, 512);
+    }
+}
+
+static void nvm_program(uintptr_t byte_addr, uint32_t len)
+{
+    uintptr_t off = byte_addr - (uintptr_t)G_FLASH;
+    if (byte_addr < (uintptr_t)G_FLASH || off + len > HOST_FLOG_BYTES) {
+        nvm_stray++;
+        return;
+    }
+    for (uint32_t k = 0; k < len; k++) {
+        G_FLASH[off + k] &= nvm_pb[(off + k) % 512];   /* bits only clear */
+    }
+}
+
 CtrlbReg &CtrlbReg::operator=(uint32_t x)
 {
     v = x;
+    uintptr_t byte_addr = (uintptr_t)g_nvm.ADDR.reg;
     if (x == (NVMCTRL_CTRLB_CMDEX_KEY | NVMCTRL_CTRLB_CMD_EB)) {
-        uintptr_t byte_addr = (uintptr_t)g_nvm.ADDR.reg << 1;
         if (nvm_eb_count < 64) nvm_eb_hist[nvm_eb_count] = (uint32_t)byte_addr;
         nvm_eb_count++;
-        uintptr_t off = byte_addr - (uintptr_t)G_FLASH;
-        if (byte_addr >= (uintptr_t)G_FLASH && off + 8192 <= HOST_FLOG_BYTES)
+        uintptr_t blk = byte_addr & ~(uintptr_t)8191;
+        uintptr_t off = blk - (uintptr_t)G_FLASH;
+        if (blk >= (uintptr_t)G_FLASH && off + 8192 <= HOST_FLOG_BYTES)
             memset(G_FLASH + off, 0xFF, 8192);
+        else
+            nvm_stray++;
+    } else if (x == (NVMCTRL_CTRLB_CMDEX_KEY | NVMCTRL_CTRLB_CMD_PBC)) {
+        memcpy(nvm_snap, G_FLASH, HOST_FLOG_BYTES);
+        memset(nvm_pb, 0xFF, sizeof(nvm_pb));
     } else if (x == (NVMCTRL_CTRLB_CMDEX_KEY | NVMCTRL_CTRLB_CMD_WP)) {
         nvm_wp_count++;
+        nvm_collect_page_buffer();
+        nvm_program(byte_addr & ~(uintptr_t)511, 512);
+    } else if (x == (NVMCTRL_CTRLB_CMDEX_KEY | NVMCTRL_CTRLB_CMD_WQW)) {
+        nvm_wqw_count++;
+        nvm_collect_page_buffer();
+        nvm_program(byte_addr & ~(uintptr_t)15, 16);
     }
     return *this;
 }
@@ -99,7 +157,11 @@ static void nvm_reset(void)
     g_nvm.INTFLAG.bit.PROGE = 0;
     nvm_eb_count = 0;
     nvm_wp_count = 0;
+    nvm_wqw_count = 0;
+    nvm_stray = 0;
     memset(nvm_eb_hist, 0, sizeof(nvm_eb_hist));
+    memcpy(nvm_snap, G_FLASH, HOST_FLOG_BYTES);
+    memset(nvm_pb, 0xFF, sizeof(nvm_pb));
 }
 
 /* ------------------------------------------------------------------ */
@@ -239,6 +301,11 @@ TEST(arm_erases_full_region_then_arms)
     CHECK(nvm_eb_hist[HOST_FLOG_BYTES / 8192u] ==
           (uint32_t)(uintptr_t)FLOG_STATE_ADDR);   /* marker rewrite last */
     CHECK(flash_data_area_erased());
+    /* Every erase and program hit the flight-log region itself. With the
+     * SAMD21-style ADDR = addr >> 1 they landed at half the address:
+     * nothing ever reached the log, and the arm erase swept the region
+     * below it - where the sketch lives once it grows past 128 KB. */
+    CHECK(nvm_stray == 0);
     /* ...and the FLYING marker is the ONE thing written at arm time */
     CHECK(nvm_wp_count == 1);
     CHECK(state_marker()->f.magic == FLOG_MAGIC);

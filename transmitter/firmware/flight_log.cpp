@@ -116,9 +116,9 @@ static void nvm_wait_ready(void)
 static bool nvm_erase_block(uint32_t addr)
 {
     nvm_wait_ready();
-    NVMCTRL->ADDR.reg = addr >> 1;
+    NVMCTRL->ADDR.reg = addr;      /* SAMD51: byte address (SAMD21 took addr >> 1) */
     NVMCTRL->CTRLB.reg = NVMCTRL_CTRLB_CMDEX_KEY | NVMCTRL_CTRLB_CMD_EB;
-    nvm_wait_ready();
+      nvm_wait_ready();
     return (NVMCTRL->INTFLAG.bit.PROGE == 0);
 }
 
@@ -133,7 +133,7 @@ static bool nvm_write_page(uint32_t addr, const uint8_t *buf)
     for (int i = 0; i < (int)(FLOG_PAGE / 4); i++) {
         dst[i] = src[i];
     }
-    NVMCTRL->ADDR.reg = addr >> 1;
+    NVMCTRL->ADDR.reg = addr;      /* SAMD51: byte address (SAMD21 took addr >> 1) */
     NVMCTRL->CTRLB.reg = NVMCTRL_CTRLB_CMDEX_KEY | NVMCTRL_CTRLB_CMD_WP;
   nvm_wait_ready();
     return (NVMCTRL->INTFLAG.bit.PROGE == 0);
