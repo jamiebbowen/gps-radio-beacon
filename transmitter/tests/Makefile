@@ -19,7 +19,7 @@ CXX      ?= g++
 # the test binaries too - a stale binary is a silent false-green, the same
 # trap the explicit source prerequisites below guard against.
 CFLAGS   := -std=gnu11 -Wall -Wextra -g -O0 -I../firmware -I../../receiver/tests -MMD -MP
-CXXFLAGS := -std=c++11 -Wall -Wextra -g -O0 -I../firmware -I../../receiver/tests -MMD -MP
+CXXFLAGS := -std=c++11 -Wall -Wextra -g -O0 -fno-exceptions -I../firmware -I../../receiver/tests -MMD -MP
 LDFLAGS  := -lm
 
 BUILD    := build
