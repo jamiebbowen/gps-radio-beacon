@@ -47,7 +47,7 @@ $(BUILD)/test_nmea_fields: test_nmea_fields.c ../firmware/nmea_fields.c | $(BUIL
 # NMEA-helper fuzz: mutates real sentences through the field/checksum/coord
 # parsers under ASan+UBSan. Skips COVFLAGS (gcov+sanitizer don't mix).
 # Soak with FUZZ_ITERS=2000000.
-FUZZ_SAN := -fsanitize=address,undefined -fno-sanitize-recover=all
+FUZZ_SAN := -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all
 $(BUILD)/test_fuzz_nmea: test_fuzz_nmea.c ../firmware/nmea_fields.c | $(BUILD)
 	$(CC) $(CFLAGS) $(FUZZ_SAN) -o $@ $(filter %.cpp %.c %.ino,$^) $(LDFLAGS)
 

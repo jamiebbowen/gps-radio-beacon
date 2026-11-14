@@ -123,6 +123,23 @@ TEST(test_coord_conversion_edge_cases) {
     CHECK_NEAR(nmea_coord_to_decimal("0000.100", 'N'), 0.1 / 60.0, 1e-6);
 }
 
+TEST(test_coord_conversion_rejects_malformed) {
+    /* atof() parses these literally; the old code cast the result straight
+     * to int (UB for NaN/Inf/huge) - now every one reports NaN, which all
+     * callers reject via isfinite(). */
+    CHECK(isnan(nmea_coord_to_decimal("nan", 'N')));
+    CHECK(isnan(nmea_coord_to_decimal("inf", 'E')));
+    CHECK(isnan(nmea_coord_to_decimal("1e30", 'N')));
+    CHECK(isnan(nmea_coord_to_decimal("999999999999", 'E')));  /* 12 digits */
+    CHECK(isnan(nmea_coord_to_decimal("18100.0", 'E')));       /* > 180 deg */
+    CHECK(isnan(nmea_coord_to_decimal("-3953.40284", 'N')));   /* sign is dir */
+    /* 60 minutes is not a carry into the next degree - corrupt field */
+    CHECK(isnan(nmea_coord_to_decimal("3960.0", 'N')));
+    /* Legal extremes still convert */
+    CHECK_NEAR(nmea_coord_to_decimal("18000.0", 'W'), -180.0, 1e-4);
+    CHECK_NEAR(nmea_coord_to_decimal("3959.99999", 'N'), 39.99999983, 1e-4);
+}
+
 TEST(test_coord_conversion_precision) {
     /* Full-precision NMEA coordinate: verify sub-meter accuracy survives.
      * 3953.40284 -> 39 + 53.40284/60 = 39.89004733... The internal math is
@@ -214,6 +231,7 @@ int main(void) {
     run_test_field_truncation();
     run_test_coord_conversion();
     run_test_coord_conversion_edge_cases();
+    run_test_coord_conversion_rejects_malformed();
     run_test_coord_conversion_precision();
     run_test_checksum_valid_accepted();
     run_test_checksum_rejects_corruption();

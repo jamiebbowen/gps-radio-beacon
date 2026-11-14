@@ -42,7 +42,9 @@ int nmea_get_field(const char *sentence, uint8_t index,
  *
  * @param nmea_coord coordinate string, e.g. "3953.40284" or "10506.93605"
  * @param direction  'N'/'E' = positive, 'S'/'W' = negative
- * @return decimal degrees, or 0.0f for NULL/empty input
+ * @return decimal degrees; 0.0f for NULL/empty input; NAN for a malformed
+ *         field (non-finite, negative, >= 18100, or minutes >= 60), which
+ *         callers reject with isfinite()
  */
 float nmea_coord_to_decimal(const char *nmea_coord, char direction);
 
