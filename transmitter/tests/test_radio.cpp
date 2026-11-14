@@ -81,6 +81,15 @@ uint32_t radiolib_time_on_air_us = 1118000;
 /* Include the module under test */
 #include "../firmware/radio.cpp"
 
+/* The sketch's yield() hook, spied: RadioLib's transmit() calls it while it
+ * busy-waits, and the hook may only service the IMU inside that window. */
+static int yield_calls = 0, yield_saw_blocking = 0;
+void yield(void)
+{
+    yield_calls++;
+    if (radio_tx_blocking()) yield_saw_blocking++;
+}
+
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
@@ -218,6 +227,22 @@ TEST(test_enable_recovers_on_retry)
     CHECK(strstr(Serial.log, "Reinitialize succeeded") != NULL);
     CHECK(txen_level == LOW);                  /* switch parked RX-side... */
     CHECK(rxen_level == HIGH);                 /* ...TXEN is per-burst only */
+}
+
+TEST(test_transmit_marks_the_blocking_wait)
+{
+    /* Radio healthy + enabled from the previous tests */
+    const uint8_t pkt[4] = {0xAA, 1, 2, 3};
+    yield_calls = yield_saw_blocking = 0;
+    CHECK(radio_tx_blocking() == 0);
+    CHECK(transmit_packet(pkt, 4) == RADIOLIB_ERR_NONE);
+    CHECK(yield_calls == 1 && yield_saw_blocking == 1);   /* inside the wait */
+    CHECK(radio_tx_blocking() == 0);                      /* and only there */
+
+    radiolib_transmit_result = -4;                        /* TX timeout */
+    (void)transmit_packet(pkt, 4);
+    CHECK(yield_saw_blocking == 2 && radio_tx_blocking() == 0);
+    radiolib_transmit_result = RADIOLIB_ERR_NONE;
 }
 
 TEST(test_transmit_paths)
@@ -532,6 +557,7 @@ int main(void)
     run_test_enable_retries_then_gives_up();
     run_test_enable_recovers_on_retry();
     run_test_transmit_paths();
+    run_test_transmit_marks_the_blocking_wait();
     run_test_disable();
     run_test_tx_failure_streak_forces_reinit();
     run_test_dead_radio_keeps_retrying_reinit();

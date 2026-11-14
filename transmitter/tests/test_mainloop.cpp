@@ -45,7 +45,9 @@ unsigned long millis(void) { return sim_ms; }
  * any delay() the firmware asked for - must stay well inside the 16 s
  * WDT, or the beacon reboots (possibly mid-flight). */
 static uint32_t wdt_last_feed_ms = 0, wdt_delay_since_feed = 0, wdt_max_gap_ms = 0;
-void delay(unsigned long ms) { wdt_delay_since_feed += (uint32_t)ms; }
+/* SAMD core delay() spins calling yield() - the sketch's hook must stay
+ * idle outside a radio transmit */
+void delay(unsigned long ms) { wdt_delay_since_feed += (uint32_t)ms; yield(); }
 struct WdtClearReg {
     uint8_t v;
     operator uint8_t() const { return v; }
@@ -113,6 +115,11 @@ static uint32_t max_unid_ms = 0;
  * explicit header, CRC on, LDRO on, 8-symbol preamble), per the SX126x
  * datasheet formula. The real transmit blocks the loop this long. */
 static uint8_t sim_airtime = 0;   /* 1: each transmit holds the loop for its airtime */
+static uint8_t sim_imu_stream = 0;  /* 1: the hub keeps producing 100 Hz reports while
+                                     *    a transmit holds the loop */
+static uint8_t fake_tx_blocking = 0;
+static void push_accel(float x, float y, float z);
+bool radio_tx_blocking(void) { return fake_tx_blocking != 0; }
 
 static uint32_t lora_toa_ms(size_t pl)
 {
@@ -128,7 +135,17 @@ int transmit_packet(const uint8_t *data, size_t length)
 {
     uint8_t t = data[0];
     wdt_delay_since_feed += lora_toa_ms(length);   /* blocking airtime */
-    if (sim_airtime) sim_ms += lora_toa_ms(length);
+    if (sim_airtime) {
+        /* RadioLib's transmit(): busy-wait for TX done, yield()ing on every
+         * turn - while the BNO085 keeps producing reports */
+        fake_tx_blocking = 1;
+        for (uint32_t ms = lora_toa_ms(length); ms > 0; ms--) {
+            sim_ms++;
+            if (sim_imu_stream && sim_ms % 10 == 0) push_accel(0.0f, 0.0f, 0.5f);
+            yield();
+        }
+        fake_tx_blocking = 0;
+    }
     if (sim_ms - last_id_ms > max_unid_ms) max_unid_ms = sim_ms - last_id_ms;
     if (t >= 0x20 && t <= 0x7E) last_id_ms = sim_ms;
     if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_HELLO) {
@@ -166,6 +183,13 @@ sh2_SensorValue_t bno_events[32];
 int bno_event_head = 0;
 int bno_event_tail = 0;
 int bno_batch = 1;
+/* The hub's batch buffer, unread by the host, drops its oldest reports
+ * (BNO08X datasheet, batching: non-wake data "lost, oldest data first") */
+static uint32_t bno_dropped = 0;
+static void bno_make_room(void)
+{
+    if (bno_event_tail - bno_event_head >= 32) { bno_event_head++; bno_dropped++; }
+}
 
 static void push_accel(float x, float y, float z)
 {
@@ -175,6 +199,7 @@ static void push_accel(float x, float y, float z)
     ev.un.linearAcceleration.x = x;
     ev.un.linearAcceleration.y = y;
     ev.un.linearAcceleration.z = z;
+    bno_make_room();
     bno_events[bno_event_tail++ % 32] = ev;
 }
 
@@ -187,6 +212,7 @@ static void push_rotvec(float w, float i, float j, float k)
     ev.un.rotationVector.i    = i;
     ev.un.rotationVector.j    = j;
     ev.un.rotationVector.k    = k;
+    bno_make_room();
     bno_events[bno_event_tail++ % 32] = ev;
 }
 
@@ -483,8 +509,16 @@ int main(void)
     uint32_t imu0 = type_count(PACKET_TYPE_IMU);
     uint32_t mx0  = type_count(PACKET_TYPE_MAXIMA);
     sim_airtime = 1;                              /* real ~1 s blocking transmits */
+    sim_imu_stream = 1;
+    uint32_t drops0 = bno_dropped;
     sim_run(30000);                               /* 30 s of recovery window */
     sim_airtime = 0;
+    sim_imu_stream = 0;
+    /* The IMU keeps being read while each ~1 s transmit holds the loop
+     * (the sketch's yield() hook): the hub's buffer never overflows */
+    printf("  IMU reports dropped by the hub during descent transmits: %u\n",
+           (unsigned)(bno_dropped - drops0));
+    CHECK(bno_dropped == drops0);
     uint32_t fus = type_count(PACKET_TYPE_FUSED) - fus0;
     uint32_t imu = type_count(PACKET_TYPE_IMU) - imu0;
     uint32_t mxs = type_count(PACKET_TYPE_MAXIMA) - mx0;

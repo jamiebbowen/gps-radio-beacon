@@ -34,6 +34,8 @@
 /* Timing: fakes defined in the test executable */
 unsigned long millis(void);
 void delay(unsigned long ms);
+/* SAMD core: a weak empty hook that delay() calls; the sketch overrides it */
+void yield(void);
 void delayMicroseconds(unsigned int us);
 
 /* GPIO + SPI: fakes defined in the test executable */

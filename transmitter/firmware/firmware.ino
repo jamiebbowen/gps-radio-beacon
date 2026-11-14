@@ -95,6 +95,31 @@ uint8_t transmit_callsign_flag = 1;
 uint8_t transmit_fast_flag = 0;
 #endif
 uint32_t system_time_seconds = 0;
+
+#if defined(USE_TINYUSB)
+#error "yield() below services the IMU during transmits; the TinyUSB stack defines its own yield() - build with the Arduino USB stack"
+#endif
+
+/* RadioLib's blocking transmit() busy-waits for TX done - ~1 s per SF10
+ * packet, ~83% of the descent loop - calling yield() on every turn. Keep
+ * reading the IMU (and stepping the EKF) there: the BNO085 drops its oldest
+ * batched reports when the host stops reading, so each packet used to cut
+ * a ~1 s hole into peaks, launch/landing detection and the EKF. Only while
+ * a transmit is in progress (delay() yields too), never re-entered, at most
+ * every IMU_TX_SERVICE_MS, and never touching the radio. */
+void yield(void)
+{
+    static bool in_hook = false;
+    static uint32_t last_service_ms = 0;
+    if (in_hook || !radio_tx_blocking()) return;
+    uint32_t now = millis();
+    if (now - last_service_ms < IMU_TX_SERVICE_MS) return;
+    last_service_ms = now;
+    in_hook = true;
+    launch_detect_update(system_time_seconds);
+    nav_predict();
+    in_hook = false;
+}
 uint32_t last_transmission_time = 0;
 uint32_t last_callsign_tx_s = 0;
 uint32_t post_launch_start_time = 0;

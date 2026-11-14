@@ -23,6 +23,8 @@ static const uint8_t MAX_INIT_RETRIES = 3;
  * the limit force a full radio_init() (NRST pulse + begin()), the only
  * reset the SX1268 honours once wedged. */
 static uint8_t tx_fail_streak = 0;
+/* Set while RadioLib's transmit() busy-waits (see radio_tx_blocking) */
+static volatile bool tx_blocking = false;
 #define TX_FAIL_STREAK_LIMIT 8
 
 /* E22-400M33S RF switch control (PCB v2: TXEN on A4, RXEN on A5 - see
@@ -264,7 +266,9 @@ int transmit_packet(const uint8_t* data, size_t length) {
 
     // Route the antenna to the PA for the burst, then back to the RX side.
     rf_switch_tx();
+    tx_blocking = true;      /* the sketch's yield() hook services the IMU */
     int state = radio.transmit(const_cast<uint8_t*>(data), length);
+    tx_blocking = false;
     rf_switch_rx();
 
     if (state == RADIOLIB_ERR_NONE) {
@@ -304,6 +308,10 @@ int transmit_string(const char* str) {
  * Check if radio is currently transmitting
  * @return true if transmitting, false otherwise
  */
+bool radio_tx_blocking(void) {
+    return tx_blocking;
+}
+
 bool radio_is_transmitting(void) {
     if (!radio_initialized) {
         return false;
