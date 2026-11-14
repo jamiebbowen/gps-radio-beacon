@@ -37,6 +37,11 @@
 #define IMU_I2C_ADDR        0x4A        // I2C address (0x4A or 0x4B depending on SA0 pin)
 #define LAUNCH_ACCEL_THRESHOLD  20.0    // Launch detection threshold in m/s² (~2g)
 #define LAUNCH_ACCEL_DURATION   100     // Minimum duration above threshold (ms)
+// ...seen continuously: a gap longer than this between above-threshold
+// reports (100 Hz nominal) restarts the window - two pad bumps either side
+// of a loop stall (a 2.2 s command listen, a dropped hub batch) are not a
+// sustained boost.
+#define LAUNCH_MAX_REPORT_GAP_MS 50
 #define LAUNCH_SETTLE_TIME      2000    // Wait time after power-on for IMU to settle (ms)
 
 /* GPS-altitude launch fallback: if the IMU is dead the accel detector never

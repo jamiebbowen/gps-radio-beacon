@@ -225,6 +225,35 @@ TEST(test_launch_detection_happy_path)
     CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
 }
 
+TEST(test_report_gap_restarts_detection)
+{
+    /* Two pad bumps with no IMU report between them (the loop stalled in a
+     * 2.2 s command listen, or the hub dropped a batch) are not 100 ms of
+     * boost: the detector must see the acceleration continuously. */
+    reset_all();
+    launch_detect_init();
+    push_accel(30, 0, 0);
+    tick(10, 0);
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_DETECTING);
+    tick(500, 0);                                  /* nothing reported */
+    push_accel(30, 0, 0);
+    tick(10, 0);
+    CHECK(launch_detect_get_state() != LAUNCH_STATE_CONFIRMED);
+    CHECK(launch_detect_is_launched() == false);
+
+    /* A real boost - reports every 10 ms - still confirms, 100 ms after
+     * the restart */
+    for (int i = 0; i < 9; i++) {
+        push_accel(30, 0, 0);
+        tick(10, 0);
+    }
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_DETECTING);
+    push_accel(30, 0, 0);
+    tick(10, 7);
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
+    CHECK(launch_detect_is_launched() == true);
+}
+
 TEST(test_false_alarm_drops_to_idle)
 {
     reset_all();
@@ -726,6 +755,7 @@ int main(void)
     run_test_gyro_enable_failure_is_advisory();
     run_test_init_failures();
     run_test_launch_detection_happy_path();
+    run_test_report_gap_restarts_detection();
     run_test_false_alarm_drops_to_idle();
     run_test_sensor_event_draining_and_accessors();
     run_test_batched_reports_all_reach_launch_detection();

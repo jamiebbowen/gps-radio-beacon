@@ -72,6 +72,11 @@ Edit `include/mpu_config.h`:
 // Minimum sustained duration (milliseconds)
 #define LAUNCH_ACCEL_DURATION   100     // 100ms
 
+// ...seen continuously: a gap longer than this between above-threshold
+// reports restarts the window (two bumps either side of a loop stall are
+// not a boost)
+#define LAUNCH_MAX_REPORT_GAP_MS 50
+
 // Sensor settle time after power-on (milliseconds)
 #define LAUNCH_SETTLE_TIME      2000    // 2 seconds
 ```
