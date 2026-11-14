@@ -68,6 +68,7 @@ static int      fake_rx_len     = 0;
 static int      rx_polls        = 0;
 static uint16_t rx_last_window  = 0;
 static int      ack_calls       = 0;
+static int      ack_radio_on    = -1;   /* radio powered when the ACK went out */
 static uint8_t  ack_rocket, ack_cmd, ack_hi, ack_lo, ack_echo;
 
 bool radio_is_transmitting(void) { return fake_tx_active; }
@@ -85,6 +86,7 @@ int  radio_transmit_ack(uint8_t rocket_id, uint8_t cmd_code,
                         uint8_t seq_hi, uint8_t seq_lo, uint8_t echo)
 {
     ack_calls++;
+    ack_radio_on = (radio_enables > radio_disables) ? 1 : 0;
     ack_rocket = rocket_id; ack_cmd = cmd_code;
     ack_hi = seq_hi; ack_lo = seq_lo; ack_echo = echo;
     return 0;
@@ -997,6 +999,29 @@ TEST(test_poll_commands_ping_ack_echo)
     CHECK(strstr(Serial.log, "CMD answered") != NULL);
 }
 
+TEST(test_poll_commands_ack_powers_the_radio)
+{
+    /* The listen restores the radio's off state before the ACK goes out;
+     * the ACK must power it up and back down like every slow-path packet.
+     * Transmitting "while disabled" left the RF switch on the receive side
+     * (RXEN high) until the next packet - up to a minute on the pad. */
+    reset_tx();
+    uint8_t ping[6] = { PACKET_TYPE_CMD, (uint8_t)ROCKET_ID, CMD_PING, 0x12, 0x34, 0x77 };
+    memcpy(fake_rx_pkt, ping, 6); fake_rx_len = 6;
+    ack_radio_on = -1;
+    beacon_poll_commands(0);
+    CHECK(ack_calls == 1);
+    CHECK(ack_radio_on == 1);
+    CHECK(radio_enables == 1 && radio_disables == 1);
+
+    /* Nothing heard: no ACK, no power cycle */
+    reset_tx();
+    fake_rx_len = 0;
+    beacon_poll_commands(0);
+    CHECK(ack_calls == 0);
+    CHECK(radio_enables == 0 && radio_disables == 0);
+}
+
 TEST(test_poll_commands_unsupported_and_unknown_echo)
 {
     reset_tx();
@@ -1099,6 +1124,7 @@ int main(void)
     run_test_fused_hexdump_cadence_and_tx_failure();
     run_test_poll_commands_skips_when_busy_or_flying();
     run_test_poll_commands_ping_ack_echo();
+    run_test_poll_commands_ack_powers_the_radio();
     run_test_poll_commands_unsupported_and_unknown_echo();
     run_test_poll_commands_ignores_other_packets();
     run_test_slow_path_powers_radio_up_and_down();
