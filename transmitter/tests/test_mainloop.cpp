@@ -41,7 +41,26 @@ WireClass Wire;
 
 static unsigned long sim_ms = 0;
 unsigned long millis(void) { return sim_ms; }
-void delay(unsigned long ms) { (void)ms; }
+/* Watchdog feeds: the longest stretch between two - simulated time plus
+ * any delay() the firmware asked for - must stay well inside the 16 s
+ * WDT, or the beacon reboots (possibly mid-flight). */
+static uint32_t wdt_last_feed_ms = 0, wdt_delay_since_feed = 0, wdt_max_gap_ms = 0;
+void delay(unsigned long ms) { wdt_delay_since_feed += (uint32_t)ms; }
+struct WdtClearReg {
+    uint8_t v;
+    operator uint8_t() const { return v; }
+    WdtClearReg &operator=(uint8_t x)
+    {
+        v = x;
+        if (x == 0xA5) {
+            uint32_t gap = (uint32_t)(sim_ms - wdt_last_feed_ms) + wdt_delay_since_feed;
+            if (gap > wdt_max_gap_ms) wdt_max_gap_ms = gap;
+            wdt_last_feed_ms = (uint32_t)sim_ms;
+            wdt_delay_since_feed = 0;
+        }
+        return *this;
+    }
+};
 void delayMicroseconds(unsigned int us) { (void)us; }
 void pinMode(int pin, int mode) { (void)pin; (void)mode; }
 int digitalRead(int pin) { (void)pin; return LOW; }
@@ -53,7 +72,7 @@ static struct {
     struct { struct { uint8_t ENABLE; } bit; } CTRLA;
     struct { struct { uint32_t ENABLE; uint32_t CLEAR; } bit; } SYNCBUSY;
     struct { struct { uint8_t PER; } bit; } CONFIG;
-    struct { uint8_t reg; } CLEAR;
+    struct { WdtClearReg reg; } CLEAR;
 } fake_wdt;
 #define WDT (&fake_wdt)
 #define WDT_CONFIG_PER_CYC16384_Val  0x0B
@@ -647,5 +666,8 @@ int main(void)
     printf("  longest stretch on air without a callsign: %lu s\n",
            (unsigned long)(max_unid_ms / 1000UL));
     CHECK(max_unid_ms <= 600000UL);
+    printf("  longest gap between watchdog feeds: %lu ms\n",
+           (unsigned long)wdt_max_gap_ms);
+    CHECK(wdt_max_gap_ms < 8000UL);               /* half the 16 s WDT */
     return TEST_SUMMARY();
 }
