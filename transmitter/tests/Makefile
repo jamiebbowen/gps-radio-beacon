@@ -29,7 +29,8 @@ BINS     := $(BUILD)/test_ekf $(BUILD)/test_nmea_fields $(BUILD)/test_beacon \
             $(BUILD)/test_flight_profile $(BUILD)/test_flight_cadence \
             $(BUILD)/test_flight_events $(BUILD)/test_flight_maxima \
             $(BUILD)/test_airlink_roundtrip $(BUILD)/test_mainloop \
-            $(BUILD)/test_flight_log $(BUILD)/test_fuzz_nmea
+            $(BUILD)/test_flight_log $(BUILD)/test_fuzz_nmea \
+            $(BUILD)/test_fixed_point
 
 .PHONY: all test coverage sanitize clean
 
@@ -106,6 +107,10 @@ $(BUILD)/test_flight_cadence: test_flight_cadence.cpp ../firmware/flight_cadence
 $(BUILD)/test_flight_events: test_flight_events.cpp ../firmware/flight_events.cpp \
                              stubs/Arduino.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $(filter %.cpp %.c %.ino,$^) $(LDFLAGS)
+
+# Saturating fixed-point helpers (header-only).
+$(BUILD)/test_fixed_point: test_fixed_point.cpp ../firmware/include/fixed_point.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -o $@ $(filter %.cpp,$^) $(LDFLAGS)
 
 # Running maxima tracker: pure logic module, no Arduino deps.
 $(BUILD)/test_flight_maxima: test_flight_maxima.cpp ../firmware/flight_maxima.cpp \
