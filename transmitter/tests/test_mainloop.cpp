@@ -198,7 +198,19 @@ static GPSCoordinates_t fake_coords;
 static uint8_t fake_fix_ok = 1;
 
 void    gps_init(void) {}
-uint16_t gps_poll_rx(void) { return 0; }
+/* Opt-in loop jitter: the real gps_poll_rx() holds a pass anywhere from
+ * microseconds to tens of ms (a sentence mid-burst), so sends land at
+ * varying offsets from their 1 Hz tick. Deterministic LCG. */
+static uint8_t gps_jitter_on = 0;
+uint16_t gps_poll_rx(void)
+{
+    if (gps_jitter_on) {
+        static uint32_t lcg = 12345u;
+        lcg = lcg * 1103515245u + 12345u;
+        sim_ms += (lcg >> 16) % 31u;              /* 0..30 ms */
+    }
+    return 0;
+}
 const GPSCoordinates_t* gps_get_current_coordinates(void) { return &fake_coords; }
 uint8_t gps_get_health(void) { return HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0); }
 static uint8_t gps_in_flight_flag = 0;   /* last gps_set_in_flight() value */
@@ -697,6 +709,25 @@ int main(void)
     CHECK(launch_detect_get_state() == LAUNCH_STATE_IDLE);
     sim_run(2000);                               /* loop feeds the WDT */
     CHECK(beacon_state == BEACON_STATE_TURN_ON);
+
+    /* The quiet pad keeps its heartbeat rhythm: one as PRE_LAUNCH begins
+     * (5 s after the last turn-on one), then one a minute - also when the
+     * loop runs a few ms late, as it does while parsing GPS bursts. A
+     * limiter floor equal to the tick's own period used to refuse every
+     * send that ran earlier relative to its tick than the previous one,
+     * and the slot was still spent: 120 s gaps. */
+    sim_run(55000);                              /* t = 57 s, TURN_ON */
+    uint32_t hb_entry0 = type_count(PACKET_TYPE_HEARTBEAT);
+    sim_run(5000);                               /* t = 62 s: PRE_LAUNCH */
+    CHECK(beacon_state == BEACON_STATE_PRE_LAUNCH);
+    CHECK(type_count(PACKET_TYPE_HEARTBEAT) == hb_entry0 + 1);
+    gps_jitter_on = 1;
+    uint32_t hb_pad0 = type_count(PACKET_TYPE_HEARTBEAT);
+    sim_run(600000);                             /* heartbeats at 120..660 s */
+    gps_jitter_on = 0;
+    printf("  PRE_LAUNCH heartbeats in 600 s with loop jitter: %u\n",
+           (unsigned)(type_count(PACKET_TYPE_HEARTBEAT) - hb_pad0));
+    CHECK(type_count(PACKET_TYPE_HEARTBEAT) - hb_pad0 == 10);
 
     /* Mid-flight reboot whose flash resume fails (append point not
      * found): the flight state still resumes, but the surviving record
