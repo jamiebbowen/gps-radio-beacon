@@ -452,6 +452,16 @@ uint8_t LoRa_ReadPacket(LoRa_Packet_t *packet) {
     /* Check for CRC error */
     if (irq_status & SX1268_IRQ_CRC_ERROR) {
         packet->crc_error = true;
+        packet->length = 0;
+        /* The SX126x keeps a CRC-failed payload in its buffer: read it so
+         * the "CRC garbage" forensics see THIS frame, not the previous good
+         * packet still sitting in the caller's struct. */
+        uint8_t crc_bs[2];
+        if (LoRa_ReadCommand(SX1268_CMD_GET_RXBUFFERSTATUS, crc_bs, 2) == LORA_OK &&
+            crc_bs[0] > 0 &&
+            LoRa_ReadBuffer(crc_bs[1], packet->data, crc_bs[0]) == LORA_OK) {
+            packet->length = crc_bs[0];
+        }
         LoRa_ClearIRQ(SX1268_IRQ_ALL);
         LoRa_ConsumePacketReady(pending_at_start);
         /* Continuous-RX (timeout=0xFFFFFF) keeps the radio in RX after CRC error */

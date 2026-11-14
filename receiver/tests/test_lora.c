@@ -472,6 +472,31 @@ TEST(test_receive_dma_packet_and_dma_faults)
     lora_spi_dma_busy = 0;
 }
 
+TEST(test_crc_error_captures_corrupt_payload)
+{
+    /* The SX126x keeps a CRC-failed payload in its buffer. The "CRC
+     * garbage" forensics row must show THAT frame: the old code returned
+     * before reading it, so the caller logged its previous good packet. */
+    fresh_init();
+    const uint8_t junk[5] = {0xDE, 0xAD, 0xBE, 0xEF, 0x42};
+    memcpy(chip_payload, junk, sizeof(junk));
+    chip_payload_len = sizeof(junk);
+    chip_irq |= SX1268_IRQ_RX_DONE | SX1268_IRQ_CRC_ERROR;
+    exti_pending |= LORA_DIO1_PIN;
+    LORA_DIO1_IRQHandler();
+
+    LoRa_Packet_t p;
+    memset(&p, 0xAA, sizeof(p));      /* stale "previous packet" contents */
+    p.length = 9;
+    p.crc_error = false;
+    CHECK(LoRa_ReadPacket(&p) == LORA_CRC_ERROR);
+    CHECK(p.crc_error == true);
+    CHECK(p.length == 5);
+    CHECK(memcmp(p.data, junk, sizeof(junk)) == 0);
+    CHECK(chip_irq == 0);                      /* IRQs cleared */
+    CHECK(LoRa_PacketAvailable() == 0);        /* flag consumed */
+}
+
 TEST(test_crc_error_and_no_data)
 {
     fresh_init();
@@ -733,6 +758,7 @@ int main(void)
     run_test_receive_small_packet();
     run_test_receive_negative_snr();
     run_test_receive_dma_packet_and_dma_faults();
+    run_test_crc_error_captures_corrupt_payload();
     run_test_crc_error_and_no_data();
     run_test_irq_race_keeps_flag();
     run_test_exti_handler_gating();

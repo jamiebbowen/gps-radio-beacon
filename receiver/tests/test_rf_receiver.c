@@ -105,7 +105,9 @@ uint8_t LoRa_ReadPacket(LoRa_Packet_t *pkt)
     if (fake_crc_error) {
         fake_crc_error = 0;
         *pkt = fake_pkt;   /* corrupt frames still carry their bytes - the
-                            * receiver's crc_dump forensics rely on them */
+                            * receiver's crc_dump forensics rely on them;
+                            * test_lora's test_crc_error_captures_corrupt_
+                            * payload pins the real driver to this contract */
         return LORA_CRC_ERROR;
     }
     *pkt = fake_pkt;
