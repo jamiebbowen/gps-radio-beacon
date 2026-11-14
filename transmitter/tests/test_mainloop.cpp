@@ -156,6 +156,8 @@ void    gps_init(void) {}
 uint16_t gps_poll_rx(void) { return 0; }
 const GPSCoordinates_t* gps_get_current_coordinates(void) { return &fake_coords; }
 uint8_t gps_get_health(void) { return HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0); }
+static uint8_t gps_in_flight_flag = 0;   /* last gps_set_in_flight() value */
+void gps_set_in_flight(uint8_t f) { gps_in_flight_flag = f; }
 uint32_t gps_get_fix_age_ms(void) { return 250; }
 
 /* flight_log.cpp is target-only (raw NVMCTRL); stub its API here. The
@@ -360,6 +362,8 @@ int main(void)
     /* The loop must have taken the launch transition to LAUNCH + fast TX */
     CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
     CHECK(beacon_state == BEACON_STATE_LAUNCH);
+    sim_run(50);                                  /* one loop pass */
+    CHECK(gps_in_flight_flag == 1);               /* GPS watchdog: no resets */
     CHECK(transmit_fast_flag == 1);
     CHECK(radio_enables == enables_before + 1);   /* radio keyed once */
     CHECK(radio_enabled_flag == 1);
@@ -426,6 +430,7 @@ int main(void)
     sim_run((LAND_QUIET_S + 20) * 1000UL);
     CHECK(launch_detect_has_landed() == true);
     CHECK(beacon_state == BEACON_STATE_BATTERY_SAVE);
+    CHECK(gps_in_flight_flag == 0);               /* landed: resets allowed */
     /* Certified LANDED event: FLIGHT_EVENT_REPEATS copies went on the air
      * (spacing ~1.2 s << the quiet window above) and nothing else fired.
      * The landing transition also fires one final maxima copy. */

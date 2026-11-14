@@ -86,6 +86,10 @@ static int log_contains_bytes(const uint8_t *needle, size_t n)
     }
     return 0;
 }
+static int log_contains_str(const char *text)
+{
+    return log_contains_bytes((const uint8_t *)text, strlen(text));
+}
 
 /* nav layer capture */
 static int   nav_updates = 0;
@@ -314,6 +318,13 @@ TEST(test_health_verdicts)
     CHECK(HB_GPS_STATE(gps_get_health()) == HB_GPS_ACQUIRING);
 }
 
+/* UBX-CFG-RST frames (class 0x06, id 0x04, resetMode 0x02 = controlled
+ * GNSS-only reset), checksums per the u-blox interface description. */
+static const uint8_t RST_HOT[]  = { 0xB5,0x62,0x06,0x04,0x04,0x00,0x00,0x00,0x02,0x00,0x10,0x68 };
+static const uint8_t RST_WARM[] = { 0xB5,0x62,0x06,0x04,0x04,0x00,0x01,0x00,0x02,0x00,0x11,0x6C };
+static const uint8_t RST_COLD[] = { 0xB5,0x62,0x06,0x04,0x04,0x00,0xFF,0xFF,0x02,0x00,0x0E,0x61 };
+static const uint8_t RST_HDR[]  = { 0xB5,0x62,0x06,0x04 };
+
 TEST(test_watchdog_silent_uart_recovery)
 {
     /* Re-baseline the watchdog with live data */
@@ -326,8 +337,11 @@ TEST(test_watchdog_silent_uart_recovery)
     (void)gps_poll_rx();
 
     CHECK(gps_recovery_attempts == 1);
-    CHECK(strstr(uart_tx_log, "$PUBX,00") != NULL);        /* poll request */
-    CHECK(strstr(uart_tx_log, "$PUBX,41,1,0007,0003,115200,0") != NULL); /* gps_init ran */
+    /* First rung: UBX-CFG-RST hot start. PUBX,04 - what this used to send
+     * - is u-blox's TIME message, so "recovery" never reset anything. */
+    CHECK(log_contains_bytes(RST_HOT, sizeof(RST_HOT)));
+    CHECK(!log_contains_str("$PUBX,04"));
+    CHECK(log_contains_str("$PUBX,41,1,0007,0003,115200,0")); /* gps_init ran */
     CHECK(HB_GPS_RESETS(gps_get_health()) == 1);
 
     /* Data resumes with a fix: attempt counter clears */
@@ -336,10 +350,10 @@ TEST(test_watchdog_silent_uart_recovery)
     CHECK(gps_recovery_attempts == 0);
 }
 
-TEST(test_watchdog_no_fix_cold_restart)
+TEST(test_watchdog_no_fix_reset_ladder)
 {
     /* Bytes flowing (garbage counts) but coordinates never valid for
-     * > 60 s: cold restart. Force the no-valid state directly. */
+     * > 60 s: reset. Force the no-valid state directly. */
     feed_and_poll(GGA_FIX);
     gps_recovery_attempts = 0;
     current_coords.valid = 0;
@@ -357,7 +371,58 @@ TEST(test_watchdog_no_fix_cold_restart)
 
     CHECK(fired_at >= 60);                    /* not before the 60 s gate */
     CHECK(gps_recovery_attempts == 1);
-    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,2,0,0") != NULL); /* cold start */
+    CHECK(log_contains_bytes(RST_HOT, sizeof(RST_HOT)));     /* rung 1 */
+    CHECK(!log_contains_bytes(RST_WARM, sizeof(RST_WARM)));
+
+    /* Each further 60 s without a fix escalates: warm, then cold */
+    const uint8_t *rung[2] = { RST_WARM, RST_COLD };
+    for (int k = 0; k < 2; k++) {
+        reset_uart_capture();
+        uint8_t before = gps_recovery_attempts;
+        for (int i = 0; i < 80 && gps_recovery_attempts == before; i++) {
+            now_ms += 1000;
+            feed_and_poll("$GPGSV,3,1,11,03,03,111,00*4A\r\n");
+        }
+        CHECK(gps_recovery_attempts == before + 1);
+        CHECK(log_contains_bytes(rung[k], sizeof(RST_HOT)));
+        CHECK(!log_contains_bytes(RST_HOT, sizeof(RST_HOT)));
+    }
+    CHECK(gps_recovery_attempts == 3);
+
+    /* Restore a live fix for the following tests */
+    feed_and_poll(GGA_FIX);
+    CHECK(gps_recovery_attempts == 0);
+    recovery_exhausted_ms = 0;
+}
+
+TEST(test_watchdog_no_reset_while_airborne)
+{
+    /* In flight (LAUNCH/POST_LAUNCH) a GNSS reset would throw the fix
+     * away exactly when the track matters most: the watchdog only
+     * re-sends settings, but the attempt still counts (same pacing). */
+    feed_and_poll(GGA_FIX);
+    gps_recovery_attempts = 0;
+    gps_set_in_flight(1);
+    reset_uart_capture();
+
+    now_ms += 31000;                          /* condition 1: UART silent */
+    (void)gps_poll_rx();
+    CHECK(gps_recovery_attempts == 1);
+    CHECK(!log_contains_bytes(RST_HDR, sizeof(RST_HDR)));     /* no reset */
+    CHECK(log_contains_str("$PUBX,41,1,0007,0003,115200,0"));
+
+    /* Flight over: the ladder starts fresh at a hot start */
+    gps_set_in_flight(0);
+    CHECK(gps_recovery_attempts == 0);
+    reset_uart_capture();
+    now_ms += 31000;
+    (void)gps_poll_rx();
+    CHECK(gps_recovery_attempts == 1);
+    CHECK(log_contains_bytes(RST_HOT, sizeof(RST_HOT)));
+
+    feed_and_poll(GGA_FIX);
+    (void)gps_poll_rx();
+    CHECK(gps_recovery_attempts == 0);
 }
 
 TEST(test_hotstart_stale_position_unlatches)
@@ -386,12 +451,12 @@ TEST(test_hotstart_stale_position_unlatches)
     CHECK(c->valid == 1);
 }
 
-TEST(test_watchdog_zero_sats_cold_restart)
+TEST(test_watchdog_zero_sats_reset)
 {
     /* Field failure, isolated: sentences flowing and the module even
      * CLAIMS fix quality 1, but ZERO satellites tracked - a wedged
      * acquisition engine. The good-fix gate requires sats > 0, so this
-     * stream must NOT disarm the watchdog: cold restart after 60 s. */
+     * stream must NOT disarm the watchdog: reset after 60 s. */
     feed_and_poll(GGA_FIX);
     gps_recovery_attempts = 0;
 
@@ -405,7 +470,7 @@ TEST(test_watchdog_zero_sats_cold_restart)
 
     CHECK(fired_at >= 60);                     /* no-good-fix gate */
     CHECK(gps_recovery_attempts == 1);         /* ...and it STAYS fired */
-    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,2,0,0") != NULL);  /* cold start */
+    CHECK(log_contains_bytes(RST_HOT, sizeof(RST_HOT)));     /* rung 1 */
     CHECK(HB_GPS_RESETS(gps_get_health()) == 1);
 
     /* Satellites tracked again: watchdog disarms */
@@ -415,9 +480,11 @@ TEST(test_watchdog_zero_sats_cold_restart)
 
 TEST(test_watchdog_never_factory_resets)
 {
-    /* The silent-UART recovery used to send $PUBX,04,0,0,0,0,0 (factory
-     * defaults), which reverts UART1 to 9600 baud - we talk at 115200, so
-     * 'recovery' would permanently deafen the link. It must cold-start. */
+    /* The silent-UART recovery once sent $PUBX,04,0,0,0,0,0 believing it
+     * was a factory reset (it is the TIME message). Recovery must never
+     * clear the saved configuration - that would revert UART1 to 9600 baud
+     * while we talk at 115200 - so the ladder only resets the GNSS engine
+     * (resetMode 0x02) and keeps the port config. */
     feed_and_poll(GGA_FIX);
     gps_recovery_attempts = 0;
     reset_uart_capture();
@@ -425,8 +492,8 @@ TEST(test_watchdog_never_factory_resets)
     now_ms += 31000;
     (void)gps_poll_rx();
     CHECK(gps_recovery_attempts == 1);
-    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,0,0,0*2B") == NULL);
-    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,2,0,0*29") != NULL);
+    CHECK(!log_contains_str("$PUBX,04"));
+    CHECK(log_contains_bytes(RST_HOT, sizeof(RST_HOT)));
 
     /* Restore live data for the cooldown test */
     feed_and_poll(GGA_FIX);
@@ -447,7 +514,8 @@ TEST(test_watchdog_three_strikes_then_cooldown_rearm)
     now_ms += 31000;
     (void)gps_poll_rx();
     CHECK(gps_recovery_attempts == 3);
-    CHECK(strstr(uart_tx_log, "$PUBX") == NULL);
+    CHECK(!log_contains_str("$PUBX"));
+    CHECK(!log_contains_bytes(RST_HDR, sizeof(RST_HDR)));
 
     /* Health caps the reset count at 15 (4-bit field) */
     gps_recovery_attempts = 20;
@@ -465,7 +533,7 @@ TEST(test_watchdog_three_strikes_then_cooldown_rearm)
     now_ms += 31000;
     (void)gps_poll_rx();
     CHECK(gps_recovery_attempts == 1);
-    CHECK(strstr(uart_tx_log, "$PUBX,00") != NULL);
+    CHECK(log_contains_bytes(RST_HOT, sizeof(RST_HOT)));   /* re-armed: hot */
 
     /* Clean up: restore live data (a real fix clears the attempt count) */
     feed_and_poll(GGA_FIX);
@@ -596,9 +664,10 @@ int main(void)
     run_test_unknown_sentences_ignored();
     run_test_health_verdicts();
     run_test_watchdog_silent_uart_recovery();
-    run_test_watchdog_no_fix_cold_restart();
+    run_test_watchdog_no_fix_reset_ladder();
+    run_test_watchdog_no_reset_while_airborne();
     run_test_hotstart_stale_position_unlatches();
-    run_test_watchdog_zero_sats_cold_restart();
+    run_test_watchdog_zero_sats_reset();
     run_test_watchdog_never_factory_resets();
     run_test_watchdog_three_strikes_then_cooldown_rearm();
     run_test_oversize_sentence_does_not_overflow();

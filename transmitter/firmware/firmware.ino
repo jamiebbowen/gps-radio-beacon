@@ -286,7 +286,10 @@ void loop() {
     // Safe to call every loop iteration; dt is computed internally.
     nav_predict();
 
-    // Poll GPS for data every loop iteration
+    // Poll GPS for data every loop iteration. Airborne states tell the
+    // GPS watchdog not to reset the receiver (settings re-send only).
+    gps_set_in_flight(beacon_state == BEACON_STATE_LAUNCH ||
+                      beacon_state == BEACON_STATE_POST_LAUNCH);
     gps_poll_rx();
     
     /* GPS-altitude launch fallback: covers a dead IMU, which would otherwise

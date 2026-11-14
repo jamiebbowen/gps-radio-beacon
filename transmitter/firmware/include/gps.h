@@ -33,6 +33,11 @@ const GPSCoordinates_t* gps_get_current_coordinates(void);
 // distinguishes "still acquiring" from "UART silent" / "data garbled".
 uint8_t gps_get_health(void);
 
+/* Main loop, every pass: nonzero during LAUNCH/POST_LAUNCH. In flight the
+ * GPS watchdog re-sends settings but never resets the receiver; when the
+ * flight ends the reset ladder (hot -> warm -> cold) starts fresh. */
+void gps_set_in_flight(uint8_t in_flight);
+
 // Milliseconds since the last accepted fix; UINT32_MAX if never had one.
 uint32_t gps_get_fix_age_ms(void);
 

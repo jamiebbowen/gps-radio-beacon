@@ -31,6 +31,8 @@ static uint32_t gps_last_byte_ms = 0;      // last UART byte received
 static uint32_t gps_last_fix_ms  = 0;      // last accepted lat/lon commit
 static uint32_t gps_last_sentence_ms = 0;  // last recognizable GGA/RMC
 static uint8_t  gps_recovery_attempts = 0; // watchdog resets issued
+static uint32_t recovery_exhausted_ms = 0; // start of the post-ladder cooldown
+static uint8_t  gps_in_flight = 0;         // LAUNCH/POST_LAUNCH: no resets
 static uint32_t gps_checksum_errors = 0;   // sentences dropped on *XX mismatch
 
 /* Grace periods before declaring a fault. The module emits NMEA in 1 Hz
@@ -73,14 +75,60 @@ static void gps_send_ubx(uint8_t cls, uint8_t id, const uint8_t *payload, uint16
 }
 
 /* Send a PUBX-style proprietary NMEA command, computing the checksum.
- * Body excludes '$' and '*XX\r\n'. (The few PUBX commands M10 still
- * honors: PUBX,41 port config, PUBX,04 reset.) */
+ * Body excludes '$' and '*XX\r\n'. Only used for PUBX,41 (port config);
+ * resets go through UBX-CFG-RST below. */
 static void gps_send_pubx(const char *body) {
     uint8_t ck = 0;
     for (const char *p = body; *p; p++) ck ^= (uint8_t)*p;
     char buf[96];
     snprintf(buf, sizeof(buf), "$%s*%02X\r\n", body, ck);
     uart_tx_string(buf);
+}
+
+/* UBX-CFG-RST (class 0x06, id 0x04). navBbrMask picks what battery-backed
+ * data survives: 0x0000 hot start (keep everything), 0x0001 warm (drop the
+ * ephemeris), 0xFFFF cold (drop everything). resetMode 0x02 = controlled
+ * software reset of the GNSS engine only: the UART and its configuration
+ * stay up. (The watchdog used to send $PUBX,04 here, which is u-blox's
+ * TIME message - recovery never actually reset the receiver.) */
+#define GPS_RST_HOT   0x0000u
+#define GPS_RST_WARM  0x0001u
+#define GPS_RST_COLD  0xFFFFu
+static void gps_send_cfg_rst(uint16_t nav_bbr_mask) {
+    const uint8_t payload[4] = {
+        (uint8_t)(nav_bbr_mask & 0xFF), (uint8_t)(nav_bbr_mask >> 8),
+        0x02,                           /* resetMode: GNSS-only, controlled */
+        0x00                            /* reserved */
+    };
+    gps_send_ubx(0x06, 0x04, payload, sizeof(payload));
+}
+
+void gps_set_in_flight(uint8_t in_flight) {
+    if (gps_in_flight && !in_flight) {
+        /* Flight over: recovery starts from the first (hot) rung again
+         * instead of inheriting attempts spent on settings re-sends. */
+        gps_recovery_attempts = 0;
+        recovery_exhausted_ms = 0;
+    }
+    gps_in_flight = in_flight ? 1 : 0;
+}
+
+/* One watchdog recovery step; attempt is 1-based. On the ground the rungs
+ * escalate hot -> warm -> cold start. In flight a reset would throw away
+ * the fix exactly when the track matters most, so only the settings are
+ * re-sent (that alone fixes a lost baud or message config). */
+static void gps_recover(uint8_t attempt) {
+    if (gps_in_flight) {
+        Serial.println(F("[GPS] Recovery: settings re-send only (in flight)"));
+    } else {
+        static const uint16_t rungs[3] = { GPS_RST_HOT, GPS_RST_WARM, GPS_RST_COLD };
+        uint8_t i = (attempt >= 1 && attempt <= 3) ? (uint8_t)(attempt - 1) : 2;
+        Serial.print(F("[GPS] Recovery: UBX-CFG-RST "));
+        Serial.println(i == 0 ? F("hot start") : (i == 1 ? F("warm start") : F("cold start")));
+        gps_send_cfg_rst(rungs[i]);
+        delay(500);   /* let the GNSS engine restart before re-config */
+    }
+    gps_init();       /* baud self-heal + message/rate/dynmodel config */
 }
 
 // Initialize GPS for u-blox MAX-M10S
@@ -251,22 +299,7 @@ uint16_t gps_poll_rx(void) {
     if (no_bytes_duration > 30000 && gps_recovery_attempts < 3) {
         Serial.println(F("[GPS] ⚠️  Watchdog: No UART data for 30s, attempting recovery..."));
         gps_recovery_attempts++;
-        
-        // Recovery: controlled software reset (cold start). Do NOT use
-        // the factory-defaults variant ($PUBX,04,0,0,0,...) here: it
-        // reverts UART1 to 9600 baud and we talk at 115200 - recovery
-        // would permanently deafen the link it was meant to restore.
-        /* Route through gps_send_pubx so the checksum is computed, not
-         * recalled: the hardcoded *12 suffix this line used to send was
-         * wrong (*29), and a checksummed-out command is silently ignored
-         * by the module - the "recovery" was a no-op since introduction. */
-        gps_send_pubx("PUBX,00");            // u-blox poll request
-        delay(100);
-        gps_send_pubx("PUBX,04,0,0,2,0,0");  // u-blox cold start
-        delay(500);
-        
-        // Reinitialize GPS
-        gps_init();
+        gps_recover(gps_recovery_attempts);
         Serial.println(F("[GPS] Recovery attempt complete"));
         
         // Reset watchdog timer
@@ -277,13 +310,7 @@ uint16_t gps_poll_rx(void) {
     else if (byte_count > 100 && no_valid_duration > 60000 && gps_recovery_attempts < 3) {
         Serial.println(F("[GPS] ⚠️  Watchdog: No valid fix for 60s, attempting recovery..."));
         gps_recovery_attempts++;
-        
-        // Recovery: Cold restart GPS
-        gps_send_pubx("PUBX,04,0,0,2,0,0");  // u-blox controlled software reset (cold start)
-        delay(1000);
-        
-        // Reinitialize GPS
-        gps_init();
+        gps_recover(gps_recovery_attempts);
         Serial.println(F("[GPS] Recovery attempt complete"));
         
         // Reset watchdog timer
@@ -296,7 +323,6 @@ uint16_t gps_poll_rx(void) {
     // discarding the almanac, then recovery re-arms for another round.
     // (Re-arming zeroes the HB_GPS_RESETS nibble in the heartbeat; the
     // receiver just sees the count restart, which is fine.)
-    static uint32_t recovery_exhausted_ms = 0;
     if (gps_recovery_attempts >= 3) {
         if (recovery_exhausted_ms == 0) {
             recovery_exhausted_ms = current_time;
