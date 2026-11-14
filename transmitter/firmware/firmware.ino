@@ -219,8 +219,12 @@ void setup() {
      * launch FSM could never re-confirm. The log's state row survives the
      * reset: still FLYING means "resume", not "re-arm". Resume regardless
      * of RCAUSE (the marker is the authoritative persistent state and the
-     * cause rides the BOOT record as evidence); a false resume on the pad
-     * self-corrects via the landing latch within ~60 s.
+     * cause rides the BOOT record as evidence). The row reads LANDED once
+     * the landing latch trips or the recovery window times out, so a stale
+     * FLYING takes a power-off within ~10 min of a launch detection (a
+     * rocket recovered and switched off early, a bench knock). A false
+     * resume like that drops to BATTERY_SAVE at the landing latch, but
+     * launch detection stays CONFIRMED until the next power cycle.
      *
      * force_confirmed deliberately raises NO is_launched() edge - the
      * launch block's flight_log_arm() would erase the surviving log. */
@@ -465,6 +469,12 @@ void loop() {
             /* Cadence-timeout path only: the landing-detect path already
              * marks this transition with the kind-4 landed record. */
             flight_log_event(millis(), FLOG_KIND_BATTERY_SAVE);
+            /* The flight is over by the clock even though the landing latch
+             * never tripped (GPS lost at touchdown, a tree in the wind, a
+             * dead IMU). Left FLYING, the state row made the next power-on -
+             * typically on the pad, for the next flight - resume a phantom
+             * flight with launch detection pinned at CONFIRMED. */
+            flight_log_mark_landed();
         }
     }
     

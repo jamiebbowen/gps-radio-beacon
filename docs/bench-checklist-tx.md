@@ -133,6 +133,12 @@ cold boot - that is correct, not a missed resume.
       log (DUMP it afterward to confirm both halves survived).
 - [ ] If a confirmed launch + reset shows a plain cold-start banner, the
       marker didn't survive - investigate before flying.
+- [ ] **Flight that ends on the timeout**: confirm a launch (shake or the
+      GPS-altitude fallback), keep the GPS antenna covered so landing never
+      latches, and wait out the 600 s recovery window (BATTERY_SAVE). A
+      power-cycle then boots as a normal pad power-on (no resume banner,
+      TURN_ON heartbeats), and `DUMP` ends with the state row `...,10,2,0`
+      (LANDED). Before this fix it resumed a phantom flight on the pad.
 
 ## Field notes
 

@@ -213,8 +213,17 @@ static uint8_t flog_armed_count = 0;
 static uint32_t flog_imu_calls = 0;
 static uint32_t flog_gps_calls = 0;
 static uint32_t flog_event_calls = 0;
-void     flight_log_init(void) {}
-void     flight_log_arm(void) { flog_armed_count++; }
+/* The flash state row as flight_log.cpp keeps it: arm (and a successful
+ * resume) writes FLYING, mark_landed writes LANDED but only while armed,
+ * and init (every boot) disarms. */
+static uint8_t flog_stub_armed = 0;
+static uint8_t flog_row_flying = 0;
+void     flight_log_init(void) { flog_stub_armed = 0; }
+void     flight_log_arm(void)
+{
+    flog_armed_count++;
+    if (!flog_stub_armed) { flog_stub_armed = 1; flog_row_flying = 1; }
+}
 static int16_t  flog_imu_last[7];   /* ax, ay, az, gx, gy, gz, peak */
 void     flight_log_imu(uint32_t ms, int16_t ax, int16_t ay, int16_t az,
                         int16_t gx, int16_t gy, int16_t gz, int16_t pk)
@@ -245,8 +254,17 @@ static uint32_t flog_resume_calls = 0;
 static uint32_t flog_landed_marks = 0;
 uint8_t  flight_log_prev_flying(void) { return flog_prev_flying_flag; }
 static uint8_t flog_resume_result = 1;  /* 0 = append point not found */
-uint8_t  flight_log_resume(void)      { flog_resume_calls++; return flog_resume_result; }
-void     flight_log_mark_landed(void) { flog_landed_marks++; }
+uint8_t  flight_log_resume(void)
+{
+    flog_resume_calls++;
+    if (flog_resume_result) { flog_stub_armed = 1; flog_row_flying = 1; }
+    return flog_resume_result;
+}
+void     flight_log_mark_landed(void)
+{
+    flog_landed_marks++;
+    if (flog_stub_armed) flog_row_flying = 0;
+}
 uint8_t  flog_armed_count_value(void) { return flog_armed_count; }
 uint32_t flog_gps_calls_value(void)   { return flog_gps_calls; }
 
@@ -625,6 +643,9 @@ int main(void)
     CHECK(launch_detect_has_landed() == false);
     CHECK(beacon_state == BEACON_STATE_BATTERY_SAVE);
     CHECK(flog_kind_count[7] >= 1);             /* battery-save record */
+    /* ...and that flight is over: the state row must read LANDED, or the
+     * next power-on resumes a phantom flight (checked further down) */
+    CHECK(flog_row_flying == 0);
 
     /* Fix lost on the ground: the rejected position TX falls back to a
      * heartbeat so the receiver still hears the beacon */
@@ -653,6 +674,29 @@ int main(void)
     Serial.inject("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\nDUMP\n");
     loop();
     CHECK(flog_dump_calls == dumps + 1);
+
+    /* Power-on after that timeout-ended flight - the crew switching the
+     * beacon back on, typically at the pad for the next flight. The flash
+     * state row picks the boot path: a plain pad boot with launch
+     * detection armed, not a resumed phantom flight whose launch FSM sits
+     * at CONFIRMED (the real launch would then never be detected). */
+    fake_rstc.RCAUSE.reg = RSTC_RCAUSE_POR;
+    flog_prev_flying_flag = flog_row_flying;     /* what the flash holds */
+    beacon_state = BEACON_STATE_TURN_ON;
+    transmit_fast_flag = 0;
+    transmit_beacon_flag = 1;
+    system_time_seconds = 0;
+    ms_counter = 0;
+    last_transmission_time = 0;
+    last_callsign_tx_s = 0;
+    post_launch_start_time = 0;
+    uint32_t resumes_pad = flog_resume_calls;
+    setup();
+    CHECK(flog_resume_calls == resumes_pad);
+    CHECK(beacon_state == BEACON_STATE_TURN_ON);
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_IDLE);
+    sim_run(2000);                               /* loop feeds the WDT */
+    CHECK(beacon_state == BEACON_STATE_TURN_ON);
 
     /* Mid-flight reboot whose flash resume fails (append point not
      * found): the flight state still resumes, but the surviving record
