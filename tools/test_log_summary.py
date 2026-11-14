@@ -33,6 +33,7 @@ SYNTHETIC_LOG = """Timestamp,Type,Data
 35.000,EVENT,HEARTBEAT id=3 CH0 sats=0 fix=0 up=125s rssi=-81 gps=SILENT rst=1
 60.123,NAV,GPS,39.890,-105.115,1650.0,9,0.0,0.0,0.0,0,0x43,39.0,-105.0,1000.0,1.00,12.0,90.0,-85,-5
 900.000,EVENT,RF LOST (>5min silence)
+1200.000,EVENT,RF REGAINED after 600s
 1500.000,EVENT,RF foreign pkts=1 dropped CH0 rssi=-78dBm snr=4
 1560.000,EVENT,RF foreign pkts=5 dropped CH0 rssi=-77dBm snr=4
 1800.000,BASE,39.890123,-105.115100,1652.0,8,1.1
@@ -76,6 +77,7 @@ for section in ("== Boot / reset ==", "== RF link ==", "== TX GPS health",
 # Content wiring: each row type lands in its section
 expect("scan/channel at 0:08", out)                       # RF scan lock
 expect("LOST (5 min silence) at 15:00", out)              # blackout marker
+expect("REGAINED at 20:00 after 600 s of silence", out)    # blackout length
 expect("2 heartbeats: SILENT=1  acq=1", out)              # EVENT-prefixed HBs parse
 expect("max rst=1  <-- TX GPS watchdog had to recover it (reset ladder)", out)
 expect("RF bound rocket_id=3", out)                       # binding breadcrumbs

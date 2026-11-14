@@ -69,9 +69,9 @@
  */
 
 void flight_log_init(void);
-/** Called when launch_detect confirms: synchronously erases the whole
- *  region (32 block erases) and arms the recorder. A second call while
- *  armed is a no-op. */
+/** Called when launch_detect confirms: erases the first data block and the
+ *  marker row (the rest is erased ahead of the writes) and arms the
+ *  recorder. A second call while armed is a no-op. */
 void flight_log_arm(void);
 
 /** Nonzero when the state row still says FLYING - i.e. the previous run
