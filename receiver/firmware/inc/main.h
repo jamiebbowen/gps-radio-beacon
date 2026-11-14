@@ -28,16 +28,8 @@ void SystemClock_Config(void);
 void MX_GPIO_Init(void);
 void MX_SPI1_Init(void);
 
-/* Display mode functions */
-void DisplayMode_GPS(GPS_Data *gps_data, GPS_Data *last_good_gps, uint8_t has_last_good);
-void DisplayMode_Compass(Compass_Data *compass_data, float *compass_heading);
-void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps, 
-    uint32_t *last_rf_packet_time, uint32_t *rf_packet_count,
-    GPS_Data *last_good_remote_gps, uint8_t has_last_good_remote);
-void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remote_gps,
-                           GPS_Data *local_gps_data, GPS_Data *remote_gps_data,
-                           float compass_heading, uint32_t last_rf_packet_time,
-                           uint32_t rf_packet_count);
+/* (Display mode prototypes live in inc/display_modes/<page>.h - a second
+ *  copy here drifted out of date once and broke the build.) */
 /* USER CODE END EFP */
 void Error_Handler(void);
 
