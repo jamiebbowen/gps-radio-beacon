@@ -131,6 +131,9 @@ static void feed_and_poll(const char *sentence)
 
 #define GGA_FIX \
     "$GPGGA,123519,3953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*66\r\n"
+/* 5 deg 12' N: a latitude whose text starts with '0' */
+#define GGA_EQUATORIAL \
+    "$GPGGA,123519,0512.34560,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*62\r\n"
 #define RMC_FIX \
     "$GNRMC,123519,A,3954.00000,N,10454.00000,W,022.4,084.4,230394,,*10\r\n"
 
@@ -167,6 +170,17 @@ TEST(test_init_sends_ublox_config)
     /* No fix has ever landed: fix age reads as "never" (UINT32_MAX),
      * not as a bogus small number that would look fresh. */
     CHECK(gps_get_fix_age_ms() == UINT32_MAX);
+}
+
+TEST(test_equatorial_latitude_feeds_nav)
+{
+    /* The EKF feed skipped any latitude whose text starts with '0'
+     * (everything from 0 to 9.99 deg) - it meant to skip only the "0"
+     * placeholder that stands in before the first real fix. */
+    nav_updates = 0;
+    feed_and_poll(GGA_EQUATORIAL);
+    CHECK(nav_updates == 1);
+    CHECK(nav_last_lat > 5.205f && nav_last_lat < 5.207f);
 }
 
 TEST(test_gga_full_fix_parsed_and_fed_to_nav)
@@ -573,6 +587,7 @@ int main(void)
 {
     run_test_init_sends_ublox_config();
     run_test_gga_full_fix_parsed_and_fed_to_nav();
+    run_test_equatorial_latitude_feeds_nav();
     run_test_burst_drains_all_sentences_in_one_poll();
     run_test_rmc_updates_position_only();
     run_test_framing_error_bytes_skipped_pre_and_mid_sentence();

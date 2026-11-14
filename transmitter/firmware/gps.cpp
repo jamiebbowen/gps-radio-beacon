@@ -568,7 +568,9 @@ next_sentence:
                      * low sat counts / no fix internally. */
                     if (current_coords.valid
                         && current_coords.fix_quality >= 1
-                        && current_coords.lat[0] != '0'
+                        /* skip only the "0" pre-fix placeholder: a lat
+                         * starting with '0' is just 0-9.99 deg */
+                        && strcmp(current_coords.lat, "0") != 0
                         && current_coords.lat[0] != '\0') {
                         float lat = gps_nmea_to_decimal(current_coords.lat,
                                                        current_coords.lat_dir);
