@@ -419,9 +419,9 @@ void loop() {
 
         /* Certified T0 first, so even a shred-one-second-later records the
          * one timestamp that turns "silent after packet N" into "failed at
-         * T0+xx ms". Also arm the on-chip flight recorder (~250 ms of
-         * row-erases; the radio is idle anyway this early) and mark the
-         * opening. */
+         * T0+xx ms". Also arm the on-chip flight recorder (two block
+         * erases, the first data block and the marker row: 100-400 ms;
+         * the radio is idle anyway this early) and mark the opening. */
         beacon_transmit_launch_t0(system_time_seconds, /*fast=*/1);
         flight_log_arm();
         flight_log_event(millis(), FLOG_KIND_LAUNCH);

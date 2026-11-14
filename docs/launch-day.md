@@ -93,9 +93,12 @@ to repopulate the target.
      (normal on road/terrain detours; it should flip back when you head in).
 9. Over a hill we lose it entirely: `Last:` age just climbs — the arrow
    still points to the last known spot, which is where you should walk.
-   Past ~5 minutes of silence the receiver re-scans for the beacon on its
-   own; when you crest the rise and packets return, the position snaps to
-   current.
+   Once the receiver has heard this beacon launch it stays on the channel
+   however long the silence (the SD log notes `FLIGHT CONTACT launched -
+   auto-rescan OFF`, then `AUTO-RESCAN suppressed xN`); when you crest the
+   rise and packets return, the position snaps to current. Without flight
+   contact (pad, a beacon that never flew), 5 minutes of silence starts a
+   re-scan for it.
 10. If the beacon's GPS dies under cover (heartbeat-only: `HB R<id>` with
     sats low), the position also stays at last-known — walk it, then use
     eyes and the RF strength trend. Its fused packets turn `DR` (dead

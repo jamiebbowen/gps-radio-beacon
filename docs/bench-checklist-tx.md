@@ -82,6 +82,13 @@ runbook is `launch-day.md`.
 - [ ] In flight the watchdog never resets the module: during a GPS-altitude
       fallback launch (section 6) a fault prints `settings re-send only (in
       flight)` instead of a UBX-CFG-RST line.
+- [ ] **Slow first fix vs. the reset ladder** (pad conditions, antenna
+      connected): from a cold power-on, note the time to the first fix and
+      every `Recovery: UBX-CFG-RST ...` line before it. The ladder sends a
+      hot start at 60 s without a fix, warm (ephemeris dropped) at 120 s and
+      cold (everything dropped) at 180 s. If a warm or cold start lands
+      while `sats` was still climbing, the acquisition was being reset, not
+      rescued - record it so the thresholds can be revisited.
 
 ## 4. IMU launch path (shake test)
 
