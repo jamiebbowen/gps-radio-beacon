@@ -242,3 +242,10 @@ flight_data/*
 # ---- Compiled host tools (build from source: make -C tools/lfs_extract) ----
 tools/lfs_extract/lfs_extract
 tools/lfs_extract/lfs_format
+tools/lfs_extract/test_lfs_extract
+
+# ---- Coverage / sanitizer outputs (make coverage / make sanitize) ----
+*.gcov
+*.gcda
+*.gcno
+build-san/
