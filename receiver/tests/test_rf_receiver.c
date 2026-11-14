@@ -2487,13 +2487,14 @@ TEST(test_testing_build_cadence_detector)
     run_for(250, 250);
     CHECK(RF_Receiver_TestingBuildSuspect() == 0);
 
-    /* Testing rhythm: 30 s gap -> flagged */
+    /* Testing rhythm: 30 s gap -> flagged (once the boot-HELLO window
+     * has passed without a HELLO) */
     run_for(15000, 5000);                           /* out of the 15 s floor */
     inject_callsign("KE0MZS-3 CH0");
     run_for(250, 250);
     run_for(30000, 5000);
     inject_callsign("KE0MZS-3 CH0");
-    run_for(250, 250);
+    run_for(6000, 250);
     CHECK(RF_Receiver_TestingBuildSuspect() == 1);
 
     /* Channel context change clears the suspicion with the binding */
@@ -2505,6 +2506,44 @@ TEST(test_testing_build_cadence_detector)
     run_for(250, 250);
     GPS_Data pos;
     CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
+}
+
+TEST(test_boot_callsign_is_not_testing_cadence)
+{
+    /* Every beacon boot airs its callsign, then HELLO. Power-cycling a
+     * production beacon within 150 s of its last ID is pad routine
+     * (reseat the battery, fix a jumper) - not a TESTING build. */
+    RF_Receiver_StopScan();
+    fake_mode = 5;
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    inject_callsign("KE0MZS-3 CH0");               /* boot #1 */
+    run_for(1200, 250);
+    inject_hello(OUR_ROCKET_ID, 0x0abcdef);
+    run_for(60000, 5000);                          /* power-cycled at 60 s */
+    inject_callsign("KE0MZS-3 CH0");               /* boot #2 */
+    run_for(1200, 250);
+    inject_hello(OUR_ROCKET_ID, 0x0abcdef);
+    run_for(10000, 250);
+    CHECK(RF_Receiver_TestingBuildSuspect() == 0);
+
+    /* A TESTING build's next periodic ID (~30 s on, no HELLO) still
+     * gives it away, once the HELLO window has passed */
+    run_for(18000, 250);
+    inject_callsign("KE0MZS-3 CH0");
+    run_for(250, 250);
+    CHECK(RF_Receiver_TestingBuildSuspect() == 0);
+    run_for(6000, 250);
+    CHECK(RF_Receiver_TestingBuildSuspect() == 1);
+
+    /* Residual: a reboot whose HELLO was lost reads as the testing rhythm */
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    inject_callsign("KE0MZS-3 CH0");
+    run_for(60000, 5000);
+    inject_callsign("KE0MZS-3 CH0");               /* boot, HELLO lost */
+    run_for(6000, 250);
+    CHECK(RF_Receiver_TestingBuildSuspect() == 1);
+
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);     /* restore */
 }
 
 TEST(test_heartbeat_uptime_regression_keeps_tracking)
@@ -2603,6 +2642,7 @@ int main(void)
     run_test_receiver_cold_boot_mid_walk();
     run_test_packet_soup_state_coherence();
     run_test_testing_build_cadence_detector();
+    run_test_boot_callsign_is_not_testing_cadence();
     run_test_heartbeat_uptime_regression_keeps_tracking();
 
     return TEST_SUMMARY();
