@@ -140,21 +140,16 @@ TEST(test_init_success_and_failure_paths)
     CHECK(GPS_Init() == GPS_ERROR);
     fake_uart_init_fail = 0;
 
-    /* Receive_IT failure: also GPS_ERROR, with the 0xE1.. debug pattern */
+    /* Receive_IT failure: also GPS_ERROR, counted as a failed re-arm */
+    uint32_t ra0 = uart_rearm_failures;
     fake_receive_it_fail = 1;
     CHECK(GPS_Init() == GPS_ERROR);
-    uint8_t raw[4];
-    GPS_GetRawBytes(raw);
-    CHECK(raw[0] == 0xE1 && raw[3] == 0xE4);
+    CHECK(uart_rearm_failures == ra0 + 1);
     fake_receive_it_fail = 0;
 
     /* Clean init */
     CHECK(GPS_Init() == GPS_OK);
-    GPS_GetRawBytes(raw);
-    CHECK(raw[0] == 0xA1);                  /* init marker */
-    CHECK(strcmp(local_gps_data.debug_lat, "NO_DATA") == 0);
-
-    GPS_GetRawBytes(NULL);                  /* must not crash */
+    CHECK(uart_rearm_failures == ra0 + 1);
 }
 
 TEST(test_complete_sentence_parsed)
@@ -184,10 +179,6 @@ TEST(test_unparseable_sentence_reports_error)
     GPS_Data gps;
     memset(&gps, 0, sizeof(gps));
     CHECK(GPS_Update(&gps) == GPS_ERROR);
-
-    uint8_t raw[4];
-    GPS_GetRawBytes(raw);
-    CHECK(raw[2] == 0xB5 && raw[3] == 0xB6);   /* parse-failed markers */
 }
 
 TEST(test_framing_error_byte_dropped)
@@ -206,13 +197,12 @@ TEST(test_framing_error_byte_dropped)
     CHECK(gps_isr_index == 0);                 /* not buffered */
     huart_gps.ErrorCode = HAL_UART_ERROR_NONE;
 
-    /* Re-arm failure inside the error path sets the 0xF2 marker */
+    /* Re-arm failure inside the error path is counted */
     huart_gps.ErrorCode = 0x04;
     fake_receive_it_fail = 1;
+    uint32_t ra0 = uart_rearm_failures;
     HAL_UART_RxCpltCallback(&huart_gps);
-    uint8_t raw[4];
-    GPS_GetRawBytes(raw);
-    CHECK(raw[0] == 0xF2);
+    CHECK(uart_rearm_failures == ra0 + 1);
     fake_receive_it_fail = 0;
     huart_gps.ErrorCode = HAL_UART_ERROR_NONE;
 }
@@ -305,13 +295,12 @@ TEST(test_rearm_when_uart_ready)
     (void)GPS_Update(&gps);
     CHECK(receive_it_calls == calls_before + 1);
 
-    /* Re-arm failure path sets the error pattern */
+    /* Re-arm failure is counted */
     huart_gps.RxState = HAL_UART_STATE_READY;
     fake_receive_it_fail = 1;
+    uint32_t ra0 = uart_rearm_failures;
     (void)GPS_Update(&gps);
-    uint8_t raw[4];
-    GPS_GetRawBytes(raw);
-    CHECK(raw[0] == 0xE1);
+    CHECK(uart_rearm_failures == ra0 + 1);
     fake_receive_it_fail = 0;
 
     /* Busy RX: no re-arm */
@@ -340,14 +329,13 @@ TEST(test_error_callback_rearms_after_ore_teardown)
     CHECK(huart_gps.RxState == 0x22);        /* stub marks BUSY_RX */
     CHECK(huart_gps.ErrorCode == HAL_UART_ERROR_NONE);
 
-    /* Re-arm failure marks 0xF3 - distinct from the 0xF2 callback site */
+    /* A failed re-arm in the error callback is counted too */
     huart_gps.RxState = HAL_UART_STATE_READY;
     huart_gps.ErrorCode = 0x08;
     fake_receive_it_fail = 1;
+    uint32_t ra0 = uart_rearm_failures;
     HAL_UART_ErrorCallback(&huart_gps);
-    uint8_t raw[4];
-    GPS_GetRawBytes(raw);
-    CHECK(raw[0] == 0xF3);
+    CHECK(uart_rearm_failures == ra0 + 1);
     fake_receive_it_fail = 0;
 
     /* Non-ORE path: the armed transfer survives (RxState stays BUSY_RX),
@@ -374,10 +362,6 @@ TEST(test_isr_plumbing)
     USART2_IRQHandler();
     CHECK(irq_handler_calls == before + 1);
 
-    uint8_t raw[4];
-    GPS_GetRawBytes(raw);
-    CHECK(raw[0] == 0xAA);                     /* ISR-entry marker */
-
     /* Callback for a different UART instance: ignored */
     UART_HandleTypeDef other;
     memset(&other, 0, sizeof(other));
@@ -401,32 +385,13 @@ TEST(test_isr_plumbing)
     (void)GPS_Update(&fix_scratch);
     CHECK(GPS_IsFixed() == 1);
 
-    /* Receive_IT failure INSIDE the byte callback marks last_bytes[0]=0xF2
-     * (the 0xE1 path in GPS_Update is covered by test_rearm_when_uart_ready) */
+    /* Receive_IT failure INSIDE the byte callback is counted (the GPS_Update
+     * path is covered by test_rearm_when_uart_ready) */
+    uint32_t ra0 = uart_rearm_failures;
     fake_receive_it_fail = 1;
     feed_byte('$');
     fake_receive_it_fail = 0;
-    GPS_GetRawBytes(raw);
-    CHECK(raw[0] == 0xF2);
-}
-
-TEST(test_first_and_raw_capture_buffers_fill)
-{
-    /* Feed enough bytes to fill the first-10 and raw-capture buffers */
-    CHECK(GPS_Init() == GPS_OK);
-    uart_byte_counter = 0;
-    first_10_bytes_filled = 0;
-    raw_capture_filled = 0;
-    raw_capture_index = 0;
-
-    for (int i = 0; i < RAW_CAPTURE_SIZE + 5; i++) {
-        feed_byte((uint8_t)('0' + (i % 10)));
-    }
-    CHECK(first_10_bytes_filled == 1);
-    CHECK(raw_capture_filled == 1);
-    CHECK(first_10_bytes[0] == '0');
-    CHECK(first_10_bytes[9] == '9');
-    gps_isr_index = 0;
+    CHECK(uart_rearm_failures == ra0 + 1);
 }
 
 TEST(test_init_sends_ubx_msg_config)
@@ -509,9 +474,10 @@ TEST(test_rx_stats_snapshot)
     memset(&gps, 0, sizeof(gps));
     (void)GPS_Update(&gps);
 
-    uint32_t bytes = 0, sentences = 0, dropped = 0;
+    uint32_t bytes = 0, sentences = 0, dropped = 0, rearm = 99;
     uint16_t uart_errs = 0;
-    GPS_GetRxStats(&bytes, &sentences, &dropped, &uart_errs);
+    GPS_GetRxStats(&bytes, &sentences, &dropped, &uart_errs, &rearm);
+    CHECK(rearm == uart_rearm_failures);
     CHECK(bytes == uart_byte_counter && bytes > 0);
     CHECK(sentences == nmea_sentence_counter);
     CHECK(dropped == gps_sentences_dropped);
@@ -519,7 +485,7 @@ TEST(test_rx_stats_snapshot)
     CHECK(uart_errs >= err_before);
 
     /* NULL-safe */
-    GPS_GetRxStats(NULL, NULL, NULL, NULL);
+    GPS_GetRxStats(NULL, NULL, NULL, NULL, NULL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -540,7 +506,6 @@ int main(void)
     run_test_rearm_when_uart_ready();
     run_test_error_callback_rearms_after_ore_teardown();
     run_test_isr_plumbing();
-    run_test_first_and_raw_capture_buffers_fill();
     run_test_fix_latch_expires_when_stream_dies();
     run_test_rx_stats_snapshot();
 

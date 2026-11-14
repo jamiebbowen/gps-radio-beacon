@@ -387,9 +387,6 @@ int main(void)
   strcpy(remote_gps_data.fix_str, "0");
   remote_gps_data.satellites = 0;
   strcpy(remote_gps_data.satellites_str, "0");
-  /* Initialize debug strings to prevent garbage output */
-  strcpy(remote_gps_data.debug_lat, "NO_DATA");
-  strcpy(remote_gps_data.debug_lon, "NO_DATA");
   
   /* Display is now fixed in 90° orientation */
   
@@ -738,16 +735,6 @@ int main(void)
   GPS_Data rf_gps_data;
   memset(&gps_data, 0, sizeof(GPS_Data));
   memset(&rf_gps_data, 0, sizeof(GPS_Data));
-  
-  /* Initialize debug strings with safe values */
-  strncpy(gps_data.debug_lat, "INIT-LAT", GPS_DEBUG_BUFFER_SIZE - 1);
-  gps_data.debug_lat[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
-  
-  strncpy(gps_data.debug_lon, "INIT-LON", GPS_DEBUG_BUFFER_SIZE - 1);
-  gps_data.debug_lon[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
-  
-  strncpy(gps_data.debug_sats, "INIT-SAT", GPS_DEBUG_BUFFER_SIZE - 1);
-  gps_data.debug_sats[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
   
   /* Re-arm the scan dwell now that we can actually service it. StartScan ran
    * ~5 s into boot, but the init screens above take long enough that the boot
@@ -1407,16 +1394,16 @@ int main(void)
          *                           mismatch - e.g. module in UBX-binary mode)
          *   snt>0, drp climbing  -> main-loop stalls losing bursts (software)
          *   otherwise, sats>0    -> marginal sky view (physics) */
-        uint32_t u_bytes, u_sents, u_drops;
+        uint32_t u_bytes, u_sents, u_drops, u_rearm;
         uint16_t u_errs;
-        GPS_GetRxStats(&u_bytes, &u_sents, &u_drops, &u_errs);
+        GPS_GetRxStats(&u_bytes, &u_sents, &u_drops, &u_errs, &u_rearm);
         extern uint32_t gps_checksum_errors;   /* gps_parser.c */
-        char gps_msg[96];
+        char gps_msg[128];
         snprintf(gps_msg, sizeof(gps_msg),
-                 "Local GPS no fix at 120s: rx=%lu snt=%lu drp=%lu csum=%lu er=%u sats=%d",
+                 "Local GPS no fix at 120s: rx=%lu snt=%lu drp=%lu csum=%lu er=%u ra=%lu sats=%d",
                  (unsigned long)u_bytes, (unsigned long)u_sents,
                  (unsigned long)u_drops, (unsigned long)gps_checksum_errors,
-                 (unsigned)u_errs, (int)gps_data.satellites);
+                 (unsigned)u_errs, (unsigned long)u_rearm, (int)gps_data.satellites);
         SD_Card_LogEvent(gps_msg);
       }
     }

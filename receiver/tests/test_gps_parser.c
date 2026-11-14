@@ -276,15 +276,13 @@ TEST(test_malformed_coordinate_strings_rejected) {
     CHECK(gps_invalid_coordinate_errors > errors_before);
 }
 
-TEST(test_debug_fields_for_tiny_sentence) {
+TEST(test_tiny_sentence_rejected) {
     GPS_Data gps;
     memset(&gps, 0, sizeof(gps));
 
-    /* A 3-char sentence can't hold a type — debug fields must say so
-     * (and the parse must fail) rather than showing stale data. */
+    /* A 3-char sentence can't hold a type: the parse must fail */
     CHECK(GPS_ParseNMEA("$A,", &gps) == GPS_PARSER_ERROR);
-    CHECK(strcmp(gps.debug_lat, "EMPTY") == 0);
-    CHECK(strcmp(gps.debug_lon, "LEN:3") == 0);
+    CHECK(gps.fix == 0);
 }
 
 TEST(test_rmc_southern_western_hemisphere) {
@@ -437,7 +435,7 @@ int main(void) {
     run_test_rejects_null_short_and_unframed();
     run_test_rejects_missing_or_bad_checksum();
     run_test_rejects_unknown_sentence_type();
-    run_test_debug_fields_for_tiny_sentence();
+    run_test_tiny_sentence_rejected();
     run_test_gga_valid_sentence();
     run_test_gga_accepts_gn_talker();
     run_test_gga_numeric_fields_clamped();

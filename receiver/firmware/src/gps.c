@@ -35,8 +35,8 @@ static uint8_t gps_rx_data;
  * A depth-2 FIFO loses nothing through a lone stall and keeps the last two
  * sentences through longer ones.
  *
- * Why still not parse in the ISR? GPS_ParseNMEA does strtok_r, float math
- * and debug snprintf - far too heavy for interrupt context. */
+ * Why still not parse in the ISR? GPS_ParseNMEA does strtok_r and float
+ * math - far too heavy for interrupt context. */
 /* Ring slots = usable depth + 1: full is (head+1)%Q == tail, so one slot is
  * sacrificed to keep "full" unambiguous against "empty". Depth 2 matches
  * the display-stall analysis above (two sentences can complete inside one
@@ -60,24 +60,10 @@ static uint32_t gps_last_sentence_ms = 0;
 #define GPS_FIX_STALE_MS 5000u   /* 5x the 1 Hz sentence period */
 
 static uint16_t uart_error_count = 0;   /* HAL error-path hits (ORE/FE/NE) */
-static uint8_t last_bytes[4] = {0}; /* Debug: Store last 4 raw bytes */
 static uint32_t uart_byte_counter = 0; /* Counter for UART activity */
 static uint32_t nmea_sentence_counter = 0; /* Counter for complete NMEA sentences */
 
-/* Debug variables for NMEA sentence detection */
-static uint8_t first_10_bytes[10] = {0}; /* Store first 10 bytes received */
-static uint8_t first_10_bytes_filled = 0; /* Flag to indicate if first_10_bytes is filled */
-static uint8_t last_10_bytes[10] = {0};   /* Circular buffer for last 10 bytes */
-static uint8_t last_10_index = 0;         /* Current index in circular buffer */
-static uint8_t dollar_sign_count = 0;     /* Count of '$' characters received */
-static uint8_t cr_count = 0;              /* Count of '\r' characters received */
-static uint8_t lf_count = 0;              /* Count of '\n' characters received */
-
-/* Raw byte capture for direct analysis */
-#define RAW_CAPTURE_SIZE 64
-static uint8_t raw_capture_buffer[RAW_CAPTURE_SIZE] = {0};
-static uint8_t raw_capture_index = 0;
-static uint8_t raw_capture_filled = 0;
+static uint32_t uart_rearm_failures = 0;  /* HAL refused to re-arm Receive_IT */
 
 /* Private function prototypes */
 static uint8_t GPS_UART_Init(void);
@@ -98,26 +84,13 @@ uint8_t GPS_Init(void)
     return GPS_ERROR;
   }
   
-  /* Set a non-zero value in last_bytes for debugging */
-  last_bytes[0] = 0xA1;
-  last_bytes[1] = 0xB2;
-  last_bytes[2] = 0xC3;
-  last_bytes[3] = 0xD4;
-  
   /* Initialize local GPS data structure with safe defaults */
   extern GPS_Data local_gps_data;
   memset(&local_gps_data, 0, sizeof(GPS_Data));
-  strcpy(local_gps_data.debug_lat, "NO_DATA");
-  strcpy(local_gps_data.debug_lon, "NO_DATA");
-  strcpy(local_gps_data.debug_sats, "0");
   
   /* Start receiving data from GPS module */
   if (HAL_UART_Receive_IT(&huart_gps, &gps_rx_data, 1) != HAL_OK) {
-    /* If UART receive fails, set error pattern in last_bytes */
-    last_bytes[0] = 0xE1;
-    last_bytes[1] = 0xE2;
-    last_bytes[2] = 0xE3;
-    last_bytes[3] = 0xE4;
+    uart_rearm_failures++;
     return GPS_ERROR;
   }
 
@@ -150,97 +123,11 @@ uint8_t GPS_Init(void)
 uint8_t GPS_Update(GPS_Data *gps_data)
 {
   uint8_t status = GPS_ERROR;
-  
-  /* Rotate through different debug information displays more slowly */
-  static uint8_t debug_counter = 0;
-  static uint8_t debug_mode = 0;
-  
-  debug_counter++;
-  if (debug_counter >= 5) { /* Change display every 5 calls (slower rotation) */
-    debug_counter = 0;
-    debug_mode = (debug_mode + 1) % 6; /* Now 6 debug modes */
-  }
-  
-  switch (debug_mode) {
-    case 0:
-      /* Display UART and NMEA counters */
-      snprintf(gps_data->debug_lat, GPS_DEBUG_BUFFER_SIZE, "UR:%lu", (unsigned long)uart_byte_counter);
-      snprintf(gps_data->debug_lon, GPS_DEBUG_BUFFER_SIZE, "NM:%lu", (unsigned long)nmea_sentence_counter);
-      snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "ST:%02X ER:%02X", last_bytes[2], last_bytes[3]);
-      break;
-      
-    case 1:
-      /* Display special character counts */
-      snprintf(gps_data->debug_lat, GPS_DEBUG_BUFFER_SIZE, "$:%u", dollar_sign_count);
-      snprintf(gps_data->debug_lon, GPS_DEBUG_BUFFER_SIZE, "CR:%u", cr_count);
-      snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "LF:%u", lf_count);
-      break;
-      
-    case 2:
-      /* Display first few bytes as hex */
-      snprintf(gps_data->debug_lat, GPS_DEBUG_BUFFER_SIZE, "%02X %02X", 
-               first_10_bytes[0], first_10_bytes[1]);
-      snprintf(gps_data->debug_lon, GPS_DEBUG_BUFFER_SIZE, "%02X %02X", 
-               first_10_bytes[2], first_10_bytes[3]);
-      snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "%02X %02X", 
-               first_10_bytes[4], first_10_bytes[5]);
-      break;
-      
-    case 3:
-      /* Display raw captured bytes as hex in a pattern */
-      static uint8_t raw_display_offset = 0;
-      
-      /* Cycle through different parts of the buffer. The hex dump below
-       * reads raw_capture_buffer[offset .. offset+7], so the offset must
-       * stay <= RAW_CAPTURE_SIZE - 8 (modulus of SIZE-7 gives max SIZE-8). */
-      if (debug_counter == 0) {
-        raw_display_offset = (raw_display_offset + 6) % (RAW_CAPTURE_SIZE - 7);
-      }
-      
-      snprintf(gps_data->debug_lat, GPS_DEBUG_BUFFER_SIZE, "%02X%02X%02X%02X", 
-               raw_capture_buffer[raw_display_offset], 
-               raw_capture_buffer[raw_display_offset+1],
-               raw_capture_buffer[raw_display_offset+2],
-               raw_capture_buffer[raw_display_offset+3]);
-      snprintf(gps_data->debug_lon, GPS_DEBUG_BUFFER_SIZE, "%02X%02X%02X%02X", 
-               raw_capture_buffer[raw_display_offset+4],
-               raw_capture_buffer[raw_display_offset+5],
-               raw_capture_buffer[raw_display_offset+6],
-               raw_capture_buffer[raw_display_offset+7]);
-      snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "O:%d", 
-               raw_display_offset);
-      break;
-      
-    case 4:
-      {
-        /* Display sentence-queue state: ISR fill position, queued depth,
-         * drops (queue full = main-loop stalls outrunning two slots) */
-        uint8_t pend_depth = (uint8_t)((gps_pend_head - gps_pend_tail) % GPS_PENDING_Q);
-        snprintf(gps_data->debug_lat, GPS_DEBUG_BUFFER_SIZE, "IDX:%d", gps_isr_index);
-        snprintf(gps_data->debug_lon, GPS_DEBUG_BUFFER_SIZE, "Q:%d D:%lu",
-                 pend_depth, (unsigned long)(gps_sentences_dropped % 1000));
-        if (gps_isr_index > 0 && gps_isr_index < GPS_BUFFER_SIZE) {
-          /* Show first few chars of the sentence being assembled */
-          char c0 = gps_isr_buffer[0];
-          char c1 = (gps_isr_index > 1) ? gps_isr_buffer[1] : ' ';
-          char c2 = (gps_isr_index > 2) ? gps_isr_buffer[2] : ' ';
-          char c3 = (gps_isr_index > 3) ? gps_isr_buffer[3] : ' ';
-          snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "%c%c%c%c", c0, c1, c2, c3);
-        } else {
-          snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "EMPTY");
-        }
-      }
-      break;
-  }
-  
+
   /* Parse every queued sentence. A lone display-frame stall can complete
    * two sentences between Update calls; the FIFO keeps both (see the
    * plumbing comment at the top). */
   while (gps_pend_tail != gps_pend_head) {
-    /* Copy debug bytes to show we're in GPS_Update */
-    last_bytes[0] = 0xB1;
-    last_bytes[1] = 0xB2;
-
     /* Use the parser module to parse NMEA sentences. The parser writes
      * gps_data->fix from the actual sentence (GGA quality / RMC A|V) even
      * when it returns PARSER_ERROR for a no-fix sentence, so this latch
@@ -252,25 +139,13 @@ uint8_t GPS_Update(GPS_Data *gps_data)
     if (parse_result == GPS_PARSER_OK) {
       /* Don't override fix status - it's set by the parser based on actual GPS data */
       status = GPS_OK;
-
-      /* Update debug bytes to show successful parsing */
-      last_bytes[2] = 0xB3;
-      last_bytes[3] = 0xB4;
-    } else {
-      /* Update debug bytes to show parsing failed */
-      last_bytes[2] = 0xB5;
-      last_bytes[3] = 0xB6;
     }
   }
   
   /* Start UART receive interrupt if not already running */
   if (huart_gps.RxState == HAL_UART_STATE_READY) {
     if (HAL_UART_Receive_IT(&huart_gps, &gps_rx_data, 1) != HAL_OK) {
-      /* Error re-arming interrupt */
-      last_bytes[0] = 0xE1;
-      last_bytes[1] = 0xE2;
-      last_bytes[2] = 0xE3;
-      last_bytes[3] = 0xE4;
+      uart_rearm_failures++;
     }
   }
   
@@ -303,12 +178,6 @@ uint8_t GPS_IsFixed(void)
  */
 void USART2_IRQHandler(void)
 {
-  /* Set debug marker to indicate ISR entry */
-  last_bytes[0] = 0xAA;
-  last_bytes[1] = 0xBB;
-  last_bytes[2] = 0xCC;
-  last_bytes[3] = 0xDD;
-  
   /* Call HAL UART IRQ Handler */
   HAL_UART_IRQHandler(&huart_gps);
 }
@@ -322,23 +191,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   /* Handle GPS UART (USART2) */
   if (huart->Instance == GPS_UART) {
-    /* Set a marker in last_bytes to indicate callback was called */
-    last_bytes[0] = 0xF1;
-    
-    /* Store raw byte for display */
-    last_bytes[1] = gps_rx_data;
-    last_bytes[2] = huart->RxState;
-    last_bytes[3] = huart->ErrorCode;
-    
-    /* Capture raw bytes regardless of errors for direct analysis */
-    if (!raw_capture_filled) {
-      raw_capture_buffer[raw_capture_index++] = gps_rx_data;
-      if (raw_capture_index >= RAW_CAPTURE_SIZE) {
-        raw_capture_filled = 1;
-      }
-    }
-    
-    /* Track UART state and error codes for debugging */
+    /* Bytes that arrive with a UART error flag are dropped */
     if (huart->ErrorCode != HAL_UART_ERROR_NONE) {
       uart_error_count++;
       
@@ -351,7 +204,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
       /* Reject bytes received with framing errors by skipping the rest of processing */
       /* Continue receiving next byte */
       if (HAL_UART_Receive_IT(huart, &gps_rx_data, 1) != HAL_OK) {
-        last_bytes[0] = 0xF2; /* Error re-arming interrupt */
+        uart_rearm_failures++;
       }
       return; /* Skip processing this byte */
     }
@@ -359,22 +212,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     /* Increment UART byte counter for every byte received */
     uart_byte_counter++;
     
-    /* Store first 10 bytes for debugging */
-    if (!first_10_bytes_filled && uart_byte_counter <= 10) {
-      first_10_bytes[uart_byte_counter-1] = gps_rx_data;
-      if (uart_byte_counter == 10) {
-        first_10_bytes_filled = 1;
-      }
-    }
-    
-    /* Store last 10 bytes in circular buffer */
-    last_10_bytes[last_10_index] = gps_rx_data;
-    last_10_index = (last_10_index + 1) % 10;
-    
-    /* Count special characters for debugging */
     if (gps_rx_data == NMEA_START_CHAR) { /* '$' */
-      dollar_sign_count++;
-
       /* Reset buffer when we see a start character */
       gps_isr_index = 0;
       gps_isr_buffer[gps_isr_index++] = gps_rx_data;
@@ -383,14 +221,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     else if (gps_isr_index > 0 && gps_isr_index < GPS_BUFFER_SIZE - 1) {
       gps_isr_buffer[gps_isr_index++] = gps_rx_data;
 
-      /* Check for CR character */
-      if (gps_rx_data == NMEA_END_CHAR1) {
-        cr_count++;
-      }
-      /* Check for LF character and if we have a complete sentence */
-      else if (gps_rx_data == NMEA_END_CHAR2) {
-        lf_count++;
-
+      /* LF ends a sentence (validated against the preceding CR below) */
+      if (gps_rx_data == NMEA_END_CHAR2) {
         /* Check if we have a complete NMEA sentence */
         if (gps_isr_index > 2 &&
             gps_isr_buffer[gps_isr_index-2] == NMEA_END_CHAR1 &&
@@ -418,10 +250,10 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
       gps_isr_index = 0;
     }
     
-  /* Continue receiving - if this fails, update last_bytes to indicate error */
-  if (HAL_UART_Receive_IT(huart, &gps_rx_data, 1) != HAL_OK) {
-    last_bytes[0] = 0xF2; /* Error re-arming interrupt */
-  }
+    /* Continue receiving */
+    if (HAL_UART_Receive_IT(huart, &gps_rx_data, 1) != HAL_OK) {
+      uart_rearm_failures++;
+    }
   }
   /* Note: RF receiver now uses LoRa (SPI), not UART */
 }
@@ -451,38 +283,27 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
       uart_error_count++;
       huart->ErrorCode = HAL_UART_ERROR_NONE;
       if (HAL_UART_Receive_IT(huart, &gps_rx_data, 1) != HAL_OK) {
-        last_bytes[0] = 0xF3; /* distinct marker: re-arm failed in error cb */
+        uart_rearm_failures++;
       }
     }
   }
 }
 
 /**
- * @brief Get the last 4 raw bytes received from GPS
- * @param bytes Array to store the bytes (must be at least 4 bytes)
- * @retval None
- */
-void GPS_GetRawBytes(uint8_t *bytes)
-{
-  if (bytes != NULL) {
-    for (int i = 0; i < 4; i++) {
-      bytes[i] = last_bytes[i];
-    }
-  }
-}
-
-/**
  * @brief Get GPS receive statistics (UART bytes, complete sentences,
- *        queue drops, UART error-path hits). All pointers optional.
+ *        queue drops, UART error-path hits, failed Receive_IT re-arms).
+ *        All pointers optional.
  * @retval None
  */
 void GPS_GetRxStats(uint32_t *bytes, uint32_t *sentences,
-                    uint32_t *dropped, uint16_t *uart_errors)
+                    uint32_t *dropped, uint16_t *uart_errors,
+                    uint32_t *rearm_failures)
 {
-  if (bytes)       *bytes       = uart_byte_counter;
-  if (sentences)   *sentences   = nmea_sentence_counter;
-  if (dropped)     *dropped     = gps_sentences_dropped;
-  if (uart_errors) *uart_errors = uart_error_count;
+  if (bytes)          *bytes          = uart_byte_counter;
+  if (sentences)      *sentences      = nmea_sentence_counter;
+  if (dropped)        *dropped        = gps_sentences_dropped;
+  if (uart_errors)    *uart_errors    = uart_error_count;
+  if (rearm_failures) *rearm_failures = uart_rearm_failures;
 }
 
 /**

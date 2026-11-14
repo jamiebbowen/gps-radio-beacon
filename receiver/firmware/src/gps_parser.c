@@ -61,38 +61,6 @@ uint8_t GPS_ParseNMEA(const char* nmea_sentence, GPS_Data *gps_data)
 {
   uint8_t status = GPS_PARSER_ERROR;
   
-  /* Set debug strings that fit within 10-character display limit */
-  if (nmea_sentence != NULL) {
-    /* First debug field: NMEA sentence type (first 6 chars) */
-    memset(gps_data->debug_lat, 0, GPS_DEBUG_BUFFER_SIZE);
-    if (strlen(nmea_sentence) >= 6) {
-      strncpy(gps_data->debug_lat, nmea_sentence, 6);
-    } else {
-      strcpy(gps_data->debug_lat, "EMPTY");
-    }
-    
-    /* Second debug field: Length of NMEA sentence. Use the full debug
-     * buffer size so snprintf can always fit "LEN:" + any uint16 length
-     * (9 chars max) without tripping -Wformat-truncation. */
-    memset(gps_data->debug_lon, 0, GPS_DEBUG_BUFFER_SIZE);
-    if (nmea_sentence != NULL) {
-      snprintf(gps_data->debug_lon, GPS_DEBUG_BUFFER_SIZE, "LEN:%u",
-               (unsigned)strlen(nmea_sentence));
-    }
-    
-    /* Third debug field: First few chars after type */
-    memset(gps_data->debug_sats, 0, GPS_DEBUG_BUFFER_SIZE);
-    if (strlen(nmea_sentence) > 7) {
-      strncpy(gps_data->debug_sats, nmea_sentence + 7, 9);
-    } else {
-      strcpy(gps_data->debug_sats, "NO_DATA");
-    }
-  } else {
-    strcpy(gps_data->debug_lat, "NULL");
-    strcpy(gps_data->debug_lon, "NULL");
-    strcpy(gps_data->debug_sats, "NULL");
-  }
-  
   /* First perform basic structure validation of the NMEA sentence */
   if (nmea_sentence == NULL || strlen(nmea_sentence) < 10) {
     /* Sentence is too short to be valid */
@@ -122,9 +90,6 @@ uint8_t GPS_ParseNMEA(const char* nmea_sentence, GPS_Data *gps_data)
     checksum_valid = GPS_ValidateChecksum(nmea_sentence);
     if (!checksum_valid) {
       gps_checksum_errors++;
-      
-      /* Add checksum error info to debug fields */
-      snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "CSUM ERR");
       
       /* Return error for invalid checksum */
       return GPS_PARSER_ERROR;
@@ -157,9 +122,6 @@ uint8_t GPS_ParseNMEA(const char* nmea_sentence, GPS_Data *gps_data)
     
     /* Validate coordinates before accepting them */
     if (!GPS_ValidateCoordinates(gps_data->latitude, gps_data->longitude)) {
-      /* Add invalid coordinate info to debug fields */
-      snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "COORD ERR");
-      
       /* Return error for invalid coordinates */
       return GPS_PARSER_ERROR;
     }
@@ -293,9 +255,6 @@ static uint8_t GPS_ParseGPGGA(const char* nmea_sentence, GPS_Data *gps_data)
         if (strlen(token) >= 4) {
           /* Use the more robust string-based conversion */
           gps_data->latitude = GPS_NMEAStringToDecimalDegrees(token);
-          /* Store raw latitude string for debugging */
-          strncpy(gps_data->debug_lat, token, GPS_DEBUG_BUFFER_SIZE - 1);
-          gps_data->debug_lat[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
         }
         break;
         
@@ -309,9 +268,6 @@ static uint8_t GPS_ParseGPGGA(const char* nmea_sentence, GPS_Data *gps_data)
         if (strlen(token) >= 4) {
           /* Use the more robust string-based conversion */
           gps_data->longitude = GPS_NMEAStringToDecimalDegrees(token);
-          /* Store raw longitude string for debugging */
-          strncpy(gps_data->debug_lon, token, GPS_DEBUG_BUFFER_SIZE - 1);
-          gps_data->debug_lon[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
         }
         break;
         
@@ -331,9 +287,6 @@ static uint8_t GPS_ParseGPGGA(const char* nmea_sentence, GPS_Data *gps_data)
         
       case 7: /* Number of satellites */
         gps_data->satellites = nmea_atoi_u8(token, 99);
-        /* Store raw satellites string for debugging */
-        strncpy(gps_data->debug_sats, token, GPS_DEBUG_BUFFER_SIZE - 1);
-        gps_data->debug_sats[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
         break;
 
       case 8: /* HDOP - geometry quality, separates "few sats" from "bad geometry" */
