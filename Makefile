@@ -37,11 +37,13 @@ all: receiver tools
 help:
 	@sed -n 's/^# //p' Makefile | head -n 20
 
+# Build only. The firmware Makefiles' own default `all` target also
+# flashes (dfu-util / arduino-cli upload); use `make -C <dir> flash` for that.
 receiver:
-	$(MAKE) -C $(RECEIVER_DIR) all
+	$(MAKE) -C $(RECEIVER_DIR) compile
 
 transmitter:
-	$(MAKE) -C $(TRANSMITTER_DIR) || true  # transmitter uses Arduino build separately
+	$(MAKE) -C $(TRANSMITTER_DIR) compile
 
 tools:
 	$(MAKE) -C $(TOOLS_DIR)
@@ -98,6 +100,7 @@ format-card: tools
 
 clean:
 	$(MAKE) -C $(RECEIVER_DIR) clean
+	$(MAKE) -C $(TRANSMITTER_DIR) clean
 	$(MAKE) -C $(TOOLS_DIR) clean
 	$(MAKE) -C receiver/tests clean
 	$(MAKE) -C transmitter/tests clean

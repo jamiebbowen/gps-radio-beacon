@@ -131,7 +131,14 @@ OBJECTS += $(BUILD_DIR)/startup_stm32f401xc.o
 vpath %.c $(sort $(dir $(C_SOURCES)))
 
 # Project sources compile with -Wextra; vendor/HAL objects keep -Wall.
+# WERROR=1 (CI) also turns project-source warnings into errors, so a new
+# warning can't land unnoticed; vendor code never gets -Werror.
+WERROR ?= 0
+ifeq ($(WERROR),1)
+$(PROJECT_OBJECTS): EXTRA_WARN = -Wextra -Werror
+else
 $(PROJECT_OBJECTS): EXTRA_WARN = -Wextra
+endif
 
 # Pull in the gcc-generated header dependency files (absent on first build)
 -include $(wildcard $(BUILD_DIR)/*.d)
@@ -186,4 +193,4 @@ clean:
 # Clean and rebuild
 rebuild: clean all
 
-.PHONY: all build clean rebuild flash
+.PHONY: all compile clean rebuild flash
