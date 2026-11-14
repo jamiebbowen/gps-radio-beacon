@@ -63,6 +63,7 @@ static uint8_t bd_storage[BD_BLOCK_COUNT * BD_BLOCK_SIZE];
 
 static int bd_init_result     = 0;   /* lfs_sd_bd_init return knob      */
 static int bd_prog_fail       = 0;   /* all writes fail                 */
+static int bd_prog_fail_until_stepdown = 0; /* writes fail until the bus steps down */
 static int bd_sync_count      = 0;   /* syncs seen since reset          */
 static int bd_corrupt_at_sync = 0;   /* 0=off; N=corrupt on the Nth sync */
 
@@ -78,7 +79,7 @@ static int ram_prog(const struct lfs_config *c, lfs_block_t block,
                     lfs_off_t off, const void *buffer, lfs_size_t size)
 {
     (void)c;
-    if (bd_prog_fail) return LFS_ERR_IO;
+    if (bd_prog_fail || bd_prog_fail_until_stepdown) return LFS_ERR_IO;
     memcpy(&bd_storage[block * BD_BLOCK_SIZE + off], buffer, size);
     return 0;
 }
@@ -135,6 +136,7 @@ uint8_t SD_StepSpeedDown(void)      /* matches diskio: returns new divider */
     static const uint8_t seq[] = { 4, 8, 16, 16 };
     int i = stepdown_calls < 4 ? stepdown_calls : 3;
     stepdown_calls++;
+    bd_prog_fail_until_stepdown = 0;   /* slower clock cures the glitch */
     return seq[i];
 }
 
@@ -777,6 +779,82 @@ TEST(test_declination_loader)
     CHECK(deg == -999.0f);
 }
 
+/* Occurrences of needle in buf[0..n), NUL bytes treated as ordinary data */
+static int count_in(const char *buf, int n, const char *needle)
+{
+    int k = 0, m = (int)strlen(needle);
+    for (int i = 0; i + m <= n; i++) if (memcmp(buf + i, needle, (size_t)m) == 0) k++;
+    return k;
+}
+
+TEST(test_io_error_retry_keeps_the_row)
+{
+    /* The third consecutive write error steps the bus down and logs it.
+     * That diagnostic used to be formatted into the same static log_buffer
+     * the failing row lived in, so the retry wrote the diagnostic (with the
+     * row's length: stale bytes and a NUL) - the row itself was lost while
+     * the call still returned OK. */
+    wipe_card();
+    Test_SetTick(100000);
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+    CHECK(SD_Card_EnsureLogFile() == SD_CARD_OK);
+    CHECK(SD_Card_LogEvent("baseline row") == SD_CARD_OK);
+    sd_io_err_streak = 0;
+    stepdown_calls = 0;
+
+    /* Long rows until the cache flushes fail twice in a row (recovery held
+     * off by its backoff), then a third failure with recovery allowed. */
+    bd_prog_fail_until_stepdown = 1;
+    char row[200];
+    for (int i = 0; i < 20 && sd_io_err_streak < 2; i++) {
+        last_recovery_ms = HAL_GetTick();
+        snprintf(row, sizeof(row), "ROW%02d-%0140d", i, 0);
+        (void)SD_Card_LogEvent(row);
+    }
+    CHECK(sd_io_err_streak == 2);
+    Test_SetTick(200000);
+    last_recovery_ms = 0;
+    CHECK(SD_Card_LogEvent("CRITICAL-ROW-THAT-MUST-SURVIVE") == SD_CARD_OK);
+    CHECK(stepdown_calls == 1);
+    CHECK(bd_prog_fail_until_stepdown == 0);
+    CHECK(sd_flush() == SD_CARD_OK);
+
+    static char big[16384];
+    int n = read_file(sd_info.current_log_file, big, sizeof(big));
+    CHECK(n > 0);
+    CHECK(memchr(big, '\0', (size_t)n) == NULL);          /* no NUL bytes */
+    CHECK(count_in(big, n, "CRITICAL-ROW-THAT-MUST-SURVIVE") == 1);
+    CHECK(count_in(big, n, "SD bus stepped down") == 1);
+}
+
+TEST(test_failed_sync_counts_and_recovers)
+{
+    /* lfs_file_sync failures were ignored: no error count, no recovery,
+     * and the rows they carried silently vanished. */
+    wipe_card();
+    Test_SetTick(100000);
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+    CHECK(SD_Card_EnsureLogFile() == SD_CARD_OK);
+    CHECK(SD_Card_LogEvent("row before the bad sync") == SD_CARD_OK);
+    uint32_t errs = sd_info.write_errors;
+    last_recovery_ms = 0;
+
+    bd_prog_fail = 1;
+    Test_SetTick(100000 + SD_SYNC_TIME_CAP_MS + 1);   /* force a commit */
+    SD_Card_ServiceSync(1);
+    bd_prog_fail = 0;
+    CHECK(sd_info.write_errors == errs + 1);          /* counted */
+    CHECK(sd_dirty == 1);                             /* still pending */
+
+    /* The handle was re-established: logging carries on */
+    CHECK(SD_Card_LogEvent("row after recovery") == SD_CARD_OK);
+    CHECK(sd_flush() == SD_CARD_OK);
+    static char big[4096];
+    CHECK(read_file(sd_info.current_log_file, big, sizeof(big)) > 0);
+    CHECK(strstr(big, "row after recovery") != NULL);
+    (void)SD_Card_TakeSyncCount();                    /* leave no residue */
+}
+
 TEST(test_io_error_streak_steps_bus_down)
 {
     /* sd_card.c #include'd: drive the streak helper directly. Three write
@@ -891,6 +969,8 @@ int main(void)
     run_test_write_recovers_lost_mount();
     run_test_dirty_card_boot_preserves_history();
     run_test_declination_loader();
+    run_test_io_error_retry_keeps_the_row();
+    run_test_failed_sync_counts_and_recovers();
     run_test_io_error_streak_steps_bus_down();
     run_test_io_stepup_requires_streak_and_cooldown();
     run_test_timestamp_format();

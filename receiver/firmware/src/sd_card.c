@@ -334,7 +334,11 @@ static SD_Card_Status sd_open_new_log_file(char *filename_out, uint32_t max_len)
     }
 
     /* Sync so the header + file existence is durable before any data. */
-    lfs_file_sync(&lfs, &log_file);
+    if (lfs_file_sync(&lfs, &log_file) < 0) {
+        lfs_file_close(&lfs, &log_file);
+        log_file_open = 0;
+        return SD_CARD_ERROR;
+    }
 
     log_file_open = 1;
     strncpy(sd_info.current_log_file, filename, SD_CARD_MAX_FILENAME - 1);
@@ -409,6 +413,23 @@ static uint8_t sd_try_log_recovery(void)
  * electrically safe, and next boot re-runs the ladder fresh anyway. */
 static uint8_t  sd_io_err_streak = 0;
 
+/* Internal diagnostic rows (bus step up/down) go through their own local
+ * buffer: the caller of sd_note_write_err may still hold the entry it is
+ * about to retry in log_buffer, and formatting the diagnostic there
+ * clobbered that entry (the retry then wrote the diagnostic with the
+ * original row's length - stale bytes and a NUL - and the row was lost). */
+static void sd_append_internal(const char *line)
+{
+    if (!log_file_open) return;
+    size_t len = strlen(line);
+    lfs_ssize_t w = lfs_file_write(&lfs, &log_file, line, len);
+    if (w >= 0 && (size_t)w == len) {
+        sd_info.bytes_written += (uint32_t)w;
+        sd_dirty = 1;
+        sd_dirty_rows++;
+    }
+}
+
 static void sd_note_write_ok(void)
 {
     sd_io_err_streak = 0;
@@ -423,11 +444,12 @@ static void sd_note_write_ok(void)
             sd_last_stepdown_ms = now;   /* any ladder change = new quiet window */
             if (after != before && log_file_open) {
                 char ts[16];
+                char msg[96];
                 SD_Card_GetTimestamp(ts, sizeof(ts));
-                snprintf(log_buffer, sizeof(log_buffer),
+                snprintf(msg, sizeof(msg),
                          "%s,EVENT,SD bus stepped up to /%u after %u clean writes\n",
                          ts, (unsigned)after, (unsigned)SD_IO_OK_STEPUP_STREAK);
-                lfs_file_write(&lfs, &log_file, log_buffer, strlen(log_buffer));
+                sd_append_internal(msg);
             }
         }
     }
@@ -441,11 +463,12 @@ static void sd_note_write_err(void)
         uint8_t div = SD_StepSpeedDown();
         sd_last_stepdown_ms = HAL_GetTick();
         char ts[16];
+        char msg[96];
         SD_Card_GetTimestamp(ts, sizeof(ts));
-        snprintf(log_buffer, sizeof(log_buffer),
+        snprintf(msg, sizeof(msg),
                  "%s,ERROR,SD bus stepped down to /%u after %u IO errors\n",
                  ts, (unsigned)div, (unsigned)SD_IO_ERR_STEPDOWN_STREAK);
-        if (log_file_open) lfs_file_write(&lfs, &log_file, log_buffer, strlen(log_buffer));
+        sd_append_internal(msg);
     }
 }
 
@@ -571,10 +594,21 @@ void SD_Card_ServiceSync(uint8_t rf_idle)
         sd_dirty_rows = 0;
         sd_sync_count++;
         uint32_t wstart = HAL_GetTick();
-        lfs_file_sync(&lfs, &log_file);
+        int serr = lfs_file_sync(&lfs, &log_file);
         uint32_t wd = HAL_GetTick() - wstart;
         if (wd > sd_max_write_ms) sd_max_write_ms = wd;
-        if (wd > 500u) sd_note_big_sync(wd);
+        if (serr < 0) {
+            /* The commit failed: the rows it carried are not on the card.
+             * Count it like a write error (feeds the bus-speed reflex),
+             * keep the session dirty, and re-establish the handle now
+             * rather than writing on into a poisoned one. */
+            sd_info.write_errors++;
+            sd_note_write_err();
+            sd_dirty = 1;
+            (void)sd_try_log_recovery();
+        } else if (wd > 500u) {
+            sd_note_big_sync(wd);
+        }
     }
 }
 
