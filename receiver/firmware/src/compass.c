@@ -57,28 +57,36 @@
  * mounting term was measured for the old breadboard IMU placement - VERIFY
  * on the new PCB: point North, compare against a phone compass).
  * ----------------------------------------------------------------------- */
-#define COMPASS_MAGNETIC_DECLINATION_DEG   8.5f
+#define COMPASS_MAGNETIC_DECLINATION_DEG   7.5f  /* Denver, WMM2025 @ 2027.0 (grid below) */
 #define COMPASS_MOUNTING_OFFSET_DEG         90.0f  /* Sensor +X vs antenna direction (bench-derived
                                                     * for BNO055; re-derive for the BNO085 mount). */
 
 /* -----------------------------------------------------------------------
- * Magnetic declination by location (~2025, continental-US grid)
- * (unchanged - pure geography, independent of IMU silicon)
+ * Magnetic declination by location: continental-US grid, degrees east.
+ * WMM2025 (NOAA/BGS) at epoch 2027.0, sea level, 5 deg spacing - from
+ * pygeomag 1.1.0: GeoMag().calculate(glat, glon, alt=0, time=2027.0).d.
+ * Bilinear interpolation stays within 0.13 deg of the model over the grid
+ * (0.5 deg sampling); the field drifts up to ~0.1 deg/yr - regenerate for
+ * WMM2030. The previous table was decades stale: 1.5 deg high at Denver
+ * and up to ~6 deg off in the Midwest and East, a bias the arrow carried.
  * ----------------------------------------------------------------------- */
-static const float declin_grid[5][13] = {
+#define DECLIN_GRID_ROWS  6
+#define DECLIN_GRID_COLS 13
+static const float declin_grid[DECLIN_GRID_ROWS][DECLIN_GRID_COLS] = {
   /* lon:       -125    -120    -115    -110    -105    -100     -95     -90     -85     -80     -75     -70     -65 */
-  /* 25N */ {  +12.6f, +11.6f, +10.4f,  +9.2f,  +7.9f,  +6.5f,  +4.9f,  +3.1f,  +1.1f,  -1.2f,  -3.8f,  -6.9f, -10.3f },
-  /* 30N */ {  +12.9f, +12.0f, +10.8f,  +9.6f,  +8.2f,  +6.6f,  +5.0f,  +2.9f,  +0.6f,  -2.0f,  -5.1f,  -8.7f, -12.4f },
-  /* 35N */ {  +13.5f, +12.6f, +11.4f, +10.1f,  +8.6f,  +6.9f,  +5.0f,  +2.8f,  +0.4f,  -2.5f,  -5.8f,  -9.5f, -13.4f },
-  /* 40N */ {  +14.4f, +13.5f, +12.2f, +10.8f,  +9.1f,  +7.2f,  +5.0f,  +2.6f,   0.0f,  -3.2f,  -6.8f, -10.7f, -14.8f },
-  /* 45N */ {  +15.6f, +14.7f, +13.3f, +11.5f,  +9.5f,  +7.3f,  +4.9f,  +2.2f,  -0.7f,  -4.0f,  -7.8f, -12.0f, -16.3f },
+  /* 25N */ {  +10.6f, +10.0f,  +9.1f,  +7.9f,  +6.3f,  +4.2f,  +1.6f,  -1.3f,  -4.4f,  -7.4f, -10.2f, -12.5f, -14.1f },
+  /* 30N */ {  +11.5f, +10.9f,  +9.9f,  +8.5f,  +6.6f,  +4.3f,  +1.5f,  -1.7f,  -4.9f,  -8.0f, -10.7f, -12.8f, -14.2f },
+  /* 35N */ {  +12.6f, +11.8f, +10.7f,  +9.1f,  +7.0f,  +4.4f,  +1.4f,  -2.0f,  -5.4f,  -8.5f, -11.2f, -13.2f, -14.5f },
+  /* 40N */ {  +13.6f, +12.8f, +11.6f,  +9.8f,  +7.5f,  +4.6f,  +1.3f,  -2.3f,  -5.9f,  -9.2f, -11.9f, -13.9f, -15.1f },
+  /* 45N */ {  +14.7f, +13.8f, +12.5f, +10.5f,  +8.0f,  +4.8f,  +1.2f,  -2.7f,  -6.5f, -10.0f, -12.8f, -14.8f, -16.0f },
+  /* 50N */ {  +15.8f, +14.9f, +13.4f, +11.3f,  +8.4f,  +4.9f,  +0.9f,  -3.4f,  -7.5f, -11.2f, -14.1f, -16.1f, -17.3f },
 };
 #define DECLIN_GRID_LON_MIN  (-125.0f)
 #define DECLIN_GRID_LON_STEP   (5.0f)
 #define DECLIN_GRID_LON_MAX   (-65.0f)
 #define DECLIN_GRID_LAT_MIN    (25.0f)
 #define DECLIN_GRID_LAT_STEP    (5.0f)
-#define DECLIN_GRID_LAT_MAX    (45.0f)
+#define DECLIN_GRID_LAT_MAX    (50.0f)
 
 float Compass_DeclinationFromLocation(float lat_deg, float lon_deg)
 {
@@ -89,8 +97,8 @@ float Compass_DeclinationFromLocation(float lat_deg, float lon_deg)
 
   float fx = (lon_deg - DECLIN_GRID_LON_MIN) / DECLIN_GRID_LON_STEP;
   float fy = (lat_deg - DECLIN_GRID_LAT_MIN) / DECLIN_GRID_LAT_STEP;
-  int x0 = (int)fx; if (x0 > 11) x0 = 11;         /* bilinear neighborhood */
-  int y0 = (int)fy; if (y0 > 3)  y0 = 3;
+  int x0 = (int)fx; if (x0 > DECLIN_GRID_COLS - 2) x0 = DECLIN_GRID_COLS - 2;
+  int y0 = (int)fy; if (y0 > DECLIN_GRID_ROWS - 2) y0 = DECLIN_GRID_ROWS - 2;
   float tx = fx - (float)x0;
   float ty = fy - (float)y0;
   const float a = declin_grid[y0  ][x0],  b = declin_grid[y0  ][x0+1];

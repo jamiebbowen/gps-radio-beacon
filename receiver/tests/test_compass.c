@@ -389,8 +389,8 @@ TEST(test_init_success_default_address)
     CHECK(compass_debug.active_addr == 0x28);
     CHECK(quat_conv_locked == COMPASS_BNO085_DEFAULT_CONV);
     CHECK(Compass_GetFoundDeviceCount() >= 1);
-    /* declination 8.5 + mounting 90.0 */
-    CHECK_NEAR(heading_offset, 98.5, 0.01);
+    /* declination 7.5 + mounting 90.0 */
+    CHECK_NEAR(heading_offset, 97.5, 0.01);
     CHECK(Compass_GetRvSampleCount() >= 1);
 }
 
@@ -471,10 +471,10 @@ TEST(test_update_heading_offset_and_wrap)
     Compass_Data d = {0};
 
     /* ENU conv 5: raw heading = 90 - yaw.  Raw 300 deg = yaw 150 deg:
-     * quat w=cos(75), z=sin(75).  300 + 98.5 offset -> wraps to 38.5 */
+     * quat w=cos(75), z=sin(75).  300 + 97.5 offset -> wraps to 37.5 */
     set_quat(0.2588f, 0.0f, 0.0f, 0.9659f);
     CHECK(Compass_Update(&d) == COMPASS_OK);
-    CHECK_NEAR(d.heading, 38.5, 1.5);
+    CHECK_NEAR(d.heading, 37.5, 1.5);
     CHECK_NEAR(d.roll, 0.0, 1.0);
     CHECK_NEAR(d.pitch, 0.0, 1.0);
 
@@ -485,14 +485,14 @@ TEST(test_update_heading_offset_and_wrap)
     CHECK(Compass_Update(&d) == COMPASS_OK);
     CHECK_NEAR(d.heading, 170.0, 1.5);
 
-    heading_offset = 98.5f;            /* restore */
+    heading_offset = 97.5f;            /* restore */
 }
 
 TEST(test_set_declination_overrides_site)
 {
     fresh_init();
-    /* Boot default: Denver declination 8.5 E + mounting 90 = 98.5 total */
-    CHECK_NEAR(heading_offset, 98.5, 0.01);
+    /* Boot default: Denver declination 7.5 E + mounting 90 = 97.5 total */
+    CHECK_NEAR(heading_offset, 97.5, 0.01);
 
     /* New site via SD DECLIN.TXT path: e.g. Nevada 11.9 E -> total 101.9 */
     Compass_SetDeclination(11.9f);
@@ -503,44 +503,46 @@ TEST(test_set_declination_overrides_site)
     CHECK(Compass_Update(&d) == COMPASS_OK);
     CHECK_NEAR(d.heading, 41.9, 1.5);   /* 300 + 101.9 -> wraps */
 
-    Compass_SetDeclination(8.5f);        /* restore Denver */
-    CHECK_NEAR(heading_offset, 98.5, 0.01);
+    Compass_SetDeclination(7.5f);        /* restore Denver */
+    CHECK_NEAR(heading_offset, 97.5, 0.01);
 }
 
 TEST(test_location_table_and_precedence)
 {
     fresh_init();
-    /* Denver neighborhood (39.89N -105.1W) -> bilinear grid ~= +8.5 E */
+    /* The site table against WMM2025 (NOAA/BGS) at epoch 2027.0: the
+     * arrow carries any error here as a bearing bias. The old table was
+     * 1.5 deg off at Denver and ~5 deg in the Midwest and East. */
     float decl = Compass_DeclinationFromLocation(39.89f, -105.1f);
-    CHECK(decl > 8.0f && decl < 9.2f);
-
-    /* Mid-Nevada / Reno area (39.5N -119.8W) -> about +13.4 */
+    CHECK_NEAR(decl, 7.55, 0.3);                     /* Denver area */
     decl = Compass_DeclinationFromLocation(39.5f, -119.8f);
-    CHECK(decl > 12.8f && decl < 14.2f);
-
-    /* South Texas (29.4N -98.5W) interpolates to ~ +5.5 E */
+    CHECK_NEAR(decl, 12.69, 0.3);                    /* Reno */
     decl = Compass_DeclinationFromLocation(29.4f, -98.5f);
-    CHECK(decl > 4.2f && decl < 6.6f);
+    CHECK_NEAR(decl, 3.46, 0.3);                     /* San Antonio */
+    decl = Compass_DeclinationFromLocation(39.77f, -86.16f);
+    CHECK_NEAR(decl, -5.03, 0.3);                    /* Indianapolis */
+    decl = Compass_DeclinationFromLocation(39.95f, -75.17f);
+    CHECK_NEAR(decl, -11.80, 0.3);                   /* Philadelphia */
 
     /* Edge clamp: outside-grid points saturate at the corner value. */
     decl = Compass_DeclinationFromLocation(50.0f, -130.0f);
-    CHECK(decl == declin_grid[4][0]);     /* NW corner: +15.6 */
+    CHECK(decl == declin_grid[DECLIN_GRID_ROWS - 1][0]);   /* NW corner: +15.8 */
 
     /* Cross-state session: first credible fix overrides the Denver default
      * once, and later GPS updates do NOT pivot the arrow mid-flight. */
     Compass_UpdateLocation(39.89f, -105.1f);   /* home base (Denver) */
-    CHECK_NEAR(heading_offset, 98.5f + (Compass_DeclinationFromLocation(39.89f, -105.1f) - 8.5f), 0.01);
+    CHECK_NEAR(heading_offset, 97.5f + (Compass_DeclinationFromLocation(39.89f, -105.1f) - 7.5f), 0.01);
     Compass_UpdateLocation(39.5f, -119.8f);   /* rocket flew to NV */
-    CHECK_NEAR(heading_offset, 98.5f + (Compass_DeclinationFromLocation(39.89f, -105.1f) - 8.5f), 0.01);
+    CHECK_NEAR(heading_offset, 97.5f + (Compass_DeclinationFromLocation(39.89f, -105.1f) - 7.5f), 0.01);
 
-    Compass_SetDeclination(8.5f);             /* restore */
+    Compass_SetDeclination(7.5f);             /* restore */
 }
 
 TEST(test_location_update_rejects_impossible_fix)
 {
     fresh_init();
     CHECK(Compass_UpdateLocation(0.0f, 0.0f) != COMPASS_OK);
-    CHECK_NEAR(heading_offset, 98.5f, 0.01);  /* Denver default intact */
+    CHECK_NEAR(heading_offset, 97.5f, 0.01);  /* Denver default intact */
 }
 
 TEST(test_update_raw_sensor_stream)
