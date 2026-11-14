@@ -48,29 +48,40 @@ The watchdog monitors two conditions:
 
 ### Recovery Actions
 
-When a problem is detected:
+Each detection is one recovery attempt (`gps_recover()` in
+`transmitter/firmware/gps.cpp`):
 
 ```
 [GPS] ⚠️  Watchdog: No UART data for 30s, attempting recovery...
-```
-
-**Step 1: Send Reset Commands**
-- u-blox PUBX poll request
-- u-blox controlled software reset (cold start) - deliberately NEVER the
-  factory-defaults variant: that reverts UART1 to 9600 baud and we talk
-  at 115200, permanently deafening the link the recovery meant to restore
-- Wait for GPS to restart
-
-**Step 2: Reinitialize GPS**
-- Reconfigure NMEA messages
-- Reset UART buffers
-- Restart sentence parsing
-
-**Step 3: Monitor Result**
-```
+[GPS] Recovery: UBX-CFG-RST hot start
 [GPS] Recovery attempt complete
-[GPS] Bytes rcvd: 125 | Valid: 1  ✅ Success!
 ```
+
+**On the ground (TURN_ON, PRE_LAUNCH, BATTERY_SAVE): an escalating reset.**
+
+| Attempt | UBX-CFG-RST navBbrMask | What survives |
+|---------|------------------------|---------------|
+| 1 | `0x0000` hot start | everything (ephemeris, almanac, position, time) |
+| 2 | `0x0001` warm start | almanac, position, time - ephemeris dropped |
+| 3 | `0xFFFF` cold start | nothing - full sky search |
+
+All three use resetMode `0x02`: a controlled software reset of the GNSS
+engine only. The UART and its saved configuration stay up, so recovery can
+never revert UART1 to 9600 baud and deafen the 115200 link it is trying to
+restore. After the reset the watchdog waits 500 ms and re-runs `gps_init()`
+(baud self-heal, message set, 1 Hz rate, airborne dynamic model).
+
+**In flight (LAUNCH, POST_LAUNCH): settings re-send only.** A reset would
+throw away the fix exactly when the track matters most, so the watchdog
+only re-runs `gps_init()` - enough to fix a lost baud or message
+configuration. The attempt still counts toward the limit below, so in-flight
+pacing is unchanged. The main loop reports the flight state every pass
+(`gps_set_in_flight()`); when the flight ends the ladder starts again from
+the hot start.
+
+Before this, the watchdog sent `$PUBX,04,0,0,2,0,0` believing it was a cold
+start. u-blox documents PUBX,04 as the TIME message, so "recovery" never
+reset anything - it only re-sent the settings.
 
 ### Safety Features
 
@@ -131,22 +142,31 @@ T+10.5m: [GPS] ⚠️  Watchdog: No UART data for 30s, attempting recovery... (A
 
 ## U-blox Commands Used
 
-### PUBX,00 - Poll Request
-```
-$PUBX,00*33\r\n
-```
-- Forces GPS to output current position
-- Verifies UART communication
+### UBX-CFG-RST (class 0x06, id 0x04) - Receiver Reset
 
-### PUBX,04 - Reset Command
+Payload: `navBbrMask` (U2, little-endian), `resetMode` (U1), reserved (U1).
+The complete frames the watchdog sends (sync, class, id, length 4, payload,
+Fletcher checksum):
+
 ```
-$PUBX,04,0,0,0,0,0*10\r\n    // Factory reset (warm start)
-$PUBX,04,0,0,2,0,0*12\r\n    // Cold start (clear ephemeris)
+B5 62 06 04 04 00 00 00 02 00 10 68   hot start  (navBbrMask 0x0000)
+B5 62 06 04 04 00 01 00 02 00 11 6C   warm start (navBbrMask 0x0001)
+B5 62 06 04 04 00 FF FF 02 00 0E 61   cold start (navBbrMask 0xFFFF)
 ```
 
-**Reset Types:**
-- **Warm start:** Keeps satellite ephemeris, faster acquisition
-- **Cold start:** Clears everything, forces full satellite search
+`test_gps` pins these bytes, the escalation order and the in-flight
+suppression.
+
+### PUBX,41 - Port Configuration
+
+`$PUBX,41,1,0007,0003,115200,0` (UART1, UBX+NMEA+RTCM in, UBX+NMEA out,
+115200 baud) is sent at 9600 and again at 115200 on every `gps_init()`, so a
+module that lost its saved baud comes back.
+
+### UBX-CFG-VALSET (class 0x06, id 0x8A) - Messages, Rate, Dynamic Model
+
+GGA/RMC/GSV on, GSA/GLL/VTG off, 1 Hz measurement rate, and the airborne
+<4g dynamic model, all in the RAM layer (re-sent after every reset).
 
 ## Configuration
 
