@@ -160,42 +160,42 @@ void DisplayMode_CompassHeading(Compass_Data *compass_data, float *compass_headi
   if (!UpdateCompassData(compass_data, compass_heading)) return;
 
   /* Row 0: heading; trailing * = value predates a comm failure (stale) */
-  sprintf(buffer, "BNO085 Hdg:%3.0fd%s", compass_data->heading,
+  snprintf(buffer, sizeof(buffer), "BNO085 Hdg:%3.0fd%s", compass_data->heading,
           compass_data->heading_stale ? "*" : "");
   Display_DrawTextRowCol(0, 0, buffer);
 
   /* Row 1: pitch and roll */
-  sprintf(buffer, "P:%5.1fd R:%5.1fd", compass_data->pitch, compass_data->roll);
+  snprintf(buffer, sizeof(buffer), "P:%5.1fd R:%5.1fd", compass_data->pitch, compass_data->roll);
   Display_DrawTextRowCol(1, 0, buffer);
 
   /* Row 2: calibration status (per-sensor SH-2 accuracy, 0-3 each). */
   uint8_t sys_cal, gyro_cal, accel_cal, mag_cal;
   Compass_GetCalibrationStatus(&sys_cal, &gyro_cal, &accel_cal, &mag_cal);
-  sprintf(buffer, "Cal S%d G%d A%d M%d", sys_cal, gyro_cal, accel_cal, mag_cal);
+  snprintf(buffer, sizeof(buffer), "Cal S%d G%d A%d M%d", sys_cal, gyro_cal, accel_cal, mag_cal);
   Display_DrawTextRowCol(2, 0, buffer);
 
   /* Row 3-5: raw sensor values (int16_t counts). No colon after the axis
    * letter: three full-range int16s ("-32768") plus two commas is 20 chars,
    * so the 1-char prefix makes worst case exactly the 21-column width. */
-  sprintf(buffer, "A%d,%d,%d",
+  snprintf(buffer, sizeof(buffer), "A%d,%d,%d",
           compass_data->accel_x, compass_data->accel_y, compass_data->accel_z);
   Display_DrawTextRowCol(3, 0, buffer);
 
-  sprintf(buffer, "G%d,%d,%d",
+  snprintf(buffer, sizeof(buffer), "G%d,%d,%d",
           compass_data->gyro_x, compass_data->gyro_y, compass_data->gyro_z);
   Display_DrawTextRowCol(4, 0, buffer);
 
-  sprintf(buffer, "M%d,%d,%d",
+  snprintf(buffer, sizeof(buffer), "M%d,%d,%d",
           compass_data->mag_x, compass_data->mag_y, compass_data->mag_z);
   Display_DrawTextRowCol(5, 0, buffer);
 
   /* Row 6: fused-stream state and last latched error code */
   uint8_t sys_stat, self_test, sys_err;
   Compass_GetSystemStatus(&sys_stat, &self_test, &sys_err);
-  sprintf(buffer, "St:%02X Re:%02X Er:%02X", sys_stat, self_test, sys_err);
+  snprintf(buffer, sizeof(buffer), "St:%02X Re:%02X Er:%02X", sys_stat, self_test, sys_err);
   Display_DrawTextRowCol(6, 0, buffer);
 
   /* Row 7: SH-2 fusion sample count (no op-mode/temp registers exist) */
-  sprintf(buffer, "RV#%lu", (unsigned long)Compass_GetRvSampleCount());
+  snprintf(buffer, sizeof(buffer), "RV#%lu", (unsigned long)Compass_GetRvSampleCount());
   Display_DrawTextRowCol(7, 0, buffer);
 }
