@@ -448,7 +448,7 @@ int main(void)
     uint32_t imu = type_count(PACKET_TYPE_IMU) - imu0;
     uint32_t mxs = type_count(PACKET_TYPE_MAXIMA) - mx0;
     CHECK(fus == 20);                             /* 1500 ms cadence exactly */
-    CHECK((imu == 15 || imu == 16));              /* 2 s paced inertial stream */
+    CHECK((imu == 5 || imu == 6));                /* 6 s paced inertial stream */
     /* The flash copy is the packet that went on the air, field for field
      * (it used to be re-derived with different, wrapping conversions). */
     CHECK(have_last_imu == 1);
@@ -464,7 +464,7 @@ int main(void)
               flog_imu_last[5] == onair.gyro_z_dds &&
               flog_imu_last[6] == onair.peak_accel_mg);
     }
-    CHECK(mxs >= 5 && mxs <= 7);                  /* 5 s maxima recap cadence */
+    CHECK(mxs >= 1 && mxs <= 3);                  /* 15 s maxima recap cadence */
     CHECK(flog_gps_calls_value() >= 14);          /* GPS rows landing in the flash log */
     /* Raw GPS position packets stop on air - fused+IMU carry the invade */
 
