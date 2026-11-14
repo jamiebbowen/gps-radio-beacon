@@ -32,7 +32,7 @@ Production values (`TESTING_MODE 0` in `include/config.h`; intervals live in
 | PRE_LAUNCH | after TURN_ON | heartbeat every 60 s; a position audit copy every 600 s |
 | LAUNCH | launch confirmed (IMU, or GPS-altitude fallback) | continuous TX: inertial trace, fused track every 1.5 s, launch T0 |
 | POST_LAUNCH | 1 s after launch | fused track every 1.5 s, inertial trace every 6 s (1 s during an anomaly), maxima recap every 15 s, flight events - ~87% of the radio's airtime |
-| BATTERY_SAVE | landing detected, or 600 s after POST_LAUNCH began | position every 60 s, fused track every 5 s; with no usable fix a heartbeat every 5 s for the first 30 min (walk-in, RSSI direction finding), then every 30 s |
+| BATTERY_SAVE | landing detected, or 600 s after POST_LAUNCH began | position every 60 s, fused track every 30 s (none while the fix is stale); with no usable fix a heartbeat every 5 s for the first 30 min (walk-in, RSSI direction finding), then every 30 s |
 
 The callsign (FCC ID) airs at boot and every 300 s whenever the beacon is
 not in continuous TX.

@@ -30,6 +30,12 @@ uint32_t flight_cadence_beacon_interval_s(beacon_state_t state);
  * stationary fused packet, and the PA quiet protects the GPS front end). */
 uint32_t flight_cadence_fused_interval_ms(beacon_state_t state);
 
+/* Whether a due fused slot may go on the air. 0 in BATTERY_SAVE while the
+ * EKF is dead-reckoning: a coast position of a beacon on the ground means
+ * nothing (the receiver holds the last real fix for it), and each packet
+ * keys the PA ~1 s. In flight the DR stream still goes out. */
+int flight_cadence_fused_allowed(beacon_state_t state, int dead_reckoning);
+
 /* Seconds between heartbeat packets in `state` (also the floor for the
  * no-fix heartbeat rate limiter in flight/ground states). s_in_state is
  * the time spent in `state`; only BATTERY_SAVE uses it (the ramp in

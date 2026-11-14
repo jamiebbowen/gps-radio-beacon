@@ -216,13 +216,13 @@
  * computed airtime; drift is a red test. */
 #define FUSED_TX_INTERVAL_MS            1500
 
-/* Fused-packet cadence in every non-flight state (pad idle, post-landing
- * battery-save). Was 1 Hz: at full PA drive that ~170 ms-every-second
- * burst pattern desenses GPS front ends nearby (the beacon's own included)
- * - field logs showed the beacon GPS needing three watchdog recovery rounds
- * before its first fix. Every 10 s cuts pad duty from ~17% to under 2%
- * while still refreshing the operator's display healthily. */
-#define FUSED_TX_INTERVAL_IDLE_MS       5000   /* range-testing dense mode */
+/* Fused-packet cadence after the flight (BATTERY_SAVE; the pad states run
+ * no fused stream at all). The raw GPS position already lands every 60 s;
+ * a fused copy every 30 s keeps the walk-in display moving for ~3% PA duty.
+ * (A 5 s range-testing setting stayed in here: ~20% duty for the whole
+ * recovery.) While the fix is stale no fused packet goes out at all - see
+ * flight_cadence_fused_allowed(). */
+#define FUSED_TX_INTERVAL_IDLE_MS       30000
 
 #if TESTING_MODE
     // Testing Configuration - Fast intervals for development/testing
