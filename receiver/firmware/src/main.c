@@ -947,10 +947,10 @@ int main(void)
         SD_Card_EnsureLogFile();
         SD_Card_LogEvent(b_msg);
         bound_logged = bnd;
-        /* Probe the brand-new bidirectional link at bond time: sends the
-         * beacon a one-shot PING; the beacon's ACK lands on-card within
-         * a second on v2 radios, gracefully silent on v1. */
-        RF_Receiver_SendCommand(CMD_PING, 0);
+        /* Probe the brand-new bidirectional link at bond time: queue a
+         * PING (long preamble, up to 3 tries; see ServiceCommands below).
+         * Gracefully silent on v1 radios. */
+        RF_Receiver_RequestPing();
       }
       uint32_t foreign = RF_Receiver_GetForeignDrops();
       if (foreign != foreign_logged &&
@@ -1138,19 +1138,40 @@ int main(void)
       }
     }
 
-    /* Two-way channel answers: an ACK land is one of the few beacon-still-
-     * alive signals we get in the flight window. */
-    if (rf_initialized && sd_card_ok && RF_Receiver_ConsumeAckFlag()) {
-      AckPacket_t ack; uint32_t age;
-      if (RF_Receiver_GetLastAck(&ack, &age)) {
-        char a_msg[64];
-        snprintf(a_msg, sizeof(a_msg),
-                 "CMD ACK cmd=0x%02X seq=%u echo=%u rssi=%d snr=%d",
-                 (unsigned)ack.cmd_code,
-                 (unsigned)((ack.seq_hi << 8) | ack.seq_lo),
-                 (unsigned)ack.echo, (int)0, (int)0);
+    /* Two-way command uplink: drive the PING retry state machine and put
+     * each step on the card - an ACK is one of the few beacon-still-alive
+     * signals we get. */
+    if (rf_initialized) {
+      RF_Receiver_ServiceCommands();
+      RF_CmdResult_t cr;
+      if (RF_Receiver_TakeCommandResult(&cr) && sd_card_ok) {
+        char c_msg[80];
+        switch (cr.event) {
+          case RF_CMD_EV_SENT:
+            snprintf(c_msg, sizeof(c_msg), "CMD 0x%02X sent seq=%u try=%u",
+                     (unsigned)cr.cmd, (unsigned)cr.seq, (unsigned)cr.attempt);
+            break;
+          case RF_CMD_EV_ACK:
+            snprintf(c_msg, sizeof(c_msg),
+                     "CMD ACK cmd=0x%02X seq=%u echo=%u rssi=%d snr=%d try=%u",
+                     (unsigned)cr.cmd, (unsigned)cr.seq, (unsigned)cr.echo,
+                     (int)cr.rssi, (int)cr.snr, (unsigned)cr.attempt);
+            break;
+          case RF_CMD_EV_NO_ACK:
+            snprintf(c_msg, sizeof(c_msg), "CMD 0x%02X seq=%u no ACK after %u tries",
+                     (unsigned)cr.cmd, (unsigned)cr.seq, (unsigned)cr.attempt);
+            break;
+          case RF_CMD_EV_CANCELLED:
+            snprintf(c_msg, sizeof(c_msg), "CMD 0x%02X seq=%u cancelled (binding lost)",
+                     (unsigned)cr.cmd, (unsigned)cr.seq);
+            break;
+          default:
+            snprintf(c_msg, sizeof(c_msg), "CMD 0x%02X suppressed (beacon airborne)",
+                     (unsigned)cr.cmd);
+            break;
+        }
         SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(a_msg);
+        SD_Card_LogEvent(c_msg);
       }
     }
 

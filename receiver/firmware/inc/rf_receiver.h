@@ -98,13 +98,34 @@ uint8_t RF_Receiver_GetFlightEvent(FlightEventPacket_t *evt);
 uint8_t RF_Receiver_GetMaxima(MaximaPacket_t *mx);
 uint8_t RF_Receiver_GetHello(HelloPacket_t *hello);
 
-/* Two-way scaffolding (v2 board radios; ignored on v1): operator triggers
- * a PING from a test-mode button press; the received one-shot ACK state is
- * readable to the caller and cleared with ConsumeAckFlag. Packets dropped
- * to foreign beacons never mark the latch. */
-uint8_t RF_Receiver_SendCommand(uint8_t cmd_code, uint8_t param);
-uint8_t RF_Receiver_GetLastAck(AckPacket_t *ack, uint32_t *age_ms);
-uint8_t RF_Receiver_ConsumeAckFlag(void);
+/* Two-way command uplink. RequestPing() queues a PING to the bound
+ * beacon; ServiceCommands() (every main loop) sends it with the long
+ * command preamble, waits RF_CMD_ACK_WAIT_MS for the matching ACK and
+ * retries up to RF_CMD_MAX_ATTEMPTS times. Never sent once in-flight
+ * contact has been seen this session. Each step is reported once through
+ * TakeCommandResult() for the SD log. */
+#define RF_CMD_MAX_ATTEMPTS  3
+#define RF_CMD_ACK_WAIT_MS   2500u
+typedef enum {
+  RF_CMD_EV_NONE = 0,
+  RF_CMD_EV_SENT,         /* attempt transmitted                      */
+  RF_CMD_EV_ACK,          /* matching ACK received                    */
+  RF_CMD_EV_NO_ACK,       /* gave up after RF_CMD_MAX_ATTEMPTS        */
+  RF_CMD_EV_SUPPRESSED,   /* not sent: the beacon is (or was) flying  */
+  RF_CMD_EV_CANCELLED     /* binding lost (scan / channel change)     */
+} RF_CmdEvent_t;
+typedef struct {
+  uint8_t  event;         /* RF_CmdEvent_t                            */
+  uint8_t  cmd;
+  uint16_t seq;
+  uint8_t  attempt;       /* 1-based attempt number                   */
+  uint8_t  echo;          /* ACK echo byte (RF_CMD_EV_ACK)            */
+  int16_t  rssi;          /* ACK RSSI/SNR as received (RF_CMD_EV_ACK) */
+  int8_t   snr;
+} RF_CmdResult_t;
+void    RF_Receiver_RequestPing(void);
+void    RF_Receiver_ServiceCommands(void);
+uint8_t RF_Receiver_TakeCommandResult(RF_CmdResult_t *out);
 
 /* Ambient noise-floor monitor. The floor is the 25th percentile of ~1 Hz
  * GetRssiInst samples taken while the radio idles in continuous RX; the

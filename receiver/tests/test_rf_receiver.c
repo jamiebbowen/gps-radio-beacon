@@ -58,13 +58,16 @@ uint8_t LoRa_GetDeviceStatus(uint8_t *status)
 }
 uint8_t LoRa_GetIRQStatus(uint16_t *irq) { *irq = fake_irq_value; return LORA_OK; }
 
-/* Two-way scaffolding: captures what RF_Receiver_SendCommand transmits */
+/* Two-way uplink: captures what the command scheduler transmits */
 static uint32_t lora_tx_calls = 0;
 static uint8_t  lora_tx_buf[32];
 static size_t   lora_tx_len = 0;
-uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length)
+static uint16_t lora_tx_preamble = 0;
+uint8_t LoRa_TransmitPreamble(const uint8_t *data, uint8_t length,
+                              uint16_t preamble_symbols)
 {
     lora_tx_calls++;
+    lora_tx_preamble = preamble_symbols;
     if (length <= sizeof(lora_tx_buf)) {
         memcpy(lora_tx_buf, data, length);
         lora_tx_len = length;
@@ -956,19 +959,112 @@ TEST(test_two_way_ack_lifecycle)
     fake_pkt.snr = 10; fake_pkt_pending = 1;
     run_for(250, 250);
 
-    CHECK(RF_Receiver_ConsumeAckFlag() == 1);
-    AckPacket_t out; uint32_t age;
-    CHECK(RF_Receiver_GetLastAck(&out, &age) == 1);
-    CHECK(out.cmd_code == CMD_PING && out.echo == 0x77);
-    CHECK(RF_Receiver_ConsumeAckFlag() == 0);
+    /* An ACK with no command in flight is ignored (RequestPing below
+     * starts clean: only ACKs arriving after it count). */
+    flight_contact_latch = 0;
+    RF_CmdResult_t cr;
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 0);
 
-    /* SendCommand emits exactly one 6-byte wire frame */
+    /* PING: one 6-byte frame with the long command preamble */
     lora_tx_calls = 0; lora_tx_len = 0;
-    CHECK(RF_Receiver_SendCommand(CMD_TUNE_NEXT_CH, 0) == 1);
+    RF_Receiver_RequestPing();
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_SENT && cr.attempt == 1);
     CHECK(lora_tx_calls == 1);
     CHECK(lora_tx_len == CMD_ACK_PACKET_SIZE);
     CHECK(lora_tx_buf[0] == PACKET_TYPE_CMD);
-    CHECK(lora_tx_buf[2] == CMD_TUNE_NEXT_CH);
+    CHECK(lora_tx_buf[1] == OUR_ROCKET_ID);
+    CHECK(lora_tx_buf[2] == CMD_PING);
+    CHECK(lora_tx_preamble == LORA_CMD_PREAMBLE_SYMBOLS);
+    uint16_t seq = (uint16_t)((lora_tx_buf[3] << 8) | lora_tx_buf[4]);
+
+    /* The beacon's ACK (matching cmd + seq) completes it, with the ACK's
+     * own RSSI/SNR - the old log row always printed rssi=0 snr=0 */
+    ack_in.seq_hi = (uint8_t)(seq >> 8);
+    ack_in.seq_lo = (uint8_t)(seq & 0xFF);
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    memcpy(fake_pkt.data, &ack_in, sizeof(ack_in));
+    fake_pkt.length = CMD_ACK_PACKET_SIZE; fake_pkt.rssi = -40;
+    fake_pkt.snr = 10; fake_pkt_pending = 1;
+    run_for(250, 250);
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_ACK && cr.cmd == CMD_PING && cr.seq == seq);
+    CHECK(cr.echo == 0x77 && cr.rssi == -40 && cr.snr == 10);
+    RF_Receiver_ServiceCommands();               /* done: idle */
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 0);
+    CHECK(lora_tx_calls == 1);
+}
+
+TEST(test_two_way_ping_retries_then_gives_up)
+{
+    /* No ACK: retried after each RF_CMD_ACK_WAIT_MS window, then given up.
+     * An ACK for some other sequence number does not count. */
+    flight_contact_latch = 0;
+    RF_CmdResult_t cr;
+    lora_tx_calls = 0;
+    RF_Receiver_RequestPing();
+    for (int k = 1; k <= RF_CMD_MAX_ATTEMPTS; k++) {
+        RF_Receiver_ServiceCommands();
+        CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+        CHECK(cr.event == RF_CMD_EV_SENT && cr.attempt == k);
+        if (k == 1) {
+            AckPacket_t stale = {
+                .packet_type = PACKET_TYPE_ACK, .rocket_id = OUR_ROCKET_ID,
+                .cmd_code = CMD_PING, .seq_hi = 0xEE, .seq_lo = 0xEE, .echo = 1,
+            };
+            memset(&fake_pkt, 0, sizeof(fake_pkt));
+            memcpy(fake_pkt.data, &stale, sizeof(stale));
+            fake_pkt.length = CMD_ACK_PACKET_SIZE; fake_pkt_pending = 1;
+            run_for(250, 250);
+            RF_Receiver_ServiceCommands();
+            CHECK(RF_Receiver_TakeCommandResult(&cr) == 0);   /* ignored */
+        }
+        run_for(RF_CMD_ACK_WAIT_MS + 250, 250);
+    }
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_NO_ACK && cr.attempt == RF_CMD_MAX_ATTEMPTS);
+    CHECK(lora_tx_calls == RF_CMD_MAX_ATTEMPTS);
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 0);
+}
+
+TEST(test_two_way_ping_cancelled_when_binding_lost)
+{
+    /* An operator scan / channel change mid-PING drops the binding: the
+     * remaining attempts are cancelled, not sent to nobody. */
+    RF_CmdResult_t cr;
+    flight_contact_latch = 0;
+    uint8_t saved = bound_rocket_id;
+    lora_tx_calls = 0;
+    RF_Receiver_RequestPing();
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_SENT);
+    bound_rocket_id = RF_ROCKET_UNBOUND;
+    run_for(RF_CMD_ACK_WAIT_MS + 250, 250);
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_CANCELLED);
+    CHECK(lora_tx_calls == 1);                   /* no further attempts */
+    bound_rocket_id = saved;
+}
+
+TEST(test_two_way_ping_suppressed_while_flying)
+{
+    /* A flying beacon doesn't listen, and each attempt would make this
+     * receiver deaf for ~1.8 s: never transmit once flight was seen. */
+    RF_CmdResult_t cr;
+    lora_tx_calls = 0;
+    flight_contact_latch = 1;
+    RF_Receiver_RequestPing();
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_SUPPRESSED);
+    CHECK(lora_tx_calls == 0);
+    flight_contact_latch = 0;
 }
 
 TEST(test_two_way_foreign_ack_dropped)
@@ -990,7 +1086,7 @@ TEST(test_two_way_foreign_ack_dropped)
     fake_pkt_pending = 1;
     run_for(250, 250);
 
-    CHECK(RF_Receiver_ConsumeAckFlag() == 0);   /* foreign ACK dropped */
+    CHECK(ack_pending == 0);                    /* foreign ACK dropped */
 }
 
 TEST(test_position_packet_flow)
@@ -2398,6 +2494,9 @@ int main(void)
     run_test_crc_dump_captures_corrupt_head();
     run_test_imu_trace_foreign_id_dropped();
     run_test_two_way_ack_lifecycle();
+    run_test_two_way_ping_retries_then_gives_up();
+    run_test_two_way_ping_cancelled_when_binding_lost();
+    run_test_two_way_ping_suppressed_while_flying();
     run_test_two_way_foreign_ack_dropped();
     run_test_band_garbage_packets_are_ignored();
     run_test_final_packet_position_persists_through_blackout();

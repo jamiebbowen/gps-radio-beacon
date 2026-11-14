@@ -170,7 +170,8 @@ static uint32_t rescan_suppression_count = 0;
 /* Two-way answer channel (TX -> RX) */
 static AckPacket_t last_ack;
 static uint8_t ack_pending = 0;
-static uint32_t last_ack_time = 0;
+static int16_t ack_rssi = 0;     /* signal of the ACK itself */
+static int8_t  ack_snr = 0;
 
 /* Bench-firmware detector. A beacon flashed with TESTING_MODE=1 sounds
  * identical to production BUT IDs every 30 s instead of every 5 min (and
@@ -596,7 +597,8 @@ uint8_t RF_Receiver_DataAvailable(void)
         /* A TX ACK is only worth hearing if it's addressed to OUR beacon */
         if (RF_RocketFilter(1, last_ack.rocket_id)) {
           ack_pending = 1;
-          last_ack_time = HAL_GetTick();
+          ack_rssi = last_packet.rssi;
+          ack_snr = last_packet.snr;
           last_packet_time = HAL_GetTick();
         }
       } else if ((last_packet.length == HEARTBEAT_PACKET_SIZE
@@ -995,36 +997,105 @@ uint8_t RF_Receiver_GetHello(HelloPacket_t *hello)
   return 1;
 }
 
-/* Two-way scaffolding (v2 radios, benign on v1): hand one command frame to
- * the beacon on its next quiet window. PING is the probe; ACKs show up in
- * RF_Receiver_GetLastAck. Called from main when the operator pokes it. */
-uint8_t RF_Receiver_GetLastAck(AckPacket_t *ack, uint32_t *age_ms)
+/* Command scheduler: one command in flight at a time. */
+static uint8_t  cmd_active = 0;       /* a command is queued or in flight */
+static uint8_t  cmd_waiting = 0;      /* sent, waiting for its ACK        */
+static uint8_t  cmd_code_cur = 0;
+static uint8_t  cmd_param_cur = 0;
+static uint16_t cmd_seq = 0;
+static uint8_t  cmd_attempt = 0;
+static uint32_t cmd_sent_ms = 0;
+static RF_CmdResult_t cmd_result;
+static uint8_t  cmd_result_pending = 0;
+
+static void cmd_post(uint8_t event, uint8_t echo, int16_t rssi, int8_t snr)
 {
-  if (last_ack_time == 0) return 0;
-  if (ack) memcpy(ack, &last_ack, sizeof(*ack));
-  if (age_ms) *age_ms = HAL_GetTick() - last_ack_time;
-  return 1;
+  cmd_result.event = event;
+  cmd_result.cmd = cmd_code_cur;
+  cmd_result.seq = cmd_seq;
+  cmd_result.attempt = cmd_attempt;
+  cmd_result.echo = echo;
+  cmd_result.rssi = rssi;
+  cmd_result.snr = snr;
+  cmd_result_pending = 1;
 }
 
-uint8_t RF_Receiver_ConsumeAckFlag(void)
+void RF_Receiver_RequestPing(void)
 {
-  uint8_t v = ack_pending;
-  ack_pending = 0;
-  return v;
+  cmd_active = 1;
+  cmd_waiting = 0;
+  cmd_code_cur = CMD_PING;
+  cmd_param_cur = 0;
+  cmd_seq++;
+  cmd_attempt = 0;
+  ack_pending = 0;          /* only ACKs that arrive from here on count */
 }
 
-uint8_t RF_Receiver_SendCommand(uint8_t cmd_code, uint8_t param)
+void RF_Receiver_ServiceCommands(void)
 {
+  if (!cmd_active || cmd_result_pending) return;   /* one event per take */
+
+  /* Binding lost (operator scan, channel change): the command has no
+   * addressee, and each attempt would still deafen us for ~1.8 s. */
+  if (bound_rocket_id == RF_ROCKET_UNBOUND) {
+    cmd_active = 0;
+    cmd_waiting = 0;
+    cmd_post(RF_CMD_EV_CANCELLED, 0, 0, 0);
+    return;
+  }
+
+  /* Never transmit at a flying beacon: it doesn't listen in flight, and
+   * every attempt would make this receiver deaf for ~1.8 s. */
+  if (flight_contact_latch) {
+    cmd_active = 0;
+    cmd_waiting = 0;
+    cmd_post(RF_CMD_EV_SUPPRESSED, 0, 0, 0);
+    return;
+  }
+
+  if (cmd_waiting) {
+    if (ack_pending) {
+      ack_pending = 0;
+      uint16_t seq = (uint16_t)(((uint16_t)last_ack.seq_hi << 8) | last_ack.seq_lo);
+      if (last_ack.cmd_code == cmd_code_cur && seq == cmd_seq) {
+        cmd_active = 0;
+        cmd_waiting = 0;
+        cmd_post(RF_CMD_EV_ACK, last_ack.echo, ack_rssi, ack_snr);
+        return;
+      }
+      /* stale or unrelated ACK: keep waiting */
+    }
+    if (HAL_GetTick() - cmd_sent_ms < RF_CMD_ACK_WAIT_MS) return;
+    cmd_waiting = 0;
+    if (cmd_attempt >= RF_CMD_MAX_ATTEMPTS) {
+      cmd_active = 0;
+      cmd_post(RF_CMD_EV_NO_ACK, 0, 0, 0);
+      return;
+    }
+  }
+
+  /* Send the (next) attempt with the long command preamble. Blocking:
+   * ~1.8 s on air for a 6-byte command, bind-time only. */
   uint8_t buf[CMD_ACK_PACKET_SIZE];
   buf[0] = PACKET_TYPE_CMD;
   buf[1] = (uint8_t)RF_Receiver_GetBoundRocketId();
-  buf[2] = cmd_code;
-  static uint16_t seq = 0;
-  seq++;
-  buf[3] = (uint8_t)(seq >> 8);
-  buf[4] = (uint8_t)(seq & 0xFF);
-  buf[5] = param;
-  return LoRa_Transmit(buf, sizeof(buf)) == LORA_OK;
+  buf[2] = cmd_code_cur;
+  buf[3] = (uint8_t)(cmd_seq >> 8);
+  buf[4] = (uint8_t)(cmd_seq & 0xFF);
+  buf[5] = cmd_param_cur;
+  cmd_attempt++;
+  (void)LoRa_TransmitPreamble(buf, sizeof(buf), LORA_CMD_PREAMBLE_SYMBOLS);
+  cmd_sent_ms = HAL_GetTick();          /* the ACK wait starts at TX done */
+  cmd_waiting = 1;
+  cmd_post(RF_CMD_EV_SENT, 0, 0, 0);
+}
+
+uint8_t RF_Receiver_TakeCommandResult(RF_CmdResult_t *out)
+{
+  if (!cmd_result_pending || out == NULL) return 0;
+  *out = cmd_result;
+  cmd_result_pending = 0;
+  return 1;
 }
 
 /**
