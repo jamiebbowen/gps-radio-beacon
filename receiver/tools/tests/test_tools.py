@@ -14,6 +14,8 @@ from __future__ import annotations
 import contextlib
 import io
 import math
+import os
+import re
 import sys
 import tempfile
 import unittest
@@ -515,6 +517,50 @@ class TestHeadingResiduals(unittest.TestCase):
 
     def test_wrong_arg_count_returns_two(self):
         self.assertEqual(hres.main(["heading_residuals.py"]), 2)
+
+
+class TestFirmwareRowContract(unittest.TestCase):
+    """The header, NAV and IMU rows receiver/tests/test_sd_card.c pins
+    (marked LOG_CONTRACT) must parse here, field for field: a log-format
+    change on either side fails one of the two suites. An earlier column
+    insertion broke this tool silently - every NAV row was skipped."""
+
+    @classmethod
+    def setUpClass(cls):
+        src = (Path(__file__).resolve().parents[2] / "tests" / "test_sd_card.c").read_text()
+        cls.rows = dict(re.findall(
+            r'LOG_CONTRACT (header|nav|imu)[^\n]*\n\s*CHECK\(strstr\(big, "([^"]+)\\n"\)', src))
+
+    def write_log(self, *lines):
+        f = tempfile.NamedTemporaryFile("w", suffix=".TXT", delete=False)
+        f.write("\n".join(lines) + "\n")
+        f.close()
+        self.addCleanup(os.unlink, f.name)
+        return f.name
+
+    def test_rows_are_pinned(self):
+        self.assertEqual(set(self.rows), {"header", "nav", "imu"})
+
+    def test_nav_row_parses(self):
+        rows, _ = af.load_nav_rows(self.write_log(self.rows["header"], self.rows["nav"]))
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertAlmostEqual(r["t"], 12.345)
+        self.assertAlmostEqual(r["lat"], 39.891, places=5)
+        self.assertAlmostEqual(r["lon"], -105.112, places=5)
+        self.assertAlmostEqual(r["alt"], 1800.0)
+        self.assertAlmostEqual(r["dist_km"], 1.25)
+
+    def test_imu_row_parses(self):
+        rows = af.load_imu_rows(self.write_log(self.rows["header"], self.rows["imu"]))
+        self.assertEqual(len(rows), 1)
+        r = rows[0]
+        self.assertEqual(r["fmt"], 3)
+        self.assertAlmostEqual(r["ax"], 0.55)       # centi-g -> g
+        self.assertAlmostEqual(r["gx"], 5.7)        # 0.1 deg/s -> deg/s
+        self.assertAlmostEqual(r["peak"], 1.35)     # milli-g -> g
+        self.assertEqual(r["rssi"], -95)
+        self.assertEqual(r["snr"], -12)
 
 
 if __name__ == "__main__":
