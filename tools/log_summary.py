@@ -8,8 +8,8 @@ Usage:
 What it reports (one section each, "OK" when nothing was found):
 
   Boot/reset      IWDG watchdog resets, SD self-test failures
-  RF link         scan locks, channel hops, wedge recoveries, LOST windows,
-                  noise alerts
+  RF link         scan locks, channel hops, wedge recoveries, LOST windows
+                  and how long each silence lasted (REGAINED), noise alerts
   TX GPS health   heartbeat gps= state histogram, watchdog reset count (rst=)
   Telemetry       NAV row rate/gaps by source (raw GPS vs FUS), RSSI/SNR
                   range, fused dead-reckoning fraction
@@ -54,6 +54,7 @@ class Session:
         self.events = []            # (t, msg)
         self.wedges = []            # (t, n)
         self.lost = []              # t
+        self.regained = []          # (t, seconds of silence)
         self.locks = []             # (t, msg)
         self.noise = []             # (t, msg)
         self.bindings = []          # (t, msg)
@@ -88,6 +89,12 @@ class Session:
             self.wedges.append((t, msg))
         elif msg.startswith("RF LOST"):
             self.lost.append(t)
+        elif msg.startswith("RF REGAINED after"):
+            # The whole silence, last packet to first packet. Firmware
+            # before 6ada196 timed it from the LOST row: 300 s short.
+            m = re.match(r"RF REGAINED after (\d+)s", msg)
+            if m:
+                self.regained.append((t, int(m.group(1))))
         elif msg.startswith("RF scan locked") or msg.startswith("RF manual"):
             self.locks.append((t, msg))
         elif msg.startswith("RF NOISE"):
@@ -193,6 +200,7 @@ def report(sess, label):
     rf_lines = (
         [f"wedge recovery at {fmt_s(t)} ({m})" for t, m in sess.wedges]
         + [f"LOST (5 min silence) at {fmt_s(t)}" for t in sess.lost]
+        + [f"REGAINED at {fmt_s(t)} after {g} s of silence" for t, g in sess.regained]
         + [f"noise alert at {fmt_s(t)}: {m}" for t, m in sess.noise]
         + [f"scan/channel at {fmt_s(t)}: {m}" for t, m in sess.locks]
     )
