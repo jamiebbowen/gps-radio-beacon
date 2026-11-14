@@ -113,6 +113,7 @@ uint32_t gps_get_fix_age_ms(void) { return 250; }
 void launch_detect_get_gyro_rads(float *x, float *y, float *z) { if (x) *x=0; if (y) *y=0; if (z) *z=0; }
 void launch_detect_get_accel_xyz(float *x, float *y, float *z) { if (x) *x=0; if (y) *y=0; if (z) *z=0; }
 float launch_detect_get_current_accel(void) { return 0.0f; }
+float launch_detect_take_peak_accel(void) { return 0.0f; }
 
 /* Two-way scaffolding stubs */
 bool radio_is_transmitting(void) { return false; }

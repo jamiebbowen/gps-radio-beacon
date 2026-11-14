@@ -57,6 +57,7 @@ uint32_t launch_detect_get_time_since_launch(uint32_t system_time_seconds);
 
 // Diagnostic functions
 float launch_detect_get_current_accel(void);      // Get current total acceleration (m/s²)
+float launch_detect_take_peak_accel(void);       // Peak |accel| (m/s²) since the last call; restarts the window
 bool launch_detect_get_imu_status(void);          // Check if IMU is working
 void launch_detect_get_accel_xyz(float* x, float* y, float* z);  // Get 3-axis acceleration
 void launch_detect_get_gyro_rads(float* x, float* y, float* z);  // Get 3-axis gyro (rad/s, calibrated)

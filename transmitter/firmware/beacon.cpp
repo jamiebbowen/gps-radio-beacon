@@ -306,7 +306,7 @@ uint8_t beacon_transmit_launch_t0(uint32_t system_time_seconds, uint8_t transmit
 /**
  * Transmit an inertial trace packet. Called at ~1 Hz during the flight
  * window. Feeds from the launch-detect layer's cached linear-accel + gyro.
- * peak/reset kept here so every packet reports peak-since-previous-packet.
+ * Every packet reports the peak |a| since the previous one.
  * The encoded packet is kept so the on-chip flight log stores exactly what
  * went on the air (beacon_last_imu_trace(), right after this call).
  */
@@ -339,12 +339,10 @@ uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast) {
     p.gyro_y_dds = sat_i16(gy * DEG_PER_RAD * 10.0f);
     p.gyro_z_dds = sat_i16(gz * DEG_PER_RAD * 10.0f);
 
-    /* Peak linear accel (m/s^2) since the last IMU packet -> milli-g */
-    static float peak_ms2 = 0.0f;
-    float curr_ms2 = launch_detect_get_current_accel();
-    if (curr_ms2 > peak_ms2) peak_ms2 = curr_ms2;
-    p.peak_accel_mg = sat_i16(peak_ms2 / MS2_PER_G * 1000.0f);
-    peak_ms2 = 0.0f;
+    /* Peak linear accel (m/s^2) since the last IMU packet -> milli-g. The
+     * launch-detect layer tracks it on every report; sampling |a| here,
+     * once per packet, only ever reported the instantaneous value. */
+    p.peak_accel_mg = sat_i16(launch_detect_take_peak_accel() / MS2_PER_G * 1000.0f);
     s_last_imu = p;
 
     if (!transmit_fast) {
