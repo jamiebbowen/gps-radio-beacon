@@ -174,12 +174,15 @@ void gps_init(void) {
      * its default message set (field evidence 2026-09-07: $GNGLL flowing
      * despite the PUBX,40 "Disable GLL" line). Configure via
      * UBX-CFG-VALSET with CFG-MSGOUT-* keys instead (U1 rate values:
-     * 1 = every nav solution, 0 = off), plus an explicit 1 Hz rate. */
+     * 1 = every nav solution, 0 = off), plus an explicit 1 Hz rate.
+     * Only GGA and RMC are parsed. GSV stays off: on a multi-GNSS M10 it is
+     * most of the 1 Hz burst, more than Serial1's 350-byte ring buffer
+     * holds while a ~1.1 s blocking SF10 transmit keeps the loop away. */
     const uint8_t valset_msgs[] = {
         0x00, 0x01, 0x00, 0x00,              /* version, layers=RAM, reserved */
         0xBB, 0x00, 0x91, 0x20, 0x01,        /* CFG-MSGOUT-NMEA_ID_GGA_UART1 = on  */
         0xAC, 0x00, 0x91, 0x20, 0x01,        /* CFG-MSGOUT-NMEA_ID_RMC_UART1 = on  */
-        0xC5, 0x00, 0x91, 0x20, 0x01,        /* CFG-MSGOUT-NMEA_ID_GSV_UART1 = on  */
+        0xC5, 0x00, 0x91, 0x20, 0x00,        /* CFG-MSGOUT-NMEA_ID_GSV_UART1 = off */
         0xC0, 0x00, 0x91, 0x20, 0x00,        /* CFG-MSGOUT-NMEA_ID_GSA_UART1 = off */
         0xCA, 0x00, 0x91, 0x20, 0x00,        /* CFG-MSGOUT-NMEA_ID_GLL_UART1 = off */
         0xB1, 0x00, 0x91, 0x20, 0x00,        /* CFG-MSGOUT-NMEA_ID_VTG_UART1 = off */

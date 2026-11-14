@@ -173,7 +173,9 @@ on the MAX-M10S is unconfirmed). Bench-check on a factory-reset module.
 
 ### UBX-CFG-VALSET (class 0x06, id 0x8A) - Messages, Rate, Dynamic Model
 
-GGA/RMC/GSV on, GSA/GLL/VTG off, 1 Hz measurement rate, and the airborne
+GGA/RMC on, GSV/GSA/GLL/VTG off (only GGA and RMC are parsed, and GSV alone
+overflows the 350-byte UART buffer during a blocking transmit), 1 Hz
+measurement rate, and the airborne
 <4g dynamic model, all in the RAM layer (re-sent after every reset).
 
 ## Configuration
