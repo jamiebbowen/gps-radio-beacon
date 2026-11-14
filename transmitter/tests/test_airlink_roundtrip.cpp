@@ -98,13 +98,13 @@ int transmit_string(const char *str)
 
 /* GPS / launch / nav fakes */
 uint8_t gps_get_health(void) { return HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0); }
-float gps_nmea_to_decimal(const char *nmea_coord, char direction)
+double gps_nmea_to_decimal(const char *nmea_coord, char direction)
 {
     double v = atof(nmea_coord);
     int deg = (int)(v / 100.0);
     double out = deg + (v - deg * 100.0) / 60.0;
     if (direction == 'S' || direction == 'W') out = -out;
-    return (float)out;
+    return out;
 }
 
 static launch_state_t fake_launch_state = LAUNCH_STATE_IDLE;
@@ -132,7 +132,7 @@ uint32_t nav_get_gps_rejects(void) { return fake_gps_rejects; }
 
 /* beacon.cpp's V3 heartbeat carries the TX boot's RSTC_RCAUSE; firmware.ino
  * owns the global. Host builds stand it up here. */
-volatile uint8_t g_boot_rcause = 0;
+uint8_t g_boot_rcause = 0;
 
 #include "../firmware/beacon.cpp"
 
@@ -165,7 +165,6 @@ static void check_fused_row(double lat, double lon, float alt, float vn,
     fake_fused.lat_deg = (float)lat;  fake_fused.lon_deg = (float)lon;
     fake_fused.alt_m = alt;
     fake_fused.v_n = vn; fake_fused.v_e = ve; fake_fused.v_d = vd;
-    fake_fused.age_ds = age_ds;
     fake_fused.dead_reckoning = dr;
     fake_fused.gps_fresh = fresh;
     fake_fused.imu_healthy = healthy;
@@ -178,7 +177,7 @@ static void check_fused_row(double lat, double lon, float alt, float vn,
      * tick past RF_FUSED_STALE_OVERRIDE_MS before every decode so this
      * sweep exercises capacity, not the override path (pinned elsewhere). */
     tick_ms += 12000;
-    RF_Parser_Reset();
+    RF_Parser_Init();   /* full parser reset (incl. raw-GPS freshness) */
     CHECK(RF_Parser_ParseFusedPacket(tx_buf, (uint16_t)tx_len) == RF_PARSER_OK);
 
     GPS_Data g;
@@ -318,7 +317,7 @@ int main(void)
     fake_fused.lon_deg = -105.11f; fake_fused.alt_m = 1655.0f;
     CHECK(beacon_transmit_fused_data(42, 1) == 1);
     tick_ms += 12000;
-    RF_Parser_Reset();
+    RF_Parser_Init();   /* full parser reset (incl. raw-GPS freshness) */
     CHECK(RF_Parser_ParseFusedPacket(tx_buf, (uint16_t)tx_len) == RF_PARSER_OK);
     GPS_Data g;
     CHECK(RF_Parser_GetParsedData(&g, NULL, 0, NULL) == 1);

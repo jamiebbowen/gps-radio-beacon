@@ -157,9 +157,8 @@ TEST(test_gyro_enable_failure_is_advisory)
     CHECK(strstr(Serial.log, "Gyro report unavailable") != NULL);
     CHECK(strstr(Serial.log, "Launch detection ready") != NULL);
 
-    /* No accel sample has ever arrived: staleness is UINT32_MAX, not 0
-     * (0 would read as "data is fresh" to a caller). */
-    CHECK(launch_detect_imu_staleness_ms() == UINT32_MAX);
+    /* No accel sample has ever arrived: the nav layer sees timestamp 0 */
+    CHECK(imu_last_accel_ms() == 0);
 }
 
 TEST(test_init_failures)
@@ -273,10 +272,6 @@ TEST(test_sensor_event_draining_and_accessors)
     CHECK(fabsf(w - 0.5f) < 1e-6f && fabsf(qi - 0.5f) < 1e-6f);
     imu_get_quaternion(NULL, NULL, NULL, NULL);
     CHECK(imu_last_accel_ms() == now_ms);
-    CHECK(imu_last_rotvec_ms() == now_ms);
-
-    /* Staleness counts ms since the newest linear-accel sample */
-    CHECK(launch_detect_imu_staleness_ms() == 0);
 
     /* Calibrated gyro lands in the inertial trace accessors, null-safe */
     push_gyro(0.11f, -0.22f, 0.33f);
@@ -287,9 +282,7 @@ TEST(test_sensor_event_draining_and_accessors)
           fabsf(gz - 0.33f) < 1e-6f);
     launch_detect_get_gyro_rads(NULL, NULL, NULL);
 
-    CHECK(launch_detect_imu_staleness_ms() == 1);   /* accel is 1 ms old */
-    now_ms += 250;
-    CHECK(launch_detect_imu_staleness_ms() == 251);
+    CHECK(imu_last_accel_ms() == now_ms - 1);   /* gyro tick: accel kept */
 }
 
 TEST(test_sensor_reset_reenables_reports)
@@ -432,6 +425,24 @@ TEST(test_force_confirmed_flying_without_edge)
     CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
     CHECK(launch_detect_is_launched() == false);
     CHECK(launch_detect_get_time_since_launch(60) == 5);
+}
+
+TEST(test_launch_at_time_zero_still_counts)
+{
+    /* After a mid-flight reboot, setup() resumes at system time 0. A
+     * launch time of 0 must not read as "never launched", or LAUNCH never
+     * hands over to POST_LAUNCH (continuous TX, no callsign). */
+    reset_all();
+    launch_detect_init();
+    CHECK(launch_detect_get_time_since_launch(5) == 0);    /* not launched */
+    launch_detect_force_confirmed(0);
+    CHECK(launch_detect_get_time_since_launch(0) == 0);
+    CHECK(launch_detect_get_time_since_launch(5) == 5);
+    CHECK(launch_detect_get_time_since_launch(600) == 600);
+
+    /* Re-init clears it again */
+    launch_detect_init();
+    CHECK(launch_detect_get_time_since_launch(600) == 0);
 }
 
 TEST(test_gps_fallback_ignores_pad_drift)
@@ -620,6 +631,7 @@ int main(void)
     run_test_gps_fallback_ignores_climb_before_arming();
     run_test_gps_fallback_resettles_after_long_outage();
     run_test_force_confirmed_flying_without_edge();
+    run_test_launch_at_time_zero_still_counts();
     run_test_gps_fallback_ignores_pad_drift();
     run_test_gps_fallback_nan_sample_does_not_poison_baseline();
     run_test_landing_latches_on_quiet_and_stable();

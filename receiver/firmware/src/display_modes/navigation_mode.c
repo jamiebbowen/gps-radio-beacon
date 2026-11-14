@@ -102,7 +102,7 @@ static uint32_t LoRa_RemainingRangeMeters(float d_now_m, int16_t rssi)
  *   => d_max_m = 10 ^ ((Pt - sens - 20*log10(f_MHz) + 27.55) / 20)
  *
  * For current config (22 dBm TX, -134 dBm sens, 433 MHz) this evaluates to
- * roughly 4400 km. That's the Friis ceiling with 0 dBi antennas, no
+ * roughly 3500 km (~2160 mi). That's the Friis ceiling with 0 dBi antennas, no
  * fading; practice is always below it, but it's a physically meaningful
  * cap for "don't show more than this".
  *
@@ -181,67 +181,42 @@ static const char *LoRa_QualityLabel(int16_t rssi, int8_t snr)
 void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remote_gps,
                            GPS_Data *local_gps_data, GPS_Data *remote_gps_data,
                            float compass_heading, uint32_t last_rf_packet_time,
-                           uint32_t rf_packet_count)
+                           uint32_t rf_packet_count,
+                           const Preflight_Result_t *pf)
 {
   float distance_to_tx = -1.0f;
-  float direction_to_tx = -1.0f;
   float relative_direction = -1.0f;
-  
-  /* Static variables to store last known good values.
-   * Only distance and relative bearing are consumed downstream; the absolute
-   * bearing-to-TX and the timestamp of last update were cached historically
-   * but never read, so they've been removed. */
-  static float last_good_distance = -1.0f;
-  static float last_good_relative = -1.0f;
-  
-  /* Calculate distance and direction if we have valid local GPS and remote position (live or SD-loaded) */
+  uint8_t base_stale = 0;    /* arrow drawn from a last-known local fix */
+
+  /* Last solution computed from a LIVE local fix. The absolute bearing is
+   * cached, not the arrow angle: while the receiver's own fix is lost the
+   * arrow is re-derived from that bearing and the LIVE compass, so it keeps
+   * pointing the right way as the operator turns. (Caching the relative
+   * angle froze the arrow in screen space the moment the fix dropped.) */
+  static Nav_Solution_t last_good = { 0 };
+
+  /* Need a remote position (live RF or SD-loaded) and a local fix. The
+   * remote position may be stale - the last known one is still the target. */
   if (has_valid_local_gps && (last_rf_packet_time > 0 || has_valid_remote_gps)) {
-    /* Validate coordinates are within reasonable ranges and non-zero */
-    if (local_gps_data->latitude != 0.0f && local_gps_data->longitude != 0.0f && 
-        remote_gps_data->latitude != 0.0f && remote_gps_data->longitude != 0.0f &&
-        local_gps_data->latitude >= -90.0f && local_gps_data->latitude <= 90.0f &&
-        local_gps_data->longitude >= -180.0f && local_gps_data->longitude <= 180.0f &&
-        remote_gps_data->latitude >= -90.0f && remote_gps_data->latitude <= 90.0f &&
-        remote_gps_data->longitude >= -180.0f && remote_gps_data->longitude <= 180.0f) {
-      /* Calculate distance between local and remote GPS coordinates */
-      /* Always use the last known remote GPS position, even if it's stale */
-      distance_to_tx = calculate_distance(local_gps_data->latitude, local_gps_data->longitude,
-                                        remote_gps_data->latitude, remote_gps_data->longitude) / 1000.0f; /* Convert to km */
-      
-      /* Calculate bearing from local to remote GPS coordinates */
-      direction_to_tx = calculate_bearing(local_gps_data->latitude, local_gps_data->longitude,
-                                        remote_gps_data->latitude, remote_gps_data->longitude);
-      
-      /* Calculate relative direction based on current compass heading */
-      relative_direction = direction_to_tx - compass_heading;
-      
-      /* Normalize relative direction to 0-359.9 degrees */
-      while (relative_direction < 0) relative_direction += 360.0f;
-      while (relative_direction >= 360.0f) relative_direction -= 360.0f;
-      
-      /* Always cache: reaching here means GPS coords were valid and both
-       * calculate_distance / calculate_bearing returned meaningful values.
-       * Note: direction_to_tx can legitimately be 0.0 (beacon due North)
-       * so a >= 0 guard would incorrectly skip that case. */
-      last_good_distance = distance_to_tx;
-      last_good_relative = relative_direction;
-    } else {
-      /* Set invalid values if coordinates are zero */
-      distance_to_tx = -1.0f;
-      direction_to_tx = -1.0f;
-      relative_direction = -1.0f;
+    Nav_Solution_t sol;
+    Nav_Compute(local_gps_data->latitude, local_gps_data->longitude, 1,
+                remote_gps_data->latitude, remote_gps_data->longitude,
+                compass_heading, &sol);
+    if (sol.valid) {
+      last_good = sol;
+      distance_to_tx = sol.distance_km;
+      relative_direction = sol.relative_deg;
     }
   }
-  
-  /* If current values are invalid but we have last known good values, use them */
-  if (distance_to_tx < 0.0f && last_good_distance >= 0.0f) {
-    distance_to_tx = last_good_distance;
+
+  /* No live solution: fall back to the last good one, re-aimed with the
+   * live heading, and mark it stale so the arrow blinks. */
+  if (distance_to_tx < 0.0f && last_good.valid) {
+    distance_to_tx = last_good.distance_km;
+    relative_direction = normalize_angle(last_good.bearing_deg - compass_heading);
+    base_stale = 1;
   }
-  
-  if (relative_direction < 0.0f && last_good_relative >= 0.0f) {
-    relative_direction = last_good_relative;
-  }
-  
+
   /* Display layout (128x64, 6x8 font => 21 cols x 8 rows).
    *
    * The direction indicator is a circle of radius 15 centred at (96, 32), so
@@ -338,17 +313,6 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
        * so the range proof reaches every snprintf below. */
       if (speed_ms > 999.9f) speed_ms = 999.9f;
     }
-
-    /* Ready-to-fly verdict: the same checks as the PRE-FLIGHT page -
-     * fresh link (35 s gate > any current prelaunch cadence + margin),
-     * TX fix with >=4 sats, local RX fix, live compass.
-     * SD card is advisory there and excluded here too. */
-    uint8_t rtf_link = (last_rf_packet_time > 0) &&
-                       (HAL_GetTick() - last_rf_packet_time) <= 35000u;
-    uint8_t rtf_tx   = (remote_gps_data->fix >= 1 &&
-                        remote_gps_data->satellites >= 4);
-    uint8_t rtf_rx   = has_valid_local_gps;
-    uint8_t rtf_cmp  = (compass_data.heading_valid && !compass_data.heading_stale);
 
     /* Row 2: Combined fix status (arrow-constrained) */
     const char *b_fix = "B:--";
@@ -470,12 +434,25 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
         }
         Display_DrawTextRowCol(5, 0, narrow);
       } else if (speed_ms < 2.0f) {
-        if (rtf_link && rtf_tx && rtf_rx && rtf_cmp) {
+        /* Ready-to-fly: the PRE-FLIGHT page's own evaluation (passed in by
+         * main.c), vetoes included - this row used to skip the TESTING-
+         * build and low-battery checks and could say READY while the
+         * checklist said NOT READY. */
+        uint8_t verdict = (pf != NULL) ? pf->verdict : (uint8_t)PF_NOT_READY;
+        if (verdict == PF_READY) {
           Display_DrawTextRowCol(5, 0, "READY TO FLY");
+        } else if (verdict == PF_VETO_TEST_BUILD) {
+          Display_DrawTextRowCol(5, 0, "NOT RDY:TST");
+        } else if (verdict == PF_VETO_LOW_POWER) {
+          Display_DrawTextRowCol(5, 0, "PWR LOW");
         } else {
+          uint8_t ok_l = (pf != NULL) && pf->link_ok;
+          uint8_t ok_t = (pf != NULL) && pf->tx_gps_ok;
+          uint8_t ok_r = (pf != NULL) && pf->rx_gps_ok;
+          uint8_t ok_c = (pf != NULL) && pf->compass_ok;
           snprintf(narrow, sizeof(narrow), "NOT RDY:%s%s%s%s",
-                   rtf_link ? "" : "L", rtf_tx ? "" : "T",
-                   rtf_rx ? "" : "R", rtf_cmp ? "" : "C");
+                   ok_l ? "" : "L", ok_t ? "" : "T",
+                   ok_r ? "" : "R", ok_c ? "" : "C");
           Display_DrawTextRowCol(5, 0, narrow);
         }
       } else {
@@ -608,11 +585,12 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
      * width caps above stay valid.
      *   heading_valid   -> arrow
      *   heading_stale   -> blinking arrow (last known heading, comms down)
+   *   base_stale      -> blinking arrow (aimed from the last local fix)
      *   !orientation    -> circle + "VERT"
      *   !heading_valid  -> circle + "CAL" (prompt to figure-8 the device) */
     if (relative_direction >= 0.0f && relative_direction < 360.0f &&
         (compass_data.heading_valid || compass_data.heading_stale)) {
-      if (compass_data.heading_stale && !compass_data.heading_valid) {
+      if ((compass_data.heading_stale && !compass_data.heading_valid) || base_stale) {
         /* Blink at ~2 Hz via the 250 ms display cadence: stale bearings
          * still help you walk, but must not look live. */
         static uint8_t stale_blink = 0;

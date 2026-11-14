@@ -17,7 +17,7 @@ Successfully converted the GPS radio beacon receiver from UART-based RF (RXM-433
 - Replaced UART initialization with SPI initialization
 - Changed from interrupt-driven UART to DIO1-interrupt-driven LoRa packet reception (EXTI on DIO1 sets a flag; the main loop drains the packet over SPI)
 - Packet format at the time of conversion was `$$data$$CHKSUM`; the current
-  firmware uses binary typed packets (see `transmitter/firmware/include/rf_packet.h`)
+  firmware uses binary typed packets (see `packet_format.h` - `transmitter/firmware/include/` and `receiver/firmware/inc/`, kept identical)
 
 ### 3. Removed UART Dependencies
 - Removed `RF_Receiver_UART_RxCpltCallback()` from gps.c
@@ -195,3 +195,26 @@ Before deploying, verify:
 4. Test packet reception from transmitter
 5. Verify GPS parsing and navigation modes
 6. Field test for range performance
+
+## Two-way command channel (PING)
+
+The link is mostly one-way, but the receiver can ask the beacon a question.
+At bind time it queues a PING (`RF_Receiver_RequestPing`):
+
+- The command is sent with an 80-symbol preamble
+  (`LORA_CMD_PREAMBLE_SYMBOLS`, 1.31 s at SF10/62.5 kHz). The beacon listens
+  for 40 ms about once a second outside flight, so a preamble that long
+  always contains one of its listen windows. Once the beacon detects a
+  preamble or header it keeps listening up to 2.2 s (`CMD_RX_EXTEND_MS`) for
+  the whole frame.
+- The beacon answers with an ACK echoing the command and sequence number.
+  The receiver accepts only an ACK from its bound rocket with the matching
+  command and sequence, waits 2.5 s after each transmission, and retries up
+  to three times.
+- Each attempt blocks the receiver for ~1.8 s on air, so PINGs are bind-time
+  only and are never sent while the beacon is airborne (launch seen, no
+  landing reported yet). A lost binding cancels the remaining attempts.
+- The SD log records each step: `CMD 0x01 sent seq= try=`, `CMD ACK ...
+  rssi= snr= try=`, `no ACK after 3 tries`, `suppressed (beacon airborne)`
+  or `cancelled (binding lost)`.
+

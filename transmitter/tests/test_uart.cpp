@@ -40,39 +40,20 @@ TEST(test_init_flushes_and_resets)
 
     CHECK(Serial1.baud == 115200);
     CHECK(Serial1.available() == 0);           /* stale buffer drained */
-    CHECK(uart_read_count == 0);
-    CHECK(uart_last_rx_byte == 0);
-    CHECK(uart_rx_active == 0);
-
-    uint16_t rc; uint8_t lb, act;
-    uart_get_diagnostics(&rc, &lb, &act);
-    CHECK(rc == 0 && lb == 0 && act == 0);
 }
 
-TEST(test_read_path_and_diagnostics)
+TEST(test_read_path)
 {
     uart_init();
     CHECK(uart_data_available() == false);
     CHECK(uart_read_byte() == 0xFF);           /* empty sentinel */
-    CHECK(uart_read_count == 0);               /* no read counted */
 
     Serial1.inject("ABC");
     CHECK(uart_data_available() == true);
     CHECK(uart_read_byte() == 'A');
     CHECK(uart_read_byte() == 'B');
-    CHECK(uart_read_count == 2);
-    CHECK(uart_last_rx_byte == 'B');
-    CHECK(uart_rx_active == 1);
-
-    /* Activity flag is clear-on-read via diagnostics */
-    uint16_t rc; uint8_t lb, act;
-    uart_get_diagnostics(&rc, &lb, &act);
-    CHECK(rc == 2 && lb == 'B' && act == 1);
-    uart_get_diagnostics(&rc, &lb, &act);
-    CHECK(act == 0);                           /* cleared */
-
-    /* NULL-safe diagnostics */
-    uart_get_diagnostics(NULL, NULL, NULL);
+    CHECK(uart_read_byte() == 'C');
+    CHECK(uart_data_available() == false);
 }
 
 TEST(test_flush_uart_buffer_drains_pending)
@@ -115,26 +96,15 @@ TEST(test_set_baud_reopens_port)
     CHECK(Serial1.baud == 115200);
 }
 
-TEST(test_error_counters_get_and_clear)
-{
-    uart_init();
-    /* These counters have no producer in the current code (SAMD UART
-     * errors aren't surfaced), so they read zero and stay cleared. */
-    CHECK(uart_get_and_clear_error_count() == 0);
-    CHECK(uart_get_and_clear_framing_error_count() == 0);
-    CHECK(uart_get_and_clear_buffer_overflow_count() == 0);
-}
-
 /* ------------------------------------------------------------------ */
 
 int main(void)
 {
     run_test_init_flushes_and_resets();
-    run_test_read_path_and_diagnostics();
+    run_test_read_path();
     run_test_flush_uart_buffer_drains_pending();
     run_test_tx_paths();
     run_test_set_baud_reopens_port();
-    run_test_error_counters_get_and_clear();
 
     return TEST_SUMMARY();
 }

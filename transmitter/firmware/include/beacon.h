@@ -4,9 +4,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "gps.h"
+#include "packet_format.h"
 
 // Beacon transmission functions
-uint8_t beacon_transmit_gps_data(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast_flag);
+/** Fix gate shared by every position sender; log_reason prints rejections. */
+uint8_t beacon_validate_fix(const GPSCoordinates_t *coords, uint8_t log_reason);
 uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast_flag);
 void beacon_transmit_callsign(uint8_t transmit_fast);
 
@@ -27,17 +29,16 @@ uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast_flag);
  * log records its IMU sample immediately after beacon_transmit_imu_trace,
  * so this getter puts the SAME peak on the crash-survivable copy as went
  * over the air (previously the flash record's peak was hardwired to 0). */
-int16_t beacon_last_imu_peak_mg(void);
+/** Copy of the last IMU trace packet transmitted (for the flash log). */
+void    beacon_last_imu_trace(ImuTracePacket_t *out);
 void beacon_poll_commands(uint8_t in_flight);
 
 /* Certified flight events (PACKET_TYPE_FLIGHT_EVENT). Queue an edge with
  * redundancy; the loop calls beacon_service_flight_events() every pass and
  * copies go out FLIGHT_EVENT_SPACING_MS apart until `repeats` are sent.
- * beacon_queue_flight_event returns 0 if the queue was full (counted via
- * beacon_flight_event_dropped()). */
+ * A full queue drops the new edge (logged on USB serial). */
 void    beacon_queue_flight_event(uint8_t code, int16_t value, uint8_t repeats);
 uint8_t beacon_service_flight_events(uint32_t now_ms, uint32_t now_s, uint8_t transmit_fast_flag);
-uint32_t beacon_flight_event_dropped(void);
 /* Single immediate TX; used by the queue service. Blocks ~0.7 s (8 B at
  * SF10/BW62.5k) like every packet here. */
 uint8_t beacon_transmit_flight_event(uint8_t code, int16_t value,

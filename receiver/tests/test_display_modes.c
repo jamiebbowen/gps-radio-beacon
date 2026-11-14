@@ -26,9 +26,6 @@
 #include "display_modes/sd_card_mode.h"
 #include "display_modes/rf_mode.h"
 #include "display_modes/compass_mode.h"
-#include "display_modes/i2c_devices.h"
-#include "display_modes/spi_test_mode.h"
-#include "display_modes/imu_test_mode.h"
 #include "display_modes/test_pattern.h"
 #include "gps.h"
 #include "compass.h"
@@ -47,13 +44,15 @@
 static char cap[CAP_ROWS][CAP_COLS + 1];
 static uint32_t cap_updates = 0, cap_clears = 0;
 static uint32_t cap_lines = 0, cap_circles = 0, cap_texts = 0, cap_pixels = 0;
-static uint32_t cap_rects = 0, cap_fillrects = 0, cap_chars = 0;
+static uint32_t cap_chars = 0;
 
+static char cap_text_log[512];           /* every DrawText string, '|'-joined */
 static void cap_clear(void)
 {
+    cap_text_log[0] = '\0';
     memset(cap, 0, sizeof(cap));
     cap_updates = cap_clears = cap_lines = cap_circles = 0;
-    cap_texts = cap_pixels = cap_rects = cap_fillrects = cap_chars = 0;
+    cap_texts = cap_pixels = cap_chars = 0;
 }
 
 void Display_Clear(void) { cap_clears++; memset(cap, 0, sizeof(cap)); }
@@ -71,21 +70,21 @@ void Display_DrawPixel(uint8_t x, uint8_t y, uint8_t c)
 { (void)x; (void)y; (void)c; cap_pixels++; }
 void Display_DrawLine(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, uint8_t c)
 { (void)x0; (void)y0; (void)x1; (void)y1; (void)c; cap_lines++; }
-void Display_DrawRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t c)
-{ (void)x; (void)y; (void)w; (void)h; (void)c; cap_rects++; }
-void Display_FillRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t c)
-{ (void)x; (void)y; (void)w; (void)h; (void)c; cap_fillrects++; }
 void Display_DrawCircle(uint8_t x0, uint8_t y0, uint8_t r, uint8_t c)
 { (void)x0; (void)y0; (void)r; (void)c; cap_circles++; }
 void Display_DrawChar(uint8_t x, uint8_t y, char c)
 { (void)x; (void)y; (void)c; cap_chars++; }
 void Display_DrawText(uint8_t x, uint8_t y, const char *t)
-{ (void)x; (void)y; (void)t; cap_texts++; }
+{
+    (void)x; (void)y; cap_texts++;
+    size_t l = strlen(cap_text_log);
+    snprintf(cap_text_log + l, sizeof(cap_text_log) - l, "%s|", t ? t : "");
+}
 
 static const char *row(int r) { return cap[r]; }
 
 /* ------------------------------------------------------------------ */
-/* HAL GPIO/SPI fakes (sd_card_mode + spi_test_mode read real pins)    */
+/* HAL GPIO/SPI fakes (sd_card_mode reads real pins)                 */
 /* ------------------------------------------------------------------ */
 
 static uint8_t pin_level[8][16];   /* [port sel][pin idx]: 0/1 */
@@ -196,22 +195,16 @@ uint16_t RF_Receiver_GetLastPacketASCII(char *buf, uint16_t max_len)
 uint8_t  RF_Receiver_TestingBuildSuspect(void) { return fake_testing; }
 
 static uint32_t fake_p_attempts = 0, fake_p_ok = 0, fake_p_fail = 0;
-static uint32_t fake_p_null = 0, fake_p_fields = 0, fake_p_chksum = 0,
-                fake_p_marker = 0, fake_p_cs_short = 0;
+static uint32_t fake_p_null = 0;
 void RF_Parser_GetDiagnostics(uint32_t *a, uint32_t *s, uint32_t *f)
 {
     if (a) *a = fake_p_attempts;
     if (s) *s = fake_p_ok;
     if (f) *f = fake_p_fail;
 }
-void RF_Parser_GetDetailedFailures(uint32_t *nul, uint32_t *fld,
-                                   uint32_t *chk, uint32_t *mrk, uint32_t *css)
+void RF_Parser_GetDetailedFailures(uint32_t *nul)
 {
     if (nul) *nul = fake_p_null;
-    if (fld) *fld = fake_p_fields;
-    if (chk) *chk = fake_p_chksum;
-    if (mrk) *mrk = fake_p_marker;
-    if (css) *css = fake_p_cs_short;
 }
 
 /* ------------------------------------------------------------------ */
@@ -227,17 +220,13 @@ SD_Card_Status SD_Card_GetInfo(SD_Card_Info *info)
 }
 
 static uint8_t  fake_compass_update = COMPASS_OK;
-static uint8_t  fake_selftest = COMPASS_OK;
 static uint8_t  fake_cal[4] = {3, 3, 3, 3};
-static uint8_t  fake_cal_restored = 0;
 static uint32_t fake_rv_count = 0;
 static uint8_t  fake_sys = 5, fake_self = 0x0F, fake_syserr = 0;
-static uint8_t  fake_addr = 0x28;
 static const char *fake_errmsg = "none";
 static uint8_t  fake_errcode = 0;
 
 uint8_t Compass_Update(Compass_Data *d) { (void)d; return fake_compass_update; }
-uint8_t Compass_SelfTest(void)          { return fake_selftest; }
 uint8_t Compass_GetCalibrationStatus(uint8_t *s, uint8_t *g, uint8_t *a, uint8_t *m)
 {
     if (s) *s = fake_cal[0];
@@ -253,15 +242,9 @@ uint8_t Compass_GetSystemStatus(uint8_t *s, uint8_t *st, uint8_t *e)
     if (e)  *e  = fake_syserr;
     return COMPASS_OK;
 }
-uint8_t Compass_WasCalRestored(void)      { return fake_cal_restored; }
 uint32_t Compass_GetRvSampleCount(void)   { return fake_rv_count; }
 const char* Compass_GetErrorMessage(void) { return fake_errmsg; }
 uint8_t Compass_GetErrorCode(void)        { return fake_errcode; }
-void Compass_GetDebugInfo(uint8_t *a, uint8_t *r, uint8_t *s, uint8_t *c)
-{
-    if (a) *a = fake_addr;
-    (void)r; (void)s; (void)c;
-}
 
 static void reset_fakes(void)
 {
@@ -276,13 +259,13 @@ static void reset_fakes(void)
     fake_foreign = 0; fake_bound = 0xFF;
     fake_ascii_len = 0; fake_ascii[0] = '\0'; fake_testing = 0;
     fake_p_attempts = fake_p_ok = fake_p_fail = 0;
-    fake_p_null = fake_p_fields = fake_p_chksum = fake_p_marker = fake_p_cs_short = 0;
+    fake_p_null = 0;
     memset(&fake_sd, 0, sizeof(fake_sd));
     fake_sd_status = SD_CARD_OK;
-    fake_compass_update = fake_selftest = COMPASS_OK;
+    fake_compass_update = COMPASS_OK;
     fake_cal[0] = fake_cal[1] = fake_cal[2] = fake_cal[3] = 3;
-    fake_cal_restored = 0; fake_rv_count = 0;
-    fake_sys = 5; fake_self = 0x0F; fake_syserr = 0; fake_addr = 0x28;
+    fake_rv_count = 0;
+    fake_sys = 5; fake_self = 0x0F; fake_syserr = 0;
     fake_errmsg = "none"; fake_errcode = 0;
 }
 
@@ -471,6 +454,44 @@ TEST(sd_card_mode_absent_and_error_decode)
     CHECK(strstr(row(3), "FORMAT_FAIL") != NULL);
 }
 
+TEST(sd_card_mode_small_sizes_and_every_error_code)
+{
+    /* MB / unknown size, MB free, KB and byte write counts */
+    reset_fakes();
+    fake_sd.is_present = 1;
+    fake_sd.is_initialized = 1;
+    fake_sd.is_mounted = 1;
+    fake_sd.total_size_mb = 512;
+    fake_sd.free_space_mb = 300;
+    fake_sd.bytes_written = 5u * 1024u + 7u;
+    cap_clear();
+    DisplayMode_SDCard();
+    CHECK(strstr(row(2), "Size: 512MB") != NULL);
+    CHECK(strstr(row(3), "Free: 300MB") != NULL);
+    CHECK(strstr(row(5), "Wr: 5KB") != NULL);
+    fake_sd.total_size_mb = 0;
+    fake_sd.bytes_written = 900;
+    cap_clear();
+    DisplayMode_SDCard();
+    CHECK(strstr(row(2), "Size: ?") != NULL);
+    CHECK(strstr(row(5), "Wr: 900B") != NULL);
+
+    /* Every init error code the sd_card.c path can leave behind */
+    static const struct { uint32_t code; const char *name; } t[] = {
+        { 1, "MOUNT_FAIL" }, { 91, "CARD_INIT(CMD0)" }, { 92, "GEOMETRY(CMD9)" },
+        { 99, "BD_UNKNOWN" }, { 84, "LFS_ERR" },
+    };
+    fake_sd.is_mounted = 0;
+    for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
+        fake_sd.write_errors = t[i].code;
+        cap_clear();
+        DisplayMode_SDCard();
+        CHECK(strstr(row(1), "Status: Error") != NULL);
+        CHECK(strstr(row(3), t[i].name) != NULL);
+        CHECK(strstr(row(4), "Files: N/A") != NULL);
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* rf_mode                                                             */
 /* ------------------------------------------------------------------ */
@@ -491,7 +512,7 @@ TEST(rf_mode_live_packet_layout)
     rf_last_time = 3000;
     fake_lora_pkts = 100;
     fake_p_attempts = 110; fake_p_ok = 100; fake_p_fail = 10;
-    fake_p_marker = 4; fake_p_chksum = 5; fake_p_fields = 1;
+    fake_p_null = 4;
     fake_dev_mode = 5; fake_last_irq = 0x002;
     strcpy(fake_ascii, "KE0MZS-3 CH2 TELEMETRY");
     fake_ascii_len = 22;
@@ -500,9 +521,9 @@ TEST(rf_mode_live_packet_layout)
     DisplayMode_RF(&rf_gps, &rf_valid, &rf_last_time, &rf_count,
                    &rf_last, rf_has_last);
     CHECK(strstr(row(0), "Last: 2000 ms") != NULL);
-    /* row 1: parse counters - successes/attempts + marker/chksum/fields */
-    CHECK(strstr(row(1), "P: 100/110") != NULL);
-    CHECK(strstr(row(1), "M4") && strstr(row(1), "C5") && strstr(row(1), "F1"));
+    /* row 1: parse counters - successes/attempts, failures, NULL packets */
+    CHECK(strstr(row(1), "P: 100/110 F") != NULL);
+    CHECK(strstr(row(1), " N4") != NULL);
     CHECK(strstr(row(2), "Lat: 39.90000") != NULL);
     CHECK(strstr(row(3), "Lon: -105.00000") != NULL);
     CHECK(strstr(row(5), "Fix: Y") && strstr(row(5), "Sat: 11"));
@@ -579,22 +600,19 @@ TEST(compass_heading_live_layout)
     CHECK(strstr(row(0), "Hdg:123") != NULL && row(0)[strlen(row(0))-1] == 'd');
     CHECK(strstr(row(1), "P:  1.5") != NULL);
     CHECK(strstr(row(2), "Cal S3 G3 A3 M3") != NULL);
-    CHECK(strstr(row(2), " R") == NULL);          /* no restore marker */
     CHECK(strstr(row(6), "St:05") && strstr(row(6), "Er:00"));
     CHECK(strstr(row(7), "RV#0") != NULL);
 }
 
-TEST(compass_heading_stale_and_restored_markers)
+TEST(compass_heading_stale_marker)
 {
     reset_fakes();
     memset(&cdata, 0, sizeof(cdata));
     cdata.heading = 90.0f; cdata.heading_stale = 1;
-    fake_cal_restored = 1;
     fake_rv_count = 4242;
 
     DisplayMode_CompassHeading(&cdata, &cd_heading);
     CHECK(strstr(row(0), "Hdg: 90d*") != NULL);  /* * = stale */
-    CHECK(strstr(row(2), " R") != NULL);          /* R = cal restored */
     CHECK(strstr(row(7), "RV#4242") != NULL);
 }
 
@@ -629,59 +647,44 @@ TEST(compass_visual_rose_and_invalid_heading)
     CHECK(cap_lines == 8);              /* ticks only, needle suppressed */
 }
 
+TEST(compass_visual_stale_and_uncalibrated)
+{
+    /* Comms down with a last-known heading: still drawn, flagged '*' */
+    reset_fakes();
+    memset(&cdata, 0, sizeof(cdata));
+    cdata.heading = 90.0f; cdata.heading_stale = 1; cdata.orientation_valid = 1;
+    fake_compass_update = COMPASS_ERROR;
+    cap_clear();
+    DisplayMode_CompassVisual(&cdata, &cd_heading);
+    CHECK(strstr(cap_text_log, "Hdg: 90d*") != NULL);
+
+    /* Held level but uncalibrated: CAL in the rose and on the heading line */
+    memset(&cdata, 0, sizeof(cdata));
+    cdata.orientation_valid = 1;
+    fake_compass_update = COMPASS_OK;
+    cap_clear();
+    DisplayMode_CompassVisual(&cdata, &cd_heading);
+    CHECK(strstr(cap_text_log, "CAL|") != NULL);
+    CHECK(strstr(cap_text_log, "Hdg: CAL?") != NULL);
+}
+
+TEST(rf_mode_packet_without_position)
+{
+    /* Packets arrive but none carried a position yet */
+    reset_fakes();
+    memset(&rf_gps, 0, sizeof(rf_gps));
+    rf_valid = 0; rf_has_last = 0;
+    Test_SetTick(5000);
+    rf_last_time = 3000;
+    DisplayMode_RF(&rf_gps, &rf_valid, &rf_last_time, &rf_count,
+                   &rf_last, rf_has_last);
+    CHECK(strstr(row(2), "No valid GPS data") != NULL);
+    CHECK(strstr(row(3), "in received packet") != NULL);
+}
+
 /* ------------------------------------------------------------------ */
-/* i2c_devices / spi_test_mode / imu_test_mode / test_pattern          */
+/* test_pattern                                                       */
 /* ------------------------------------------------------------------ */
-
-TEST(i2c_devices_scan_layout_and_clamp)
-{
-    reset_fakes();
-    uint8_t none[] = {0};
-    Display_ShowI2CDevices(none, 0);
-    CHECK(strstr(row(2), "No devices found") != NULL);
-
-    uint8_t devs[10] = {0x28, 0x29, 0x5A, 0x3C, 0x3D, 0x40, 0x41, 0x42, 0x70, 0x77};
-    cap_clear();
-    Display_ShowI2CDevices(devs, 10);    /* >8: rows 4-7 clamp at 8 */
-    CHECK(strstr(row(2), "Found 10 devices") != NULL);
-    CHECK(strstr(row(4), "0x28") && strstr(row(4), "0x29"));
-    CHECK(strstr(row(7), "0x41") && strstr(row(7), "0x42"));
-}
-
-TEST(spi_test_pass_and_fail_rows)
-{
-    reset_fakes();
-    fake_spi_rx = 0xA5;
-    DisplayMode_SPITest();
-    CHECK(strstr(row(0), "SPI Hardware Test") != NULL);
-    CHECK(strstr(row(4), "SPI: OK") != NULL);
-    CHECK(strstr(row(6), "Recv: 0xA5") != NULL);
-    /* CS pin was toggled high->low->high */
-    CHECK(pin_level[port_idx(SD_CS_GPIO_PORT)][pin_idx(SD_CS_PIN)] == 1);
-
-    fake_spi_status = HAL_ERROR;
-    cap_clear();
-    DisplayMode_SPITest();
-    CHECK(strstr(row(4), "SPI: FAIL") != NULL);
-}
-
-TEST(imu_test_pass_and_fail_paths)
-{
-    reset_fakes();
-    fake_rv_count = 5;
-    DisplayMode_IMUTest();
-    CHECK(strstr(row(1), "Check: PASS") != NULL || strstr(row(0), "BNO085") != NULL);
-    CHECK(strstr(row(4), "SH2 fused") != NULL);
-
-    fake_selftest = COMPASS_ERROR;
-    fake_errmsg = "no hub";
-    fake_errcode = 0x2A;
-    cap_clear();
-    DisplayMode_IMUTest();
-    CHECK(strstr(row(1), "Check: FAIL") != NULL);
-    CHECK(strstr(row(2), "no hub") != NULL);
-    CHECK(strstr(row(3), "Err: 0x2A") != NULL);
-}
 
 TEST(test_pattern_corner_layout)
 {
@@ -707,16 +710,16 @@ int main(void)
     run_gps_mode_last_good_fallback();
     run_sd_card_mode_present_gb();
     run_sd_card_mode_absent_and_error_decode();
+    run_sd_card_mode_small_sizes_and_every_error_code();
     run_rf_mode_live_packet_layout();
     run_rf_mode_last_good_and_testing_star();
     run_rf_mode_no_gps_no_packets();
     run_compass_heading_live_layout();
-    run_compass_heading_stale_and_restored_markers();
+    run_compass_heading_stale_marker();
     run_compass_update_failure_no_response();
     run_compass_visual_rose_and_invalid_heading();
-    run_i2c_devices_scan_layout_and_clamp();
-    run_spi_test_pass_and_fail_rows();
-    run_imu_test_pass_and_fail_paths();
+    run_compass_visual_stale_and_uncalibrated();
+    run_rf_mode_packet_without_position();
     run_test_pattern_corner_layout();
     return TEST_SUMMARY();
 }

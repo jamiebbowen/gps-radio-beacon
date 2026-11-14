@@ -19,9 +19,6 @@ extern "C" {
 #define GPS_ERROR   1
 #define GPS_TIMEOUT 2
 
-/* Debug buffer size */
-#define GPS_DEBUG_BUFFER_SIZE 16
-
 /* GPS data structure */
 typedef struct {
   float latitude;          /* Latitude in decimal degrees */
@@ -44,10 +41,6 @@ typedef struct {
   /* Launch detection fields (from RF beacon) */
   uint8_t launch_detected; /* Launch status: 1 if launched, 0 if not */
   uint32_t time_since_launch; /* Time since launch in seconds (0 if not launched) */
-  /* Debug fields */
-  char debug_lat[GPS_DEBUG_BUFFER_SIZE];  /* Raw latitude string from NMEA */
-  char debug_lon[GPS_DEBUG_BUFFER_SIZE];  /* Raw longitude string from NMEA */
-  char debug_sats[GPS_DEBUG_BUFFER_SIZE]; /* Raw satellites string from NMEA */
   /* Fused-packet fields (populated from PACKET_TYPE_FUSED; zero otherwise).
    * is_fused=1 means the latitude/longitude/altitude above came from the
    * transmitter's EKF rather than a direct GPS reading. */
@@ -69,9 +62,9 @@ typedef struct {
 uint8_t GPS_Init(void);
 uint8_t GPS_Update(GPS_Data *gps_data);
 uint8_t GPS_IsFixed(void);
-void GPS_GetRawBytes(uint8_t *bytes);
 void GPS_GetRxStats(uint32_t *bytes, uint32_t *sentences,
-                    uint32_t *dropped, uint16_t *uart_errors);
+                    uint32_t *dropped, uint16_t *uart_errors,
+                    uint32_t *rearm_failures);
 void GPS_UART_RxCpltCallback(UART_HandleTypeDef *huart);
 
 #ifdef __cplusplus

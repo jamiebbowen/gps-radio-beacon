@@ -28,14 +28,8 @@ extern "C" {
 #define RF_ERR_DMA_RX_INIT  0xE3
 
 /* RF data quality thresholds */
-#define RF_DATA_STALE_TIMEOUT_MS  30000  /* 30 seconds - mark data as stale */
-#define RF_MIN_RSSI_DBM          -120    /* Minimum acceptable RSSI in dBm */
-#define RF_MIN_SNR_DB            -10     /* Minimum acceptable SNR in dB */
 
 /* Timing calibration */
-#define RF_BAUD_FUDGE_FACTOR_DEFAULT 1000  /* Default = 1.000 (no adjustment) */
-#define RF_BAUD_FUDGE_MIN            950   /* Min = 0.950 (-5%) */
-#define RF_BAUD_FUDGE_MAX            1050  /* Max = 1.050 (+5%) */
 
 /* RF packet structure */
 typedef struct {
@@ -50,11 +44,8 @@ uint8_t RF_Receiver_Init(void);
 uint8_t RF_Receiver_DataAvailable(void);
 uint8_t RF_Receiver_GetGPSData(GPS_Data *gps_data);
 void RF_Receiver_UART_RxCpltCallback(UART_HandleTypeDef *huart);
-void RF_Receiver_GetDiagnostics(uint32_t *bytes_received, uint8_t *header_matches, uint8_t *last_bytes);
-void RF_Receiver_GetExtendedDiagnostics(uint16_t *checksum_errors);
 uint32_t RF_Receiver_GetLoRaPacketCount(void);
 void RF_Receiver_GetIRQDiagnostics(uint32_t *irq_checks, uint16_t *last_irq, uint8_t *device_mode, uint8_t *spi_test, uint8_t *busy_state);
-void RF_Receiver_GetAsciiBuffer(char *buffer, uint16_t max_len);
 uint16_t RF_Receiver_GetLastPacketASCII(char *buffer, uint16_t max_len);
 uint8_t RF_Receiver_GetParsedData(GPS_Data *gps_data, char *callsign, uint16_t callsign_size, uint8_t *checksum);
 
@@ -66,7 +57,21 @@ uint8_t RF_Receiver_GetChannel(void);
 uint8_t RF_Receiver_NextChannel(void);  /* Cycle to next channel; returns the now-active channel */
 
 /* No-fix heartbeat from the beacon (one-shot; 1 = new heartbeat copied) */
-uint8_t RF_Receiver_GetHeartbeat(HeartbeatPacket_t *hb);
+/* Context computed when a heartbeat arrives (see RF_Receiver_GetHeartbeat).
+ * reset_event / prev_* describe OUR beacon only; a foreign heartbeat (another
+ * rocket on the channel) is intel for the log and never feeds them. */
+typedef enum {
+  RF_HB_RESET_NONE = 0,
+  RF_HB_UPTIME_REGRESSED,    /* uptime went backwards: the TX rebooted     */
+  RF_HB_CAUSE_CHANGED        /* reset-cause byte changed, uptime still up  */
+} RF_HbResetEvent_t;
+typedef struct {
+  uint8_t  foreign;          /* 1 = another rocket's heartbeat             */
+  uint8_t  reset_event;      /* RF_HbResetEvent_t                          */
+  uint16_t prev_uptime;      /* our previous heartbeat's uptime_s          */
+  uint8_t  prev_reset_info;  /* our previous heartbeat's reset_info        */
+} RF_HbInfo_t;
+uint8_t RF_Receiver_GetHeartbeat(HeartbeatPacket_t *hb, RF_HbInfo_t *info);
 
 /* Non-consuming heartbeat access for display (1 = a heartbeat has been
  * heard on the current channel; hb/age_ms filled if non-NULL) */
@@ -75,7 +80,10 @@ uint8_t RF_Receiver_GetLastHeartbeat(HeartbeatPacket_t *hb, uint32_t *age_ms);
 /* Flight-window forensics: inertial trace (one-shot; 1 = new trace) and
  * certified T0 declaration (one-shot; 1 = a new T0 was packaged). The IMU
  * row goes straight to the SD log from main.c; T0 fires one event row. */
-uint8_t RF_Receiver_GetImuTrace(ImuTracePacket_t *imu);
+/* fmt (may be NULL): 1 = legacy 20-byte V1, 2 = V2 with pre-V3 units
+ * (accel cm/s^2, gyro 0.01 deg/s, peak mm/s^2), 3 = V3 units (centi-g,
+ * 0.1 deg/s, milli-g; IMU_TS_V3_FLAG set in ts_ms). */
+uint8_t RF_Receiver_GetImuTrace(ImuTracePacket_t *imu, uint8_t *fmt);
 uint8_t RF_Receiver_GetLaunchT0(LaunchT0Packet_t *t0);
 
 /* Certified flight events: apogee / drogue / main / landed one-shots and
@@ -90,13 +98,34 @@ uint8_t RF_Receiver_GetFlightEvent(FlightEventPacket_t *evt);
 uint8_t RF_Receiver_GetMaxima(MaximaPacket_t *mx);
 uint8_t RF_Receiver_GetHello(HelloPacket_t *hello);
 
-/* Two-way scaffolding (v2 board radios; ignored on v1): operator triggers
- * a PING from a test-mode button press; the received one-shot ACK state is
- * readable to the caller and cleared with ConsumeAckFlag. Packets dropped
- * to foreign beacons never mark the latch. */
-uint8_t RF_Receiver_SendCommand(uint8_t cmd_code, uint8_t param);
-uint8_t RF_Receiver_GetLastAck(AckPacket_t *ack, uint32_t *age_ms);
-uint8_t RF_Receiver_ConsumeAckFlag(void);
+/* Two-way command uplink. RequestPing() queues a PING to the bound
+ * beacon; ServiceCommands() (every main loop) sends it with the long
+ * command preamble, waits RF_CMD_ACK_WAIT_MS for the matching ACK and
+ * retries up to RF_CMD_MAX_ATTEMPTS times. Never sent while the beacon
+ * is airborne (launch seen, landing not yet reported). Each step is
+ * reported once through TakeCommandResult() for the SD log. */
+#define RF_CMD_MAX_ATTEMPTS  3
+#define RF_CMD_ACK_WAIT_MS   2500u
+typedef enum {
+  RF_CMD_EV_NONE = 0,
+  RF_CMD_EV_SENT,         /* attempt transmitted                      */
+  RF_CMD_EV_ACK,          /* matching ACK received                    */
+  RF_CMD_EV_NO_ACK,       /* gave up after RF_CMD_MAX_ATTEMPTS        */
+  RF_CMD_EV_SUPPRESSED,   /* not sent: the beacon is (or was) flying  */
+  RF_CMD_EV_CANCELLED     /* binding lost (scan / channel change)     */
+} RF_CmdEvent_t;
+typedef struct {
+  uint8_t  event;         /* RF_CmdEvent_t                            */
+  uint8_t  cmd;
+  uint16_t seq;
+  uint8_t  attempt;       /* 1-based attempt number                   */
+  uint8_t  echo;          /* ACK echo byte (RF_CMD_EV_ACK)            */
+  int16_t  rssi;          /* ACK RSSI/SNR as received (RF_CMD_EV_ACK) */
+  int8_t   snr;
+} RF_CmdResult_t;
+void    RF_Receiver_RequestPing(void);
+void    RF_Receiver_ServiceCommands(void);
+uint8_t RF_Receiver_TakeCommandResult(RF_CmdResult_t *out);
 
 /* Ambient noise-floor monitor. The floor is the 25th percentile of ~1 Hz
  * GetRssiInst samples taken while the radio idles in continuous RX; the
@@ -127,7 +156,6 @@ uint8_t RF_Receiver_TakeCrcDump(uint8_t *out, uint8_t max_len, uint8_t *total_le
  * otherwise. Manual operator scans remain possible; reboot clears. */
 uint8_t  RF_Receiver_FlightContactLatched(void);
 uint32_t RF_Receiver_GetRescanSuppressions(void);
-void     RF_Receiver_ClearFlightContactLatch(void);
 
 /* Airframe binding / foreign-beacon filter. The receiver binds to the
  * first rocket_id heard on the tuned channel and drops V2 position packets
@@ -161,15 +189,9 @@ void    RF_Receiver_StopScan(void);     /* Cancel (e.g. manual channel pick) */
 uint8_t RF_Receiver_IsScanning(void);
 uint8_t RF_Receiver_ScanUpdate(void);   /* Poll from main loop; 1 = just locked */
 
-/* Timing calibration functions */
-void RF_Receiver_SetBaudFudgeFactor(uint16_t fudge_factor);
-uint16_t RF_Receiver_GetBaudFudgeFactor(void);
-
 /* Signal quality and data age functions */
 void RF_Receiver_GetSignalQuality(int16_t *rssi, int8_t *snr);
-uint8_t RF_Receiver_IsDataStale(uint32_t current_time_ms);
 uint32_t RF_Receiver_GetLastPacketTime(void);
-uint8_t RF_Receiver_IsSignalQualityGood(void);
 
 /* Packet loss diagnostics */
 void RF_Receiver_GetPacketLossDiagnostics(uint32_t *irq_count, uint32_t *lora_packets, uint32_t *duplicates);

@@ -38,8 +38,8 @@
 
 static Ekf_t    s_ekf;
 static bool     s_anchored = false;
-static float    s_lat0 = 0.0f;     /* anchor latitude  (deg) */
-static float    s_lon0 = 0.0f;     /* anchor longitude (deg) */
+static double   s_lat0 = 0.0;      /* anchor latitude  (deg) - double:  */
+static double   s_lon0 = 0.0;      /* anchor longitude (deg) float32 is ~0.5 m */
 static float    s_alt0 = 0.0f;     /* anchor altitude  (m)   */
 static float    s_m_per_deg_lat = 111320.0f;
 static float    s_m_per_deg_lon = 111320.0f;
@@ -52,31 +52,32 @@ static uint32_t s_gps_rejects      = 0;
 /* Anchor confirmation: the first fix only becomes a candidate; the tangent
  * plane anchors on a second fix within NAV_ANCHOR_CONFIRM_M of it. */
 static bool     s_anchor_pending   = false;
-static float    s_cand_lat = 0.0f, s_cand_lon = 0.0f, s_cand_alt = 0.0f;
+static double   s_cand_lat = 0.0, s_cand_lon = 0.0;
+static float    s_cand_alt = 0.0f;
 static uint32_t s_cand_ms = 0;
 
 /* --------- helpers ------------------------------------------------------- */
 
-static inline void anchor_set(float lat, float lon, float alt) {
+static inline void anchor_set(double lat, double lon, float alt) {
     s_lat0 = lat;
     s_lon0 = lon;
     s_alt0 = alt;
     s_m_per_deg_lat = 111320.0f;
-    s_m_per_deg_lon = 111320.0f * cosf(lat * (float)M_PI / 180.0f);
+    s_m_per_deg_lon = (float)(111320.0 * cos(lat * M_PI / 180.0));
     s_anchored = true;
 }
 
-static inline void latlon_to_ned(float lat, float lon, float alt,
+static inline void latlon_to_ned(double lat, double lon, float alt,
                                  float *n, float *e, float *d) {
-    *n = (lat - s_lat0) * s_m_per_deg_lat;
-    *e = (lon - s_lon0) * s_m_per_deg_lon;
+    *n = (float)((lat - s_lat0) * s_m_per_deg_lat);
+    *e = (float)((lon - s_lon0) * s_m_per_deg_lon);
     *d = -(alt - s_alt0);
 }
 
 static inline void ned_to_latlon(float n, float e, float d,
-                                 float *lat, float *lon, float *alt) {
-    *lat = s_lat0 + n / s_m_per_deg_lat;
-    *lon = s_lon0 + e / s_m_per_deg_lon;
+                                 double *lat, double *lon, float *alt) {
+    *lat = s_lat0 + (double)n / s_m_per_deg_lat;
+    *lon = s_lon0 + (double)e / s_m_per_deg_lon;
     *alt = s_alt0 - d;
 }
 
@@ -115,6 +116,16 @@ void nav_init(void) {
     s_anchor_pending   = false;
 }
 
+/* A blocking SF10 transmit holds the loop ~1.1 s, and ekf_predict rejects
+ * any single step over 1 s - so long gaps are integrated in sub-steps
+ * instead of being dropped. The latest acceleration is held for at most
+ * NAV_ACCEL_HOLD_S of a gap (past that it says nothing about the airframe);
+ * the rest coasts on velocity. NAV_MAX_GAP_S bounds the work after an
+ * abnormal stall. */
+#define NAV_PREDICT_SUBSTEP_S  0.25f
+#define NAV_ACCEL_HOLD_S       1.5f
+#define NAV_MAX_GAP_S          30.0f
+
 void nav_predict(void) {
     uint32_t now = millis();
     if (!s_have_any_predict) {
@@ -125,6 +136,7 @@ void nav_predict(void) {
     uint32_t dt_ms = now - s_last_predict_ms;
     if (dt_ms == 0) return;
     float dt = (float)dt_ms * 0.001f;
+    if (dt > NAV_MAX_GAP_S) dt = NAV_MAX_GAP_S;
     s_last_predict_ms = now;
 
     if (!s_anchored) return;  /* can't predict meaningfully without anchor */
@@ -161,10 +173,17 @@ void nav_predict(void) {
         }
     }
 
-    ekf_predict(&s_ekf, a_earth_ned, dt);
+    static const float coast[3] = {0, 0, 0};
+    float done = 0.0f;
+    while (done < dt) {
+        float h = dt - done;
+        if (h > NAV_PREDICT_SUBSTEP_S) h = NAV_PREDICT_SUBSTEP_S;
+        ekf_predict(&s_ekf, (done < NAV_ACCEL_HOLD_S) ? a_earth_ned : coast, h);
+        done += h;
+    }
 }
 
-void nav_update_from_gps(float lat_deg, float lon_deg, float alt_m,
+void nav_update_from_gps(double lat_deg, double lon_deg, float alt_m,
                          uint8_t sats, uint8_t fix_quality) {
     if (fix_quality < 1) return;
     if (sats < 4)        return;
@@ -187,9 +206,9 @@ void nav_update_from_gps(float lat_deg, float lon_deg, float alt_m,
          * simply replaced by the next fix, so one glitch costs one fix. */
         uint32_t now = millis();
         if (s_anchor_pending && (now - s_cand_ms) < 10000u) {
-            float dn = (lat_deg - s_cand_lat) * 111320.0f;
-            float de = (lon_deg - s_cand_lon) * 111320.0f
-                     * cosf(s_cand_lat * (float)M_PI / 180.0f);
+            float dn = (float)((lat_deg - s_cand_lat) * 111320.0);
+            float de = (float)((lon_deg - s_cand_lon) * 111320.0
+                     * cos(s_cand_lat * M_PI / 180.0));
             float dd = alt_m - s_cand_alt;
             float dist2 = dn * dn + de * de + dd * dd;
             if (dist2 <= NAV_ANCHOR_CONFIRM_M * NAV_ANCHOR_CONFIRM_M) {
@@ -220,13 +239,14 @@ void nav_update_from_gps(float lat_deg, float lon_deg, float alt_m,
      * - which a lone stale hot-start glitch also can't fake. */
     bool starved = (now - s_last_gps_ms) > NAV_RESCUE_NOFIX_MS;
     if (starved) {
-        static float    prev_lat, prev_lon, prev_alt;
+        static double   prev_lat, prev_lon;
+        static float    prev_alt;
         static uint32_t prev_ms = 0;
         bool consistent = false;
         if (prev_ms != 0 && (now - prev_ms) <= 5000u) {
-            float dn = (lat_deg - prev_lat) * 111320.0f;
-            float de = (lon_deg - prev_lon) * 111320.0f
-                     * cosf(prev_lat * (float)M_PI / 180.0f);
+            float dn = (float)((lat_deg - prev_lat) * 111320.0);
+            float de = (float)((lon_deg - prev_lon) * 111320.0
+                     * cos(prev_lat * M_PI / 180.0));
             float dd = alt_m - prev_alt;
             consistent = (dn*dn + de*de + dd*dd)
                        <= NAV_RESCUE_MAX_STEP_M * NAV_RESCUE_MAX_STEP_M;
@@ -333,8 +353,6 @@ void nav_get_fused(NavFused_t *out) {
 
     uint32_t now       = millis();
     uint32_t age_ms    = (s_last_gps_ms > 0) ? (now - s_last_gps_ms) : 0xFFFFFFFFu;
-    uint32_t age_ds    = age_ms / 100u;
-    out->age_ds        = (age_ds > 255u) ? 255u : (uint8_t)age_ds;
     out->gps_fresh     = (s_last_gps_ms > 0) && (age_ms < 1500u);
     out->dead_reckoning= (age_ms > (uint32_t)(NAV_DR_TIMEOUT_S * 1000.0f));
 

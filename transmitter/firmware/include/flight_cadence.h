@@ -31,8 +31,10 @@ uint32_t flight_cadence_beacon_interval_s(beacon_state_t state);
 uint32_t flight_cadence_fused_interval_ms(beacon_state_t state);
 
 /* Seconds between heartbeat packets in `state` (also the floor for the
- * no-fix heartbeat rate limiter in flight/ground states). */
-uint32_t flight_cadence_heartbeat_interval_s(beacon_state_t state);
+ * no-fix heartbeat rate limiter in flight/ground states). s_in_state is
+ * the time spent in `state`; only BATTERY_SAVE uses it (the ramp in
+ * config.h). */
+uint32_t flight_cadence_heartbeat_interval_s(beacon_state_t state, uint32_t s_in_state);
 
 /* Seconds between full GPS audit packets in pad states (0 = no audit
  * stream; the first-good-fix one-shot is handled by the loop). */

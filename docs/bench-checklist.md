@@ -55,9 +55,22 @@ Connect the beacon over USB and watch the first seconds of boot:
 - [ ] Rows 6–7 show the raw packet ASCII (two 15-char lines).
 - [ ] Navigation mode: distance is plausibly small, arrow tracks as you
       rotate the receiver.
+- [ ] Two-way PING at bind: the SD log shows `CMD 0x01 sent seq=N try=1`,
+      then `CMD ACK cmd=0x01 seq=N echo=0 rssi=... snr=... try=k` within a
+      few seconds (each try deafens the receiver ~1.8 s - expected).
+      `no ACK after 3 tries` means the beacon never heard it: check the
+      beacon's USB log for `[2way] CMD answered`.
+- [ ] With a second beacon on the same channel, its heartbeats log as
+      `HEARTBEAT FOREIGN ...` and never raise a `TX reset` ERROR row.
 
 ## 4. Compass / IMU
 
+- [ ] **BNO085 bring-up (first boot on this firmware):** the compass page
+      shows a live heading within a few seconds of boot and follows a slow
+      rotation smoothly. The driver's SHTP framing was rewritten to match
+      the hub's real I2C behaviour without hardware in the loop (commit
+      739afde): if the compass never comes up (`BNO085 ERROR`, `Compass no
+      response`), stop and capture the USB/SD log before flying.
 - [ ] IMU test mode: real values updating; **deliberately induce an error**
       once (e.g. hold BOOT and disconnect the BNO085 I2C wire briefly) and
       confirm the error line shows an actual message, not `No error` —

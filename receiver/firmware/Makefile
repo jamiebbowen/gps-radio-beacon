@@ -37,6 +37,8 @@ PROJECT_SOURCES = \
 	$(SRC_DIR)/gps.c \
 	$(SRC_DIR)/gps_parser.c \
 	$(SRC_DIR)/math_utils.c \
+	$(SRC_DIR)/preflight_eval.c \
+	$(SRC_DIR)/log_policy.c \
 	$(SRC_DIR)/lora.c \
 	$(SRC_DIR)/rf_receiver.c \
 	$(SRC_DIR)/rf_parser.c \
@@ -49,8 +51,6 @@ PROJECT_SOURCES = \
 	$(SRC_DIR)/display_modes/rf_mode.c \
 	$(SRC_DIR)/display_modes/navigation_mode.c \
 	$(SRC_DIR)/display_modes/test_pattern.c \
-	$(SRC_DIR)/display_modes/i2c_devices.c \
-	$(SRC_DIR)/display_modes/imu_test_mode.c \
 	$(SRC_DIR)/display_modes/sd_card_mode.c \
 	$(SRC_DIR)/display_modes/channel_mode.c \
 	$(SRC_DIR)/display_modes/rf_stats_mode.c \
@@ -131,7 +131,14 @@ OBJECTS += $(BUILD_DIR)/startup_stm32f401xc.o
 vpath %.c $(sort $(dir $(C_SOURCES)))
 
 # Project sources compile with -Wextra; vendor/HAL objects keep -Wall.
+# WERROR=1 (CI) also turns project-source warnings into errors, so a new
+# warning can't land unnoticed; vendor code never gets -Werror.
+WERROR ?= 0
+ifeq ($(WERROR),1)
+$(PROJECT_OBJECTS): EXTRA_WARN = -Wextra -Werror
+else
 $(PROJECT_OBJECTS): EXTRA_WARN = -Wextra
+endif
 
 # Pull in the gcc-generated header dependency files (absent on first build)
 -include $(wildcard $(BUILD_DIR)/*.d)
@@ -186,4 +193,4 @@ clean:
 # Clean and rebuild
 rebuild: clean all
 
-.PHONY: all build clean rebuild flash
+.PHONY: all compile clean rebuild flash

@@ -40,6 +40,7 @@ static int busy_level    = LOW;
 static int txen_level    = -1;
 static int rxen_level    = -1;
 static int txen_high_seen = 0;     /* TXEN asserted at least once (TX burst) */
+static int rxen_high_writes = 0;   /* RXEN driven high (LNA side selected)   */
 
 void pinMode(int pin, int mode) { (void)pin; (void)mode; }
 int digitalRead(int pin)
@@ -51,12 +52,15 @@ int digitalRead(int pin)
 void digitalWrite(int pin, int value)
 {
     if (pin == LORA_TXEN) { txen_level = value; if (value == HIGH) txen_high_seen = 1; }
-    if (pin == LORA_RXEN) rxen_level = value;
+    if (pin == LORA_RXEN) { rxen_level = value; if (value == HIGH) rxen_high_writes++; }
 }
 
 /* RadioLib knobs */
 int     radiolib_begin_result = RADIOLIB_ERR_NONE;
 int     radiolib_start_receive_result = RADIOLIB_ERR_NONE;
+int     radiolib_read_result = RADIOLIB_ERR_NONE;
+uint32_t radiolib_rx_irq_req = 0;
+uint32_t (*radiolib_irq_hook)(void) = NULL;
 uint32_t radiolib_irq_flags = 0;
 uint8_t radiolib_rx_buf[256];
 size_t  radiolib_rx_len = 0;
@@ -94,6 +98,10 @@ static void reset_knobs(void)
     radiolib_set_cl_result = RADIOLIB_ERR_NONE;
     radiolib_time_on_air_us = 1118000;
     radiolib_start_receive_result = RADIOLIB_ERR_NONE;
+    radiolib_read_result = RADIOLIB_ERR_NONE;
+    rxen_high_writes = 0;
+    radiolib_irq_hook = NULL;
+    radiolib_rx_irq_req = 0;
     radiolib_irq_flags = 0;
     radiolib_rx_len = 0;
     memset(radiolib_rx_buf, 0, sizeof(radiolib_rx_buf));
@@ -353,10 +361,19 @@ TEST(test_poll_rx_guards)
     CHECK(radio_poll_rx(NULL, sizeof(buf), 50) == 0);
     CHECK(radio_poll_rx(buf, 0, 50) == 0);
 
-    /* startReceive failure: returns -state (positive when state<0) */
+    /* startReceive failure: RadioLib's (negative) code comes back as-is.
+     * The old -state made it positive, which callers read as "N bytes". */
     radiolib_start_receive_result = -2;
-    CHECK(radio_poll_rx(buf, sizeof(buf), 50) == 2);
+    CHECK(radio_poll_rx(buf, sizeof(buf), 50) == -2);
     radiolib_start_receive_result = RADIOLIB_ERR_NONE;
+
+    /* readData failure on a received frame: negative too */
+    radiolib_rx_len = 6;
+    radiolib_irq_flags = RADIOLIB_SX126X_IRQ_RX_DONE;
+    radiolib_read_result = -7;
+    CHECK(radio_poll_rx(buf, sizeof(buf), 50) == -7);
+    radiolib_read_result = RADIOLIB_ERR_NONE;
+    CHECK(radio_enabled == true);              /* was on: left on */
 }
 
 TEST(test_poll_rx_captures_packet_and_switches_rx)
@@ -370,13 +387,16 @@ TEST(test_poll_rx_captures_packet_and_switches_rx)
     radiolib_irq_flags = RADIOLIB_SX126X_IRQ_RX_DONE;
 
     uint8_t buf[32];
-    int standby_before = radiolib_standby_calls;
+    int rxen_before = rxen_high_writes;
     int n = radio_poll_rx(buf, sizeof(buf), 50);
     CHECK(n == 5);
     CHECK(memcmp(buf, cmd, 5) == 0);
-    CHECK(radiolib_standby_calls == standby_before + 1);
-    CHECK(rxen_level == HIGH);                 /* antenna on LNA side */
+    CHECK(rxen_high_writes > rxen_before);     /* LNA side for the window */
     CHECK(txen_level == LOW);
+    /* The radio was off before the listen: it is off again afterwards
+     * (RXEN high between pad heartbeats kept the LNA powered for nothing) */
+    CHECK(radio_enabled == false);
+    CHECK(rxen_level == LOW);
 }
 
 TEST(test_poll_rx_crc_error_and_timeout_paths)
@@ -403,6 +423,72 @@ TEST(test_poll_rx_crc_error_and_timeout_paths)
     /* Dead air: no IRQ ever arrives; the ms deadline must close the window */
     radiolib_irq_flags = 0;
     CHECK(radio_poll_rx(buf, sizeof(buf), 20) == 0);
+}
+
+/* Preamble-sampling uplink: the receiver sends commands with a ~1.3 s
+ * preamble so this 40 ms sniff (once a second) always lands inside it.
+ * Once a preamble or header is detected the window must stay open long
+ * enough for the whole frame - a 6-byte command alone is ~0.6 s on air. */
+static unsigned long hook_t0 = 0;
+static uint32_t irq_preamble_then_done(void)
+{
+    unsigned long dt = now_ms - hook_t0;
+    if (dt >= 900) return RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED |
+                          RADIOLIB_SX126X_IRQ_HEADER_VALID |
+                          RADIOLIB_SX126X_IRQ_RX_DONE;
+    if (dt >= 10)  return RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED;
+    return 0;
+}
+static uint32_t irq_preamble_only(void)
+{
+    return (now_ms - hook_t0 >= 10) ? RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED : 0;
+}
+static uint32_t irq_header_error(void)
+{
+    unsigned long dt = now_ms - hook_t0;
+    if (dt >= 300) return RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED |
+                          RADIOLIB_SX126X_IRQ_HEADER_ERR;
+    return (dt >= 10) ? RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED : 0;
+}
+
+TEST(test_poll_rx_preamble_extends_window)
+{
+    reset_knobs();
+    radio_init();
+    radio_enabled = true;
+    const uint8_t cmd[6] = {0x07, 0x2A, 0x01, 0x00, 0x05, 0x99};
+    memcpy(radiolib_rx_buf, cmd, sizeof(cmd));
+    radiolib_rx_len = sizeof(cmd);
+    uint8_t buf[32];
+
+    /* Frame completes ~0.9 s after a preamble was heard 10 ms in */
+    hook_t0 = now_ms;
+    radiolib_irq_hook = irq_preamble_then_done;
+    CHECK(radio_poll_rx(buf, sizeof(buf), 40) == 6);
+    CHECK(memcmp(buf, cmd, sizeof(cmd)) == 0);
+    CHECK(radiolib_rx_irq_req & (1UL << RADIOLIB_IRQ_PREAMBLE_DETECTED));
+    CHECK(now_ms - hook_t0 >= 900 && now_ms - hook_t0 < CMD_RX_EXTEND_MS);
+
+    /* Preamble but the frame never arrives: the extended window still ends */
+    hook_t0 = now_ms;
+    radiolib_irq_hook = irq_preamble_only;
+    CHECK(radio_poll_rx(buf, sizeof(buf), 40) == 0);
+    CHECK(now_ms - hook_t0 >= CMD_RX_EXTEND_MS - 1);
+    CHECK(now_ms - hook_t0 <= CMD_RX_EXTEND_MS + 5);
+
+    /* Nothing heard: the window closes on the base 40 ms deadline */
+    hook_t0 = now_ms;
+    radiolib_irq_hook = NULL;
+    radiolib_irq_flags = 0;
+    CHECK(radio_poll_rx(buf, sizeof(buf), 40) == 0);
+    CHECK(now_ms - hook_t0 <= 45);
+
+    /* A corrupt LoRa header ends the extended listen early */
+    hook_t0 = now_ms;
+    radiolib_irq_hook = irq_header_error;
+    CHECK(radio_poll_rx(buf, sizeof(buf), 40) == 0);
+    CHECK(now_ms - hook_t0 < 400);
+    radiolib_irq_hook = NULL;
 }
 
 TEST(test_poll_rx_truncates_oversized_packet)
@@ -453,6 +539,7 @@ int main(void)
     run_test_poll_rx_guards();
     run_test_poll_rx_captures_packet_and_switches_rx();
     run_test_poll_rx_crc_error_and_timeout_paths();
+    run_test_poll_rx_preamble_extends_window();
     run_test_poll_rx_truncates_oversized_packet();
     run_test_transmit_ack_frame();
 

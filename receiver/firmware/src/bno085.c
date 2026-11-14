@@ -4,9 +4,14 @@
  *
  * SHTP framing: each packet is a 16-bit little-endian length (including
  * the 4-byte header; bit 15 = continuation), then channel number, then a
- * per-channel sequence number, then the payload. On I2C each master read
- * transaction yields exactly one packet; when the hub has nothing queued
- * it answers with length 0x0000 or all-0xFF.
+ * per-channel sequence number, then the cargo. On I2C every master read
+ * transaction starts at the packet's first byte: the length is learned
+ * from a 4-byte header read, and the cargo read that follows returns the
+ * header again ahead of the cargo (Adafruit's i2chal_read and SparkFun's
+ * getData both discard it). When the hub has nothing queued it answers
+ * with length 0x0000 or all-0xFF. Input-report cargo is a run of SH-2
+ * records: a 0xFB base-timestamp reference, then one or more batched
+ * sensor reports.
  */
 
 #include "bno085.h"
@@ -33,10 +38,14 @@
 #define SH2_MAGNETIC_FIELD_CALIBRATED 0x03
 #define SH2_ROTATION_VECTOR           0x05
 #define SH2_GAME_ROTATION_VECTOR      0x08
+#define SH2_TIMESTAMP_REBASE          0xFA
+#define SH2_BASE_TIMESTAMP_REF        0xFB
 
 #define BNO085_I2C_TIMEOUT_MS  10u   /* matches the old BNO055 budget */
 #define BNO085_HDR_LEN          4u
-#define BNO085_MAX_PACKET      32u   /* our reports never exceed 20 bytes */
+#define BNO085_MAX_PACKET     128u   /* cargo buffer: a batched input cargo
+                                       * (0xFB + RV + 3 raw reports) is 49 B */
+#define BNO085_CH_CONTINUATION 0xFFu /* read_packet: tail of a long packet */
 
 static I2C_HandleTypeDef *s_hi2c = NULL;
 static uint8_t s_addr8     = 0;     /* 8-bit (shifted) I2C address */
@@ -85,28 +94,29 @@ static uint8_t bno085_read_packet(uint8_t *channel, uint8_t *payload,
   if (len == 0xFFFF || len == 0) {
     return BNO085_TIMEOUT;  /* hub has nothing queued */
   }
+  uint8_t continuation = (len & 0x8000u) ? 1 : 0;
   len &= 0x7FFF;            /* bit 15 = continuation flag */
   if (len < BNO085_HDR_LEN) {
     return BNO085_TIMEOUT;  /* malformed/short - treat as empty */
   }
 
-  /* hdr[2] = channel, hdr[3] = channel sequence (we do not track it).
-   * The remaining bytes are the payload starting with the report ID. */
-  *channel = hdr[2];
-
-  uint16_t want = len - BNO085_HDR_LEN; /* payload bytes after the header */
-  uint8_t body[BNO085_MAX_PACKET];
-  if (want > sizeof(body)) want = sizeof(body); /* clamp: we only care
-                                                   about small reports */
-  if (HAL_I2C_Master_Receive(s_hi2c, s_addr8, body, want,
+  /* The cargo read restarts at the packet's first byte: header again,
+   * then cargo. Reading less than a long packet is fine - the hub offers
+   * the rest as a continuation packet, which is drained and ignored. */
+  uint8_t pkt[BNO085_HDR_LEN + BNO085_MAX_PACKET];
+  uint16_t want = len;
+  if (want > sizeof(pkt)) want = sizeof(pkt);
+  if (HAL_I2C_Master_Receive(s_hi2c, s_addr8, pkt, want,
                              BNO085_I2C_TIMEOUT_MS) != HAL_OK) {
     return BNO085_ERROR;
   }
 
-  uint8_t out = (uint8_t)want;
+  /* pkt[2] = channel, pkt[3] = channel sequence (we do not track it) */
+  *channel = continuation ? (uint8_t)BNO085_CH_CONTINUATION : pkt[2];
+  uint16_t out = (uint16_t)(want - BNO085_HDR_LEN);
   if (out > max_plen) out = max_plen;
-  memcpy(payload, body, out);
-  *plen = out;
+  memcpy(payload, &pkt[BNO085_HDR_LEN], out);
+  *plen = (uint8_t)out;
   return BNO085_OK;
 }
 
@@ -160,7 +170,7 @@ static void bno085_parse_report(BNO085_State *st,
   switch (id) {
     case SH2_ROTATION_VECTOR:
     case SH2_GAME_ROTATION_VECTOR:
-      if (dlen < 10) return;
+      if (dlen < 8) return;   /* i, j, k, real (RV adds an accuracy est.) */
       st->quat_i    = (float)rd_i16(&d[0]) / BNO085_Q_QUAT;
       st->quat_j    = (float)rd_i16(&d[2]) / BNO085_Q_QUAT;
       st->quat_k    = (float)rd_i16(&d[4]) / BNO085_Q_QUAT;
@@ -197,7 +207,39 @@ static void bno085_parse_report(BNO085_State *st,
       st->mag_ms = HAL_GetTick();
       break;
     default:
-      break;  /* unasked-for reports (advertisement leftovers etc.) */
+      break;  /* timestamp records, unasked-for reports */
+  }
+}
+
+/* Length of one SH-2 record in an input cargo, by report ID (the values
+ * the hub advertises; SH-2 reference manual). 0 = unknown, after which
+ * the rest of the cargo cannot be framed. */
+static uint8_t bno085_record_len(uint8_t id)
+{
+  switch (id) {
+    case SH2_BASE_TIMESTAMP_REF:
+    case SH2_TIMESTAMP_REBASE:          return 5;
+    case SH2_ACCELEROMETER:
+    case SH2_GYROSCOPE_CALIBRATED:
+    case SH2_MAGNETIC_FIELD_CALIBRATED: return 10;
+    case SH2_GAME_ROTATION_VECTOR:      return 12;
+    case SH2_ROTATION_VECTOR:           return 14;
+    default:                            return 0;
+  }
+}
+
+/* Walk an input cargo record by record: the leading 0xFB base timestamp,
+ * then every batched sensor report. (Parsing cargo[0] as the report ID
+ * only ever saw the timestamp record.) */
+static void bno085_parse_cargo(BNO085_State *st, const uint8_t *cargo,
+                               uint8_t len)
+{
+  uint8_t cursor = 0;
+  while (cursor < len) {
+    uint8_t rlen = bno085_record_len(cargo[cursor]);
+    if (rlen == 0 || rlen > (uint8_t)(len - cursor)) return;  /* unknown / cut */
+    bno085_parse_report(st, &cargo[cursor], rlen);
+    cursor = (uint8_t)(cursor + rlen);
   }
 }
 
@@ -287,7 +329,7 @@ uint8_t BNO085_Poll(BNO085_State *st)
     if (r == BNO085_TIMEOUT) break;
     if (r == BNO085_ERROR)   return BNO085_ERROR;
     if (ch == CH_INPUT_REPORTS || ch == CH_WAKE_REPORTS || ch == CH_GYRO_RV) {
-      bno085_parse_report(st, buf, pl);
+      bno085_parse_cargo(st, buf, pl);
     }
   }
   return result;

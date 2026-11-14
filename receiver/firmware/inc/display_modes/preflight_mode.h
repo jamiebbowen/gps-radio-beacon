@@ -9,6 +9,7 @@
 #define PREFLIGHT_MODE_H
 
 #include <stdint.h>
+#include "preflight_eval.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,7 +41,8 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
                            uint8_t tx_sensor_degraded,
                            uint8_t rx_fix_ok, uint8_t rx_sats,
                            uint8_t compass_ok, uint8_t sd_ok,
-                           uint16_t rx_vdd_mv);
+                           uint16_t rx_vdd_mv,
+                           const Preflight_Result_t *pf);
 
 #ifdef __cplusplus
 }

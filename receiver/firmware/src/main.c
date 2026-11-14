@@ -1,19 +1,3 @@
-/**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2023 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
-  ******************************************************************************
-  */
 /* USER CODE BEGIN Header */
 /**
   ******************************************************************************
@@ -45,6 +29,8 @@
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_spi.h"
 #include "gps.h"
+#include "gps_parser.h"
+#include "log_policy.h"
 #include "compass.h"
 #include "globals.h"
 #include "i2c_bus.h"
@@ -52,6 +38,7 @@
 #include "eink.h"
 #include "rf_receiver.h"
 #include "display_modes.h"
+#include "preflight_eval.h"
 #include "math_utils.h"
 #include "button.h"
 #include "sd_card.h"
@@ -89,9 +76,6 @@ typedef enum {
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
-/* USER CODE BEGIN PM */
-
-/* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 SPI_HandleTypeDef hspi1; /* Global SPI handle for SD card */
@@ -166,9 +150,6 @@ void SystemClock_Config(void);
 void MX_GPIO_Init(void);
 void Error_Handler(void);
 static void LogPendingCrashRecord(void);
-/* USER CODE BEGIN PFP */
-
-/* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
@@ -326,18 +307,12 @@ static void Eink_MaybeRefreshSummary(uint32_t now_ms)
 
 int main(void)
 {
-  /* USER CODE BEGIN 1 */
-
-  /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
 
-  /* USER CODE BEGIN Init */
-
-  /* USER CODE END Init */
 
   /* Configure the system clock */
   SystemClock_Config();
@@ -387,9 +362,6 @@ int main(void)
   strcpy(remote_gps_data.fix_str, "0");
   remote_gps_data.satellites = 0;
   strcpy(remote_gps_data.satellites_str, "0");
-  /* Initialize debug strings to prevent garbage output */
-  strcpy(remote_gps_data.debug_lat, "NO_DATA");
-  strcpy(remote_gps_data.debug_lon, "NO_DATA");
   
   /* Display is now fixed in 90° orientation */
   
@@ -492,14 +464,6 @@ int main(void)
     }
     Display_Update();
     HAL_Delay(3000);
-
-    /* A watchdog-forced reboot must never pass for a normal boot: it means
-     * the firmware hung for 32 s. Leave durable evidence, then clear the
-     * reset flags so the next boot reads clean. */
-    if (sd_card_ok && (RCC->CSR & RCC_CSR_IWDGRSTF)) {
-      SD_Card_EnsureLogFile();
-      SD_Card_LogError("Boot after IWDG watchdog reset (firmware hang)");
-    }
 
     /* Log file is created lazily on the first RF packet (see
      * SD_Card_LogNavigation in sd_card.c) - with one current exception:
@@ -626,11 +590,16 @@ int main(void)
       (csr & RCC_CSR_BORRSTF)  ? "BOR"   :
       (csr & RCC_CSR_PINRSTF)  ? "PIN"   : "UNK";
     SD_Card_EnsureLogFile();
-    char rst_msg[48];
+    char rst_msg[64];
     Sys_MeasureVdd();   /* boot rail check: pairs with src=BOR events */
-    snprintf(rst_msg, sizeof(rst_msg), "RESET src=%s vdd=%umV", src,
-             (unsigned)sys_vdd_mv);
-    SD_Card_LogEvent(rst_msg);
+    /* A watchdog-forced reboot must never pass for a normal boot: it means
+     * the firmware hung for 32 s, so it is logged as an ERROR row. (This
+     * used to be a second, separate IWDG row.) */
+    uint8_t wd_reset = (csr & (RCC_CSR_IWDGRSTF | RCC_CSR_WWDGRSTF)) ? 1 : 0;
+    snprintf(rst_msg, sizeof(rst_msg), "RESET src=%s vdd=%umV%s", src,
+             (unsigned)sys_vdd_mv, wd_reset ? " (firmware hang)" : "");
+    if (wd_reset) SD_Card_LogError(rst_msg);
+    else          SD_Card_LogEvent(rst_msg);
     /* Note: idle-level diagnostics live in the main loop (500 ms delay)
      * so the weak internal pull-up has settled past ADC-credible. */
   }
@@ -722,32 +691,12 @@ int main(void)
         SD_Card_LogEvent(dmsg);
       }
     }
-    /* BNO085 initialized successfully - restore saved calibration only on
-     * sensors that accept host offsets. The BNO085 does not (calibration
-     * is dynamic in-sensor), so on this hardware we just report that. */
-    if (sd_card_ok && Compass_HasHostCalOffsets()) {
-      uint8_t cal_data[BNO055_CAL_DATA_LEN];
-      if (SD_Card_LoadCompassCal(cal_data, sizeof(cal_data)) == SD_CARD_OK) {
-        Display_Clear();
-        Display_DrawTextRowCol(1, 1, "BNO085 Initialized");
-        if (Compass_SetCalibrationData(cal_data, sizeof(cal_data)) == COMPASS_OK) {
-          Display_DrawTextRowCol(2, 1, "Cal: Restored");
-        } else {
-          Display_DrawTextRowCol(2, 1, "Cal: RESTORE FAILED");
-        }
-        Display_Update();
-      } else {
-        Display_Clear();
-        Display_DrawTextRowCol(1, 1, "BNO085 Initialized");
-        Display_DrawTextRowCol(2, 1, "Cal: None saved");
-        Display_Update();
-      }
-    } else {
-      Display_Clear();
-      Display_DrawTextRowCol(1, 1, "BNO085 Initialized");
-      Display_DrawTextRowCol(2, 1, "Cal: dynamic (sens)");
-      Display_Update();
-    }
+    /* BNO085 calibrates dynamically in-sensor: there are no host offsets
+     * to restore, just report that. */
+    Display_Clear();
+    Display_DrawTextRowCol(1, 1, "BNO085 Initialized");
+    Display_DrawTextRowCol(2, 1, "Cal: dynamic (sens)");
+    Display_Update();
     HAL_Delay(1000);
   }
   
@@ -758,16 +707,6 @@ int main(void)
   GPS_Data rf_gps_data;
   memset(&gps_data, 0, sizeof(GPS_Data));
   memset(&rf_gps_data, 0, sizeof(GPS_Data));
-  
-  /* Initialize debug strings with safe values */
-  strncpy(gps_data.debug_lat, "INIT-LAT", GPS_DEBUG_BUFFER_SIZE - 1);
-  gps_data.debug_lat[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
-  
-  strncpy(gps_data.debug_lon, "INIT-LON", GPS_DEBUG_BUFFER_SIZE - 1);
-  gps_data.debug_lon[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
-  
-  strncpy(gps_data.debug_sats, "INIT-SAT", GPS_DEBUG_BUFFER_SIZE - 1);
-  gps_data.debug_sats[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
   
   /* Re-arm the scan dwell now that we can actually service it. StartScan ran
    * ~5 s into boot, but the init screens above take long enough that the boot
@@ -843,9 +782,9 @@ int main(void)
       if (!b2_level_logged && HAL_GetTick() > 500) {
         b2_level_logged = 1;
         if (sd_card_ok) {
-          SD_Card_LogEvent(Button2_RawLevel()
-                           ? "B2 pin idle HIGH (PRESSED at boot? wiring/short)"
-                           : "B2 pin idle LOW (wired correctly)");
+          SD_Card_LogEvent(Button2_IsHeld()
+                           ? "B2 held at boot (stuck key or wiring?)"
+                           : "B2 idle at boot");
         }
       }
     }
@@ -979,10 +918,10 @@ int main(void)
         SD_Card_EnsureLogFile();
         SD_Card_LogEvent(b_msg);
         bound_logged = bnd;
-        /* Probe the brand-new bidirectional link at bond time: sends the
-         * beacon a one-shot PING; the beacon's ACK lands on-card within
-         * a second on v2 radios, gracefully silent on v1. */
-        RF_Receiver_SendCommand(CMD_PING, 0);
+        /* Probe the brand-new bidirectional link at bond time: queue a
+         * PING (long preamble, up to 3 tries; see ServiceCommands below).
+         * Gracefully silent on v1 radios. */
+        RF_Receiver_RequestPing();
       }
       uint32_t foreign = RF_Receiver_GetForeignDrops();
       if (foreign != foreign_logged &&
@@ -1020,26 +959,25 @@ int main(void)
      * pad-wait record of sat acquisition progress. */
     if (rf_initialized && sd_card_ok) {
       HeartbeatPacket_t hb;
-      if (RF_Receiver_GetHeartbeat(&hb)) {
+      RF_HbInfo_t hbi;
+      if (RF_Receiver_GetHeartbeat(&hb, &hbi)) {
         /* Beacon-side resets are otherwise indistinguishable from a LOST
          * window at review time: the heartbeat uptime field regresses, and
          * V3 heartbeats add the boot's RCAUSE so we know WHAT. POR alone
          * is the power-cycling-a-new-pack case; everything else needs a
          * close look during post-flight. (Covers TX WDT resets and supply
-         * sags - the lfs-of-the-air.) */
-        static uint16_t prev_hb_uptime = 0;
-        static uint8_t  prev_hb_reset_info = 0;
-        static uint8_t  prev_hb_init = 0;
-        if (hb.uptime_s < prev_hb_uptime) {
+         * sags - the lfs-of-the-air.) rf_receiver tracks this per bound
+         * rocket: another beacon's heartbeats can't fake a reset. */
+        if (hbi.reset_event == RF_HB_UPTIME_REGRESSED) {
           /* A watchdog/soft restart mid-flight: uptime regresses. */
           char r_msg[64];
           snprintf(r_msg, sizeof(r_msg),
-                   "TX reset: uptime %us -> %us (unchanged cause=%s)",
-                   (unsigned)prev_hb_uptime, (unsigned)hb.uptime_s,
+                   "TX reset: uptime %us -> %us (cause=%s)",
+                   (unsigned)hbi.prev_uptime, (unsigned)hb.uptime_s,
                    HB_RESET_NAME(hb.reset_info));
           SD_Card_EnsureLogFile();
           SD_Card_LogError(r_msg);
-        } else if (prev_hb_init && prev_hb_reset_info != hb.reset_info) {
+        } else if (hbi.reset_event == RF_HB_CAUSE_CHANGED) {
           /* The cause register changed between heartbeats of a still-running
            * TX: means a mid-flight physical reset, and this message should
            * say that (the uptime didn't move, so calling it a 'reset' with
@@ -1047,16 +985,12 @@ int main(void)
           char r_msg[80];
           snprintf(r_msg, sizeof(r_msg),
                    "TX boot cause changed: %s(0x%02X) -> %s(0x%02X) at up=%us",
-                   HB_RESET_NAME(prev_hb_reset_info), (unsigned)prev_hb_reset_info,
+                   HB_RESET_NAME(hbi.prev_reset_info), (unsigned)hbi.prev_reset_info,
                    HB_RESET_NAME(hb.reset_info), (unsigned)hb.reset_info,
                    (unsigned)hb.uptime_s);
           SD_Card_EnsureLogFile();
           SD_Card_LogError(r_msg);
         }
-        prev_hb_uptime = hb.uptime_s;
-        prev_hb_reset_info = hb.reset_info;
-        prev_hb_init = 1;
-
         int16_t hb_rssi;
         int8_t  hb_snr;
         RF_Receiver_GetSignalQuality(&hb_rssi, &hb_snr);
@@ -1064,9 +998,10 @@ int main(void)
          * / GARBLED (bytes but no NMEA) / unk (pre-health TX firmware) */
         static const char *hb_gps_names[] = {"unk", "SILENT", "GARBLED", "acq"};
         uint8_t hb_gps = HB_GPS_STATE(hb.gps_health);
-        char hb_msg[112];   /* fits field-127 up/rssi + unknown rc name     */
+        char hb_msg[128];   /* fits field-127 up/rssi + unknown rc name     */
         snprintf(hb_msg, sizeof(hb_msg),
-                 "HEARTBEAT id=%u CH%u sats=%u fix=%u up=%us rssi=%d gps=%s rst=%u rc=%s",
+                 "HEARTBEAT%s id=%u CH%u sats=%u fix=%u up=%us rssi=%d gps=%s rst=%u rc=%s",
+                 hbi.foreign ? " FOREIGN" : "",
                  (unsigned)hb.rocket_id, (unsigned)hb.channel,
                  (unsigned)hb.satellites, (unsigned)hb.fix_quality,
                  (unsigned)hb.uptime_s, (int)hb_rssi,
@@ -1093,11 +1028,12 @@ int main(void)
         SD_Card_LogEvent(t0_msg);
       }
       ImuTracePacket_t imu;
-      if (RF_Receiver_GetImuTrace(&imu)) {
+      uint8_t imu_fmt = 0;
+      if (RF_Receiver_GetImuTrace(&imu, &imu_fmt)) {
         int16_t ir; int8_t isn;
         RF_Receiver_GetSignalQuality(&ir, &isn);
         SD_Card_EnsureLogFile();
-        SD_Card_LogImuTrace(&imu, ir, isn);
+        SD_Card_LogImuTrace(&imu, imu_fmt, ir, isn);
       }
       /* Certified flight events (apogee / drogue / main / landed + anomaly
        * codes). The beacon repeats one-shots by design; each copy is a
@@ -1173,19 +1109,40 @@ int main(void)
       }
     }
 
-    /* Two-way channel answers: an ACK land is one of the few beacon-still-
-     * alive signals we get in the flight window. */
-    if (rf_initialized && sd_card_ok && RF_Receiver_ConsumeAckFlag()) {
-      AckPacket_t ack; uint32_t age;
-      if (RF_Receiver_GetLastAck(&ack, &age)) {
-        char a_msg[64];
-        snprintf(a_msg, sizeof(a_msg),
-                 "CMD ACK cmd=0x%02X seq=%u echo=%u rssi=%d snr=%d",
-                 (unsigned)ack.cmd_code,
-                 (unsigned)((ack.seq_hi << 8) | ack.seq_lo),
-                 (unsigned)ack.echo, (int)0, (int)0);
+    /* Two-way command uplink: drive the PING retry state machine and put
+     * each step on the card - an ACK is one of the few beacon-still-alive
+     * signals we get. */
+    if (rf_initialized) {
+      RF_Receiver_ServiceCommands();
+      RF_CmdResult_t cr;
+      if (RF_Receiver_TakeCommandResult(&cr) && sd_card_ok) {
+        char c_msg[80];
+        switch (cr.event) {
+          case RF_CMD_EV_SENT:
+            snprintf(c_msg, sizeof(c_msg), "CMD 0x%02X sent seq=%u try=%u",
+                     (unsigned)cr.cmd, (unsigned)cr.seq, (unsigned)cr.attempt);
+            break;
+          case RF_CMD_EV_ACK:
+            snprintf(c_msg, sizeof(c_msg),
+                     "CMD ACK cmd=0x%02X seq=%u echo=%u rssi=%d snr=%d try=%u",
+                     (unsigned)cr.cmd, (unsigned)cr.seq, (unsigned)cr.echo,
+                     (int)cr.rssi, (int)cr.snr, (unsigned)cr.attempt);
+            break;
+          case RF_CMD_EV_NO_ACK:
+            snprintf(c_msg, sizeof(c_msg), "CMD 0x%02X seq=%u no ACK after %u tries",
+                     (unsigned)cr.cmd, (unsigned)cr.seq, (unsigned)cr.attempt);
+            break;
+          case RF_CMD_EV_CANCELLED:
+            snprintf(c_msg, sizeof(c_msg), "CMD 0x%02X seq=%u cancelled (binding lost)",
+                     (unsigned)cr.cmd, (unsigned)cr.seq);
+            break;
+          default:
+            snprintf(c_msg, sizeof(c_msg), "CMD 0x%02X suppressed (beacon airborne)",
+                     (unsigned)cr.cmd);
+            break;
+        }
         SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(a_msg);
+        SD_Card_LogEvent(c_msg);
       }
     }
 
@@ -1255,38 +1212,32 @@ int main(void)
         uint32_t sd_werr = (SD_Card_GetInfo(&sd_i) == SD_CARD_OK) ? sd_i.write_errors : 0;
         uint32_t sd_syncs = SD_Card_TakeSyncCount();   /* verify burst cadence dropped */
 
-        /* Live-link floor: valid even mid-flight where the quiet-gated
-         * alert estimate parks (was nf=n/a for whole flights - L0016). */
-        char nfl_field[24] = "";
+        /* The RFSTATS row (log_policy.c). nfl, the live-link floor, is
+         * valid even mid-flight where the quiet-gated alert estimate (nf)
+         * parks (was nf=n/a for whole flights - L0016). */
+        LogPolicy_RfStats_t rs = {0};
         int16_t nfl = 0;
-        if (RF_Receiver_GetLiveNoiseFloor(&nfl)) {
-          snprintf(nfl_field, sizeof(nfl_field), " nfl=%ddBm", (int)nfl);
-        }
-
+        rs.pkts = pkts;
+        rs.irqs = irqs;
+        rs.crc = RF_Receiver_GetCrcErrors();
+        rs.wedges = RF_Receiver_GetWedgesRecovered();
+        rs.nf_valid = RF_Receiver_GetNoiseFloor(&nf) ? 1 : 0;
+        rs.nf_dbm = nf;
+        rs.vdd_mv = sys_vdd_mv;
+        rs.loop_ms = loop_max;
+        rs.sd_ms = sd_max;
+        rs.syncs = sd_syncs;
+        rs.spidiv = (uint8_t)SD_FastSpeedEnabled();
+        rs.rf_ms = m_rf;
+        rs.gps_ms = m_gps;
+        rs.disp_ms = m_disp;
+        rs.cmp_ms = m_cmp;
+        rs.iters = loops_d;
+        rs.sderr = sd_werr;
+        rs.nfl_valid = RF_Receiver_GetLiveNoiseFloor(&nfl) ? 1 : 0;
+        rs.nfl_dbm = nfl;
         char st_msg[200];
-        if (RF_Receiver_GetNoiseFloor(&nf)) {
-          snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=%ddBm vdd=%umV loop=%lums sd=%lums syncs=%lu spidiv=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu%s",
-                   (unsigned long)pkts, (unsigned long)irqs,
-                   (unsigned long)RF_Receiver_GetCrcErrors(),
-                   (unsigned long)RF_Receiver_GetWedgesRecovered(), (int)nf,
-                   (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max,
-                   (unsigned long)sd_syncs, (unsigned)SD_FastSpeedEnabled(),
-                   (unsigned long)m_rf, (unsigned long)m_gps,
-                   (unsigned long)m_disp, (unsigned long)m_cmp,
-                   (unsigned long)loops_d, (unsigned long)sd_werr, nfl_field);
-        } else {
-          snprintf(st_msg, sizeof(st_msg),
-                   "RFSTATS pkts=%lu irq=%lu crc=%lu wedges=%lu nf=n/a vdd=%umV loop=%lums sd=%lums syncs=%lu spidiv=%u rf=%lums gps=%lums disp=%lums cmp=%lums iters=%lu sderr=%lu%s",
-                   (unsigned long)pkts, (unsigned long)irqs,
-                   (unsigned long)RF_Receiver_GetCrcErrors(),
-                   (unsigned long)RF_Receiver_GetWedgesRecovered(),
-                   (unsigned)sys_vdd_mv, (unsigned long)loop_max, (unsigned long)sd_max,
-                   (unsigned long)sd_syncs, (unsigned)SD_FastSpeedEnabled(),
-                   (unsigned long)m_rf, (unsigned long)m_gps,
-                   (unsigned long)m_disp, (unsigned long)m_cmp,
-                   (unsigned long)loops_d, (unsigned long)sd_werr, nfl_field);
-        }
+        LogPolicy_FormatRfStats(&rs, st_msg, sizeof(st_msg));
         SD_Card_LogEvent(st_msg);
       }
     }
@@ -1389,13 +1340,6 @@ int main(void)
       }
     }
     
-    /* If we don't have valid current GPS data but have last known good data,
-       use that for navigation calculations */
-    if (!has_valid_local_gps && has_last_good_local_gps) {
-      /* Use last known good GPS data for navigation, but keep current data for display */
-      /* This allows navigation to continue while showing the current GPS status */
-    }
-    
     /* One-shot SD breadcrumbs for "why was the handheld's fix slow?" The
      * first-fix event records the time; the 120 s no-fix snapshot records
      * the sat count, which distinguishes a silent module/UART (sats 0)
@@ -1427,42 +1371,19 @@ int main(void)
          *                           mismatch - e.g. module in UBX-binary mode)
          *   snt>0, drp climbing  -> main-loop stalls losing bursts (software)
          *   otherwise, sats>0    -> marginal sky view (physics) */
-        uint32_t u_bytes, u_sents, u_drops;
+        uint32_t u_bytes, u_sents, u_drops, u_rearm;
         uint16_t u_errs;
-        GPS_GetRxStats(&u_bytes, &u_sents, &u_drops, &u_errs);
-        extern uint32_t gps_checksum_errors;   /* gps_parser.c */
-        char gps_msg[96];
+        GPS_GetRxStats(&u_bytes, &u_sents, &u_drops, &u_errs, &u_rearm);
+        char gps_msg[128];
         snprintf(gps_msg, sizeof(gps_msg),
-                 "Local GPS no fix at 120s: rx=%lu snt=%lu drp=%lu csum=%lu er=%u sats=%d",
+                 "Local GPS no fix at 120s: rx=%lu snt=%lu drp=%lu csum=%lu er=%u ra=%lu sats=%d",
                  (unsigned long)u_bytes, (unsigned long)u_sents,
-                 (unsigned long)u_drops, (unsigned long)gps_checksum_errors,
-                 (unsigned)u_errs, (int)gps_data.satellites);
+                 (unsigned long)u_drops, (unsigned long)GPS_Parser_GetChecksumErrors(),
+                 (unsigned)u_errs, (unsigned long)u_rearm, (int)gps_data.satellites);
         SD_Card_LogEvent(gps_msg);
       }
     }
     
-    /* Persist compass calibration as soon as it is "good enough" (mag_cal >= 2),
-     * and re-save whenever calibration quality improves. Only latch on a
-     * successful save so transient SD errors are retried. Skipped entirely
-     * on the BNO085: it exposes no host-loadable calibration offsets. */
-    if (sd_card_ok && Compass_HasHostCalOffsets()) {
-      static uint8_t best_mag_cal_saved = 0; /* 0 = nothing persisted yet */
-      static uint32_t last_cal_save_ms = 0;
-
-      uint8_t sys_cal, gyro_cal, accel_cal, mag_cal;
-      if (Compass_GetCalibrationStatus(&sys_cal, &gyro_cal, &accel_cal, &mag_cal) == COMPASS_OK
-          && mag_cal >= 2
-          && mag_cal > best_mag_cal_saved
-          && (HAL_GetTick() - last_cal_save_ms) > 2000) {
-        uint8_t cal_data[BNO055_CAL_DATA_LEN];
-        if (Compass_GetCalibrationData(cal_data, sizeof(cal_data)) == COMPASS_OK
-            && SD_Card_SaveCompassCal(cal_data, sizeof(cal_data)) == SD_CARD_OK) {
-          best_mag_cal_saved = mag_cal;
-        }
-        last_cal_save_ms = HAL_GetTick();
-      }
-    }
-
     /* Persist the quat->heading convention lock the first time it forms in
      * any session: later boots get tilt-immunity immediately instead of
      * waiting for a level+calibrated moment. Log it too, so the field log
@@ -1565,24 +1486,12 @@ int main(void)
               int8_t  pkt_snr;
               RF_Receiver_GetSignalQuality(&pkt_rssi, &pkt_snr);
 
-              /* Link-edge breadcrumbs: the crossing moments mark the
-               * walk-out/walk-back edge without needing post-hoc RSSI
-               * archaeology. -85/-80 hysteresis keeps flutter out. */
-              if (sd_card_ok) {
-                static uint8_t link_weak = 0;
-                if (!link_weak && pkt_rssi <= -85) {
-                  link_weak = 1;
-                  char wk[48];
-                  snprintf(wk, sizeof(wk), "LINK WEAK rssi=%ddBm snr=%d",
-                           (int)pkt_rssi, (int)pkt_snr);
-                  SD_Card_LogEvent(wk);
-                } else if (link_weak && pkt_rssi >= -80) {
-                  link_weak = 0;
-                  char wk[48];
-                  snprintf(wk, sizeof(wk), "LINK OK rssi=%ddBm snr=%d",
-                           (int)pkt_rssi, (int)pkt_snr);
-                  SD_Card_LogEvent(wk);
-                }
+              /* Link-edge breadcrumbs (log_policy.c): the walk-out /
+               * walk-back edge, with hysteresis. */
+              static LogPolicy_LinkEdge_t link_edge;
+              char wk[48];
+              if (LogPolicy_LinkEdge(&link_edge, pkt_rssi, pkt_snr, wk, sizeof(wk))) {
+                SD_Card_LogEvent(wk);
               }
 
               /* Log navigation snapshot. Compute distance/bearing from THIS
@@ -1595,11 +1504,14 @@ int main(void)
                                    (has_last_good_local_gps ? &last_good_local_gps : NULL);
               float row_dist_km = -1.0f, row_bearing = -1.0f;
               if (base_ptr) {
-                float d = calculate_distance(base_ptr->latitude, base_ptr->longitude,
-                                             rf_gps_data.latitude, rf_gps_data.longitude);
-                if (d >= 0.0f) row_dist_km = d / 1000.0f;
-                row_bearing = calculate_bearing(base_ptr->latitude, base_ptr->longitude,
-                                                rf_gps_data.latitude, rf_gps_data.longitude);
+                Nav_Solution_t row_nav;
+                Nav_Compute(base_ptr->latitude, base_ptr->longitude, has_valid_local_gps,
+                            rf_gps_data.latitude, rf_gps_data.longitude,
+                            compass_heading, &row_nav);
+                if (row_nav.valid) {
+                  row_dist_km = row_nav.distance_km;
+                  row_bearing = row_nav.bearing_deg;
+                }
               }
               SD_Card_LogNavigation(&rf_gps_data, base_ptr,
                                     row_dist_km, row_bearing,
@@ -1657,73 +1569,26 @@ int main(void)
 
     /* Calculate distance and direction if we have valid GPS data (current or last known good) and remote GPS */
     if ((has_valid_local_gps || has_last_good_local_gps) && has_valid_remote_gps) {
-      /* Use math_utils.c functions for accurate distance and bearing calculations */
-      
-      /* Calculate distance using Haversine formula */
-      float calc_distance;
-      
-      /* Use current GPS data if valid, otherwise use last known good GPS data */
-      if (has_valid_local_gps) {
-        calc_distance = calculate_distance(
-          local_gps_data.latitude, local_gps_data.longitude,
-          remote_gps_data.latitude, remote_gps_data.longitude);
-      } else {
-        /* Use last known good GPS data */
-        calc_distance = calculate_distance(
-          last_good_local_gps.latitude, last_good_local_gps.longitude,
-          remote_gps_data.latitude, remote_gps_data.longitude);
-      }
-      
-      /* Only update if we got a valid distance */
-      if (calc_distance >= 0.0f) {
-        distance_to_tx = calc_distance / 1000.0f; /* Convert to km */
-        /* Store as last known good distance */
+      /* One shared solution (math_utils.c Nav_Compute, the same one the
+       * navigation page uses): from the live local fix if there is one,
+       * else from the last good one. Unusable coordinates keep the last
+       * good distance and mark the direction unknown. */
+      const GPS_Data *nav_base = has_valid_local_gps ? &local_gps_data
+                                                     : &last_good_local_gps;
+      Nav_Solution_t nav_sol;
+      Nav_Compute(nav_base->latitude, nav_base->longitude, has_valid_local_gps,
+                  remote_gps_data.latitude, remote_gps_data.longitude,
+                  compass_heading, &nav_sol);
+      if (nav_sol.valid) {
+        distance_to_tx = nav_sol.distance_km;
         last_known_good_distance = distance_to_tx;
+        direction_to_tx = nav_sol.bearing_deg;
+        /* The arrow angle: bearing FROM the compass heading TO the beacon */
+        relative_direction = (compass_heading >= 0.0f && compass_heading <= 360.0f)
+                             ? nav_sol.relative_deg : -1.0f;
       } else {
-        /* Use last known good distance if available */
-        if (last_known_good_distance >= 0.0f) {
-          distance_to_tx = last_known_good_distance;
-        } else {
-          distance_to_tx = -1.0f; /* Invalid distance */
-        }
-      }
-      
-      /* Calculate bearing (direction) */
-      float calc_bearing;
-      
-      /* Use current GPS data if valid, otherwise use last known good GPS data */
-      if (has_valid_local_gps) {
-        calc_bearing = calculate_bearing(
-          local_gps_data.latitude, local_gps_data.longitude,
-          remote_gps_data.latitude, remote_gps_data.longitude);
-      } else {
-        /* Use last known good GPS data */
-        calc_bearing = calculate_bearing(
-          last_good_local_gps.latitude, last_good_local_gps.longitude,
-          remote_gps_data.latitude, remote_gps_data.longitude);
-      }
-      
-      /* Only update if we got a valid bearing */
-      if (calc_bearing >= 0.0f) {
-        direction_to_tx = calc_bearing;
-        
-        /* Calculate relative direction based on compass heading */
-        if (compass_heading >= 0.0f && compass_heading <= 360.0f) {
-          /* Calculate the relative direction to make arrow point correctly */
-          /* This is the angle FROM the compass heading TO the transmitter direction */
-          /* We want the arrow to point toward the transmitter */
-          /* When facing north (0°), and transmitter is east (90°), arrow should point right (90°) */
-          /* When facing east (90°), and transmitter is north (0°), arrow should point left (270°) */
-          relative_direction = direction_to_tx - compass_heading;
-          /* Normalize to 0-360 range */
-          while (relative_direction >= 360.0f) relative_direction -= 360.0f;
-          while (relative_direction < 0.0f) relative_direction += 360.0f;
-        } else {
-          /* Invalid compass heading */
-          relative_direction = -1.0f;
-        }
-      } else {
-        /* Invalid bearing */
+        distance_to_tx = (last_known_good_distance >= 0.0f) ? last_known_good_distance
+                                                            : -1.0f;
         direction_to_tx = -1.0f;
         relative_direction = -1.0f;
       }
@@ -1745,28 +1610,13 @@ int main(void)
     last_compass_update = current_time;
   }
   
-  /* SD session marker: log the moment contact is lost (once per loss), so
-   * post-flight log review can tell "signal lost at T" from "operator
-   * stopped logging". Re-arms when contact resumes. 5 min matches the
-   * auto re-scan threshold: far beyond the slowest beacon cadence (60 s). */
-  static uint8_t lost_logged = 0;
-  static uint32_t lost_since_ms = 0;
-  if (last_rf_packet_time > 0 && current_time - last_rf_packet_time > 300000) {
-    if (!lost_logged) {
-      lost_logged = 1;
-      lost_since_ms = current_time;
-      SD_Card_LogEvent("RF LOST (>5min silence)");
-    }
-  } else if (last_rf_packet_time > 0) {
-    if (lost_logged) {
-      /* First packet after a logged blackout: the gap's true length is
-       * forensic data (beacon recovery vs receiver wedge vs geometry). */
-      char rg_msg[48];
-      snprintf(rg_msg, sizeof(rg_msg), "RF REGAINED after %lus",
-               (unsigned long)((current_time - lost_since_ms) / 1000u));
-      SD_Card_LogEvent(rg_msg);
-    }
-    lost_logged = 0;
+  /* SD session marker (log_policy.c): one RF LOST row per silence over
+   * 5 min, then RF REGAINED with the whole silence's length. */
+  static LogPolicy_Contact_t contact;
+  char contact_msg[48];
+  if (LogPolicy_Contact(&contact, last_rf_packet_time, current_time,
+                        contact_msg, sizeof(contact_msg))) {
+    SD_Card_LogEvent(contact_msg);
   }
 
   /* Check if RF data is stale (no updates for more than 180 seconds) */
@@ -1793,6 +1643,32 @@ int main(void)
   /* Use button-controlled display mode */
   DisplayMode_t display_mode = current_display_mode;
     
+  /* One go/no-go evaluation per loop, shared by the PRE-FLIGHT page and the
+   * navigation page's ready-to-fly row (they used to disagree: the nav row
+   * skipped the TESTING-build and low-battery vetoes).
+   * Link freshness: the gate must EXCEED the pre-launch cadence, otherwise
+   * the check flaps CHK for the tail of every pad cycle. 35 s covers the
+   * sparser (30 s) flight-prep regime with margin and stays correct during
+   * the denser (5 s) range-testing regime; heartbeats fill the gap in
+   * no-fix state. */
+  uint8_t pf_link_ok = 0;
+  uint32_t pf_link_age_s = 0;
+  if (last_rf_packet_time > 0) {
+    pf_link_age_s = (current_time - last_rf_packet_time) / 1000;
+    pf_link_ok = (pf_link_age_s <= 35);
+  }
+  Preflight_Inputs_t pf_in = {
+    .link_ok         = pf_link_ok,
+    .tx_fix          = remote_gps_data.fix,
+    .tx_sats         = (uint8_t)remote_gps_data.satellites,
+    .rx_fix_ok       = has_valid_local_gps,
+    .compass_ok      = compass_data.heading_valid && !compass_data.heading_stale,
+    .rx_vdd_mv       = (uint16_t)sys_vdd_mv,
+    .testing_suspect = RF_Receiver_TestingBuildSuspect(),
+  };
+  Preflight_Result_t pf_result;
+  Preflight_Evaluate(&pf_in, &pf_result);
+
   switch (display_mode) {
     case DISPLAY_MODE_GPS:
       DisplayMode_GPS(&local_gps_data, &last_good_local_gps, has_last_good_local_gps);
@@ -1814,7 +1690,7 @@ int main(void)
     case DISPLAY_MODE_NAVIGATION:
       DisplayMode_Navigation(has_valid_local_gps, has_valid_remote_gps,
                                 &local_gps_data, &remote_gps_data, compass_heading,
-                                last_rf_packet_time, rf_packet_count);
+                                last_rf_packet_time, rf_packet_count, &pf_result);
       break;
       
     case DISPLAY_MODE_SD_CARD:
@@ -1830,17 +1706,6 @@ int main(void)
       break;
 
     case DISPLAY_MODE_PREFLIGHT: {
-      /* Link freshness: the gate must EXCEED the pre-launch cadence,
-       * otherwise the check flaps CHK for the tail of every pad cycle.
-       * 35 s covers the sparser (30 s) flight-prep regime with margin and
-       * stays correct during the denser (5 s) range-testing regime;
-       * heartbeats fill the gap in no-fix state. */
-      uint8_t pf_link_ok = 0;
-      uint32_t pf_link_age_s = 0;
-      if (last_rf_packet_time > 0) {
-        pf_link_age_s = (current_time - last_rf_packet_time) / 1000;
-        pf_link_ok = (pf_link_age_s <= 35);
-      }
       int16_t pf_rssi = 0;
       int8_t pf_snr = 0;
       RF_Receiver_GetSignalQuality(&pf_rssi, &pf_snr);
@@ -1861,13 +1726,14 @@ int main(void)
                             remote_gps_data.fused_sensor_degraded,
                             has_valid_local_gps, (uint8_t)local_gps_data.satellites,
                             compass_data.heading_valid && !compass_data.heading_stale,
-                            sd_card_ok, (uint16_t)sys_vdd_mv);
+                            sd_card_ok, (uint16_t)sys_vdd_mv, &pf_result);
       break;
     }
       
     default:
-      /* Unknown mode, reset to GPS */
-      display_mode = DISPLAY_MODE_GPS;
+      /* Unknown mode, reset to GPS (the real state - display_mode is
+       * only this pass's local copy) */
+      current_display_mode = DISPLAY_MODE_GPS;
       break;
   }
   
@@ -2042,7 +1908,7 @@ void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256; // APB2 = 21MHz, prescaler 256 gives ~82kHz (ultra-safe for SD card init)
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_256; // APB2 = 10.5 MHz (42 MHz HCLK / 4): /256 = ~41 kHz (ultra-safe for SD card init)
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLED;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLED;

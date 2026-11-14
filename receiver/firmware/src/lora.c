@@ -9,8 +9,6 @@
 /* Private variables */
 static SPI_HandleTypeDef *lora_hspi = NULL;
 static uint8_t lora_initialized = 0;
-static int16_t last_rssi = 0;
-static int8_t last_snr = 0;
 
 /* Currently tuned rocket channel (see channel plan in lora.h) */
 static uint8_t lora_current_channel = 0;
@@ -454,6 +452,16 @@ uint8_t LoRa_ReadPacket(LoRa_Packet_t *packet) {
     /* Check for CRC error */
     if (irq_status & SX1268_IRQ_CRC_ERROR) {
         packet->crc_error = true;
+        packet->length = 0;
+        /* The SX126x keeps a CRC-failed payload in its buffer: read it so
+         * the "CRC garbage" forensics see THIS frame, not the previous good
+         * packet still sitting in the caller's struct. */
+        uint8_t crc_bs[2];
+        if (LoRa_ReadCommand(SX1268_CMD_GET_RXBUFFERSTATUS, crc_bs, 2) == LORA_OK &&
+            crc_bs[0] > 0 &&
+            LoRa_ReadBuffer(crc_bs[1], packet->data, crc_bs[0]) == LORA_OK) {
+            packet->length = crc_bs[0];
+        }
         LoRa_ClearIRQ(SX1268_IRQ_ALL);
         LoRa_ConsumePacketReady(pending_at_start);
         /* Continuous-RX (timeout=0xFFFFFF) keeps the radio in RX after CRC error */
@@ -491,8 +499,6 @@ uint8_t LoRa_ReadPacket(LoRa_Packet_t *packet) {
                  * Casting after the unsigned divide turned e.g. -2 dB (0xF8)
                  * into +62 dB, corrupting weak-signal readings. */
                 packet->snr = (int8_t)((int8_t)pkt_status[1] / 4);
-                last_rssi = packet->rssi;
-                last_snr = packet->snr;
             }
             
             /* Clear IRQ for this packet */
@@ -508,20 +514,6 @@ uint8_t LoRa_ReadPacket(LoRa_Packet_t *packet) {
     (void)LoRa_SetReceiveMode();
     LoRa_ConsumePacketReady(pending_at_start);
     return LORA_ERROR;
-}
-
-/**
- * @brief Get RSSI of last received packet
- */
-int16_t LoRa_GetRSSI(void) {
-    return last_rssi;
-}
-
-/**
- * @brief Get SNR of last received packet
- */
-int8_t LoRa_GetSNR(void) {
-    return last_snr;
 }
 
 /**
@@ -630,15 +622,6 @@ uint8_t LoRa_CadResult(void) {
 }
 
 /**
- * @brief Get status of LoRa module
- */
-uint8_t LoRa_GetStatus(void) {
-    uint8_t status;
-    LoRa_ReadCommand(SX1268_CMD_GET_STATUS, &status, 1);
-    return status;
-}
-
-/**
  * @brief Clear IRQ flags
  */
 uint8_t LoRa_ClearIRQ(uint16_t irq_mask) {
@@ -659,17 +642,6 @@ uint8_t LoRa_GetIRQStatus(uint16_t *irq_status) {
         return LORA_OK;
     }
     return LORA_ERROR;
-}
-
-/**
- * @brief Clear IRQ status
- */
-uint8_t LoRa_ClearIRQStatus(uint16_t irq_mask) {
-    uint8_t clear_params[2] = {
-        (uint8_t)(irq_mask >> 8),
-        (uint8_t)(irq_mask & 0xFF)
-    };
-    return LoRa_SendCommand(SX1268_CMD_CLR_IRQSTATUS, clear_params, 2);
 }
 
 /**
@@ -722,12 +694,15 @@ uint8_t LoRa_GetRssiInst(int16_t *rssi_dbm) {
 }
 
 /**
- * @brief Transmit packet (for testing)
- * @note Currently unused by the receiver firmware. Kept safe for future use:
- *       switches the RF switch to TX, waits for TX_DONE, then restores the
- *       RX packet params and re-enters continuous RX regardless of outcome.
+ * @brief Transmit a packet with a chosen preamble length (blocking)
+ * @note Used for the two-way command uplink: a long preamble lets the
+ *       beacon's short listen sniff land inside it. Switches the RF switch
+ *       to TX, waits for TX_DONE, then restores the normal RX packet params
+ *       and re-enters continuous RX regardless of outcome.
+ * @param preamble_symbols LoRa preamble length in symbols
  */
-uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
+uint8_t LoRa_TransmitPreamble(const uint8_t *data, uint8_t length,
+                              uint16_t preamble_symbols) {
     if (!lora_initialized || data == NULL || length == 0) return LORA_ERROR;
     
     uint8_t result = LORA_ERROR;
@@ -745,8 +720,8 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
     if (LoRa_WriteBuffer(0, data, length) == LORA_OK) {
         /* Set packet length */
         uint8_t pkt_params[6] = {
-            (uint8_t)(LORA_PREAMBLE_LENGTH >> 8),
-            (uint8_t)(LORA_PREAMBLE_LENGTH & 0xFF),
+            (uint8_t)(preamble_symbols >> 8),
+            (uint8_t)(preamble_symbols & 0xFF),
             0x00,    // Variable length
             length,  // Payload length
             0x01,    // CRC on
@@ -756,8 +731,8 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
             /* Start TX (timeout field 0x000000 = no timeout) */
             uint8_t tx_params[3] = {0x00, 0x00, 0x00};
             if (LoRa_SendCommand(SX1268_CMD_SET_TX, tx_params, 3) == LORA_OK) {
-                /* Wait for TX_DONE; a full SF10/62.5k/CR4-6 19-byte packet
-                 * is ~0.9 s - give it 3 s of headroom. */
+                /* Wait for TX_DONE. A 6-byte command with the 80-symbol
+                 * command preamble is ~1.8 s at SF10/62.5k; 3 s headroom. */
                 uint32_t start = HAL_GetTick();
                 result = LORA_TIMEOUT;
                 while ((HAL_GetTick() - start) < 3000) {

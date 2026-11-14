@@ -3,9 +3,6 @@
 
 #include <stdint.h>
 
-// Packet format selection
-#define USE_BINARY_PACKETS  1  // Set to 1 for binary, 0 for ASCII
-
 /* Binary GPS packet structure: V2 = 14 bytes, V1 (legacy, no rocket_id)
  * = 13 bytes. rocket_id lets the receiver ignore a foreign beacon on the
  * same channel running this same firmware. Valid IDs are 0..254; 255 is
@@ -24,8 +21,7 @@ typedef struct __attribute__((packed)) {
 
 // Packet types
 #define PACKET_TYPE_GPS         0x01
-#define PACKET_TYPE_CALLSIGN    0x02  // Future use
-#define PACKET_TYPE_TELEMETRY   0x03  // Future use
+// 0x02, 0x03: retired draft IDs, never sent on the air - do not reuse
 #define PACKET_TYPE_FUSED       0x04  // EKF-fused position + velocity
 #define PACKET_TYPE_HEARTBEAT   0x05  // No-fix keepalive (see HeartbeatPacket_t)
 #define PACKET_TYPE_IMU         0x06  // Inertial trace during ascent (forensics)
@@ -101,7 +97,6 @@ typedef struct __attribute__((packed)) {
                                              // not latched; a cluster of these precedes nav rescue)
 #define FUSED_FLAG_V3                0x01  // Bit 0: V3 wire marker (always set on the air;
                                              // lets the RX tell V3 from legacy 19-byte V1)
-#define FUSED_FLAG_RESERVED_MASK     FUSED_FLAG_V3  /* old name for bit 0 */
 
 /* Fused packet: V3 = 19 bytes. V3 dropped age_ds to get back under the
  * SF10/BW62.5k airtime step the V2 rocket_id byte had crossed: 19 B costs
@@ -154,21 +149,29 @@ typedef struct __attribute__((packed)) {
  * nothing else; peak accel + rotation rates are the only measurable
  * evidence of what came apart. V2 dropped temp_c10 (the BNO085 temp path
  * was never wired - a hardwired sentinel): 18 B crosses back under the
- * 987 ms airtime step vs. 1118 ms at 20 B. */
+ * 987 ms airtime step vs. 1118 ms at 20 B.
+ * V3 (bit 15 of ts_ms = IMU_TS_V3_FLAG) fixed the units: V2 firmware sent
+ * accel in cm/s^2 and peak in mm/s^2 under the centi-g / milli-g labels
+ * (9.8x too large; the peak wrapped above ~3.3 g) and gyro in centi-deg/s,
+ * wrapping above 327 deg/s. V3 values saturate instead of wrapping.
+ */
 typedef struct __attribute__((packed)) {
     uint8_t  packet_type;    // PACKET_TYPE_IMU
     uint8_t  rocket_id;
-    uint16_t ts_ms;          // ms within the last second (timestamp mod 1000)
+    uint16_t ts_ms;          // bits 9..0: ms within the second (0..999);
+                             // bit 15: IMU_TS_V3_FLAG
     int16_t  accel_x_cg;     // centi-g (1/100 g); BNO085 linear accel
     int16_t  accel_y_cg;
     int16_t  accel_z_cg;
-    int16_t  gyro_x_cds;     // centi-deg/s (1/100 deg/s)
-    int16_t  gyro_y_cds;
-    int16_t  gyro_z_cds;
+    int16_t  gyro_x_dds;     // deci-deg/s (0.1 deg/s, +-3276.7 deg/s)
+    int16_t  gyro_y_dds;
+    int16_t  gyro_z_dds;
     int16_t  peak_accel_mg;  // milli-g: highest |a| since previous IMU packet
 } ImuTracePacket_t;
-#define IMU_TRACE_PACKET_SIZE    18   /* V2                            */
+#define IMU_TRACE_PACKET_SIZE    18   /* V2/V3                         */
 #define IMU_TRACE_PACKET_SIZE_V1 20   /* legacy layout with temp_c10   */
+#define IMU_TS_V3_FLAG  0x8000u  /* ts_ms bit 15: V3 units (see above) */
+#define IMU_TS_MS_MASK  0x03FFu  /* ts_ms bits 9..0: ms within second  */
 
 /* FLIGHT_EVENT: 8 bytes. One packet type carries the certified one-shot
  * life-cycle events (apogee, drogue, main, landed) AND the flight-anomaly
@@ -274,7 +277,24 @@ typedef struct __attribute__((packed)) {
 // Convert decimal degrees to encoded integer
 #define ENCODE_COORD(deg)       ((int32_t)((deg) * GPS_COORD_SCALE))
 
-// Convert encoded integer back to decimal degrees
-#define DECODE_COORD(val)       ((double)(val) / GPS_COORD_SCALE)
+
+/* Compile-time wire-size checks: changing a packet struct without its
+ * *_PACKET_SIZE (or the reverse) fails the build on both MCUs and in the
+ * host tests, instead of corrupting packets on the air. */
+#if defined(__cplusplus)
+  #define PF_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#else
+  #define PF_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#endif
+PF_STATIC_ASSERT(sizeof(BinaryGPSPacket_t) == GPS_PACKET_SIZE, "BinaryGPSPacket_t size");
+PF_STATIC_ASSERT(sizeof(HeartbeatPacket_t) == HEARTBEAT_PACKET_SIZE, "HeartbeatPacket_t size");
+PF_STATIC_ASSERT(sizeof(FusedPosPacket_t) == FUSED_PACKET_SIZE, "FusedPosPacket_t size");
+PF_STATIC_ASSERT(sizeof(LaunchT0Packet_t) == LAUNCH_T0_PACKET_SIZE, "LaunchT0Packet_t size");
+PF_STATIC_ASSERT(sizeof(ImuTracePacket_t) == IMU_TRACE_PACKET_SIZE, "ImuTracePacket_t size");
+PF_STATIC_ASSERT(sizeof(FlightEventPacket_t) == FLIGHT_EVENT_PACKET_SIZE, "FlightEventPacket_t size");
+PF_STATIC_ASSERT(sizeof(MaximaPacket_t) == MAXIMA_PACKET_SIZE, "MaximaPacket_t size");
+PF_STATIC_ASSERT(sizeof(HelloPacket_t) == HELLO_PACKET_SIZE, "HelloPacket_t size");
+PF_STATIC_ASSERT(sizeof(CmdPacket_t) == CMD_ACK_PACKET_SIZE, "CmdPacket_t size");
+PF_STATIC_ASSERT(sizeof(AckPacket_t) == CMD_ACK_PACKET_SIZE, "AckPacket_t size");
 
 #endif // _PACKET_FORMAT_H_

@@ -35,8 +35,6 @@ static uint32_t bus_last_probe_ms = 0;
 I2C_HandleTypeDef hi2c_display; /* legacy global name - shared with compass */
 
 uint8_t I2CBus_IsOnline(void) { return !bus_offline; }
-uint32_t I2CBus_ClockKHz(void) { return bus_khz; }
-
 static void bus_set_clock(uint32_t khz)
 {
   hi2c_display.Init.ClockSpeed = khz * 1000u;
@@ -149,20 +147,6 @@ void I2CBus_Init(void)
       bus_khz = I2C_BUS_KHZ_SLOW;
     }
   }
-}
-
-HAL_StatusTypeDef I2CBus_Transmit(uint16_t addr8, const uint8_t *buf, uint16_t len)
-{
-  if (bus_offline) {
-    bus_try_recovery();
-    return HAL_ERROR;
-  }
-  bus_service_rampup();
-  HAL_StatusTypeDef st =
-      HAL_I2C_Master_Transmit(&hi2c_display, addr8, (uint8_t *)buf, len,
-                              I2C_BUS_TX_TIMEOUT_MS);
-  bus_note_result(st);
-  return st;
 }
 
 HAL_StatusTypeDef I2CBus_MemRead(uint16_t addr8, uint8_t reg,

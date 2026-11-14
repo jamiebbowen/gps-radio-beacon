@@ -8,9 +8,10 @@
  * reads over the debug UART.
  *
  * Memory model: a flat append-only log at the back of the 512 KB on-chip
- * flash, laid out as 32-byte fixed records. Pages are written when full
- * (page-register buffer), so a power loss mid-write costs at most the
- * current page. The record layout is a PER-KIND payload union: the header
+ * flash, laid out as 32-byte fixed records. Each record is programmed as
+ * it is logged (two 16-byte quad-word writes, magic last), so a power
+ * loss mid-write costs at most the record being written. The record
+ * layout is a PER-KIND payload union: the header
  * (magic/ms/kind) plus the largest payload must fit inside FLOG_RECORD
  * bytes - flog_append_record only persists FLOG_RECORD per append, and the
  * host test static-asserts sizeof(flog_rec_t) == FLOG_RECORD so the
@@ -19,7 +20,6 @@
 
 #include "include/flight_log.h"
 #include "include/config.h"
-#include "include/radio.h"      /* nothing; same build-tree include chain */
 #include "include/watchdog.h"  /* dump keeps the WDT fed mid-printout */
 #include <Arduino.h>
 #include <string.h>
@@ -47,16 +47,6 @@
 #define FLOG_RECORD      32u
 #define FLOG_MAGIC       0x464C4647u /* 'GFLF' - little-endian scalar   */
 
-#define FLOG_KIND_IMU           1
-#define FLOG_KIND_GPS           2
-#define FLOG_KIND_LAUNCH        3
-#define FLOG_KIND_LANDED        4
-#define FLOG_KIND_FLIGHT_EVENT  5
-#define FLOG_KIND_POST_LAUNCH   6
-#define FLOG_KIND_BATTERY_SAVE  7
-#define FLOG_KIND_BOOT          8
-#define FLOG_KIND_FUSED         9
-#define FLOG_KIND_STATE        10   /* persistent flight-state marker    */
 
 /* Flight-state marker codes (kind 10 evt.code). Lives on the reserved
  * last row, OUTSIDE the append area, so a wrap-to-full data region can
@@ -75,9 +65,6 @@
 /* Fused-record health flags (kind 9 payload). Same meaning as the fused
  * wire packet's flags, kept separate so the crash copy can't drift with
  * future wire-format versions. */
-#define FLOG_FUS_GPS_FRESH   0x01
-#define FLOG_FUS_DR          0x02
-#define FLOG_FUS_IMU_HEALTHY 0x04
 
 typedef union {
     uint8_t  raw[FLOG_RECORD];
@@ -89,7 +76,7 @@ typedef union {
         union {
             struct {
                 int16_t  a_x_cg, a_y_cg, a_z_cg;
-                int16_t  g_x_cds, g_y_cds, g_z_cds;   /* IMU */
+                int16_t  g_x_dds, g_y_dds, g_z_dds;   /* IMU */
                 int16_t  peak_mg;
             } imu;                                    /* 14 B */
             struct {
@@ -115,14 +102,11 @@ typedef union {
 
 /* State */
 static volatile uint8_t armed = 0;       /* reset-region armed           */
-static volatile uint8_t busy_erase = 0;  /* currently running erase      */
 static uint32_t wptr = 0;                /* bytes written so far         */
 
 /* ------------------------------------------------------------------ */
 /* NVMCTRL helpers (SAMD51 Hardware Asynchronous Access pattern)       */
 /* ------------------------------------------------------------------ */
-
-#define NVMCTRL_NVM_REG  NVMCTRL
 
 static void nvm_wait_ready(void)
 {
@@ -133,9 +117,9 @@ static void nvm_wait_ready(void)
 static bool nvm_erase_block(uint32_t addr)
 {
     nvm_wait_ready();
-    NVMCTRL->ADDR.reg = addr >> 1;
+    NVMCTRL->ADDR.reg = addr;      /* SAMD51: byte address (SAMD21 took addr >> 1) */
     NVMCTRL->CTRLB.reg = NVMCTRL_CTRLB_CMDEX_KEY | NVMCTRL_CTRLB_CMD_EB;
-    nvm_wait_ready();
+      nvm_wait_ready();
     return (NVMCTRL->INTFLAG.bit.PROGE == 0);
 }
 
@@ -150,9 +134,28 @@ static bool nvm_write_page(uint32_t addr, const uint8_t *buf)
     for (int i = 0; i < (int)(FLOG_PAGE / 4); i++) {
         dst[i] = src[i];
     }
-    NVMCTRL->ADDR.reg = addr >> 1;
+    NVMCTRL->ADDR.reg = addr;      /* SAMD51: byte address (SAMD21 took addr >> 1) */
     NVMCTRL->CTRLB.reg = NVMCTRL_CTRLB_CMDEX_KEY | NVMCTRL_CTRLB_CMD_WP;
   nvm_wait_ready();
+    return (NVMCTRL->INTFLAG.bit.PROGE == 0);
+}
+
+/* Program one 16-byte quad word (WQW) at addr: the SAMD51's smallest
+ * write, so a record reaches flash the moment it is logged. */
+static bool nvm_write_qword(uint32_t addr, const uint8_t *src16)
+{
+    nvm_wait_ready();
+    NVMCTRL->CTRLB.reg = NVMCTRL_CTRLB_CMDEX_KEY | NVMCTRL_CTRLB_CMD_PBC;
+    nvm_wait_ready();
+    volatile uint32_t *dst = (volatile uint32_t *)addr;
+    uint32_t w[4];
+    memcpy(w, src16, sizeof(w));
+    for (int i = 0; i < 4; i++) {
+        dst[i] = w[i];
+    }
+    NVMCTRL->ADDR.reg = addr;
+    NVMCTRL->CTRLB.reg = NVMCTRL_CTRLB_CMDEX_KEY | NVMCTRL_CTRLB_CMD_WQW;
+    nvm_wait_ready();
     return (NVMCTRL->INTFLAG.bit.PROGE == 0);
 }
 
@@ -163,7 +166,6 @@ static bool nvm_write_page(uint32_t addr, const uint8_t *buf)
 void flight_log_init(void)
 {
     armed = 0;
-    busy_erase = 0;
     wptr = 0;
 
     /* If a previous flight left data (magic at 0), print it over USB at
@@ -174,12 +176,6 @@ void flight_log_init(void)
         Serial.println(F("[FLOG] type 'DUMP' + Enter over USB CDC before rearm"));
     }
 }
-
-/* Page write buffer: records accumulate here and commit per NVM page.
- * Async-safety is deliberately NOT aimed at: the main loop calls the
- * append API on event edges only. */
-static uint8_t page_buf[FLOG_PAGE];
-static uint16_t page_fill = 0;
 
 /* Write the flight-state marker (kind 10) onto its reserved row. The row
  * is always erased first because state writes (FLYING -> LANDED) flip
@@ -200,19 +196,14 @@ static void flog_write_state(uint8_t code)
 
 void flight_log_arm(void)
 {
-    if (armed || busy_erase) return;
-    busy_erase = 1;
+    if (armed) return;
     for (uint32_t row = FLOG_BASE; row < FLOG_BASE + FLOG_BYTES; row += FLOG_ROW) {
         (void)nvm_erase_block(row);
     }
-    busy_erase = 0;
     armed = 1;
     wptr = 0;
     flog_write_state(FLOG_STATE_FLYING);
 }
-
-uint8_t flight_log_armed(void) { return armed; }
-uint8_t flight_log_busy(void)  { return busy_erase; }
 
 uint8_t flight_log_prev_flying(void)
 {
@@ -226,16 +217,22 @@ uint8_t flight_log_resume(void)
 {
     if (armed || !flight_log_prev_flying()) return 0;
 
-    /* Find the append point: first page whose FIRST record lacks the
-     * magic. Power (or the reset) died with at most one partially-
-     * buffered page in RAM - every earlier page was committed. */
+    /* Find the append point: the first fully blank record slot. Records
+     * are written one by one, so every slot before it holds a record - or
+     * a torn one (power died between its two quad words: tail written,
+     * head with the magic not). A torn slot can't be reused, since
+     * programming only clears bits, so it is skipped; DUMP ignores it for
+     * lack of a magic. */
     wptr = 0;
     while (wptr < FLOG_DATA_BYTES) {
-        const flog_rec_t *r = (const flog_rec_t *)(FLOG_BASE + wptr);
-        if (r->f.magic != FLOG_MAGIC) break;
-        wptr += FLOG_PAGE;
+        const uint8_t *slot = (const uint8_t *)(FLOG_BASE + wptr);
+        bool blank = true;
+        for (uint32_t k = 0; k < FLOG_RECORD; k++) {
+            if (slot[k] != 0xFF) { blank = false; break; }
+        }
+        if (blank) break;
+        wptr += FLOG_RECORD;
     }
-    page_fill = 0;
     armed = 1;
     return 1;
 }
@@ -252,19 +249,20 @@ static void flog_append_record(const flog_rec_t *rec)
     if (wptr + FLOG_RECORD > FLOG_DATA_BYTES) return;  /* hold; state row
                                                         * is off-limits */
 
-    memcpy(page_buf + page_fill, rec, FLOG_RECORD);
-    page_fill += FLOG_RECORD;
+    /* Straight to flash, two quad words. Tail first: the head carries the
+     * magic, so a record is only ever visible once it is complete, and a
+     * shredded airframe loses at most the record being written (it used
+     * to lose up to 15 buffered in RAM - the last ~8-15 s of flight). */
+    const uint8_t *src = (const uint8_t *)rec;
+    uint32_t addr = FLOG_BASE + wptr;
+    (void)nvm_write_qword(addr + 16, src + 16);
+    (void)nvm_write_qword(addr, src);
     wptr += FLOG_RECORD;
-
-    if (page_fill >= FLOG_PAGE) {
-        (void)nvm_write_page(FLOG_BASE + wptr - FLOG_PAGE, page_buf);
-        page_fill = 0;
-    }
 }
 
 void flight_log_imu(uint32_t ms,
                     int16_t ax_cg, int16_t ay_cg, int16_t az_cg,
-                    int16_t gx_cds, int16_t gy_cds, int16_t gz_cds,
+                    int16_t gx_dds, int16_t gy_dds, int16_t gz_dds,
                     int16_t peak_mg)
 {
     flog_rec_t r;
@@ -272,8 +270,9 @@ void flight_log_imu(uint32_t ms,
     r.f.magic = FLOG_MAGIC;
     r.f.ms = ms;
     r.f.kind = FLOG_KIND_IMU;
+    r.f.rsv[0] = FLOG_IMU_FMT_V3;   /* 0 on records from pre-V3 firmware */
     r.f.p.imu.a_x_cg = ax_cg; r.f.p.imu.a_y_cg = ay_cg; r.f.p.imu.a_z_cg = az_cg;
-    r.f.p.imu.g_x_cds = gx_cds; r.f.p.imu.g_y_cds = gy_cds; r.f.p.imu.g_z_cds = gz_cds;
+    r.f.p.imu.g_x_dds = gx_dds; r.f.p.imu.g_y_dds = gy_dds; r.f.p.imu.g_z_dds = gz_dds;
     r.f.p.imu.peak_mg = peak_mg;
     flog_append_record(&r);
 }
@@ -336,6 +335,9 @@ void flight_log_dump_serial(void)
     /* Parse records linearly over the whole region; skip magic-only padding.
      * 8192 records at 115200 baud is a ~40 s printout - the 16 s WDT would
      * reboot mid-dump, so feed it on every record (a 2-op register poke). */
+    Serial.println(F("# kind 1 (IMU): ax,ay,az centi-g; gx,gy,gz 0.1 deg/s; peak milli-g;"));
+    Serial.println(F("#   last column fmt: 3 = these units, 0 = pre-V3 firmware (cm/s^2,"));
+    Serial.println(F("#   0.01 deg/s, mm/s^2 - may have wrapped)"));
     Serial.println(F("ms,kind,ax,ay,az,gx,gy,gz,peak,stat_everything"));
     for (uint32_t off = 0; off < FLOG_BYTES; off += FLOG_RECORD) {
         watchdog_feed();
@@ -347,10 +349,11 @@ void flight_log_dump_serial(void)
             Serial.print(r->f.p.imu.a_x_cg); Serial.print(',');
             Serial.print(r->f.p.imu.a_y_cg); Serial.print(',');
             Serial.print(r->f.p.imu.a_z_cg); Serial.print(',');
-            Serial.print(r->f.p.imu.g_x_cds);Serial.print(',');
-            Serial.print(r->f.p.imu.g_y_cds);Serial.print(',');
-            Serial.print(r->f.p.imu.g_z_cds);Serial.print(',');
-            Serial.print(r->f.p.imu.peak_mg);
+            Serial.print(r->f.p.imu.g_x_dds);Serial.print(',');
+            Serial.print(r->f.p.imu.g_y_dds);Serial.print(',');
+            Serial.print(r->f.p.imu.g_z_dds);Serial.print(',');
+            Serial.print(r->f.p.imu.peak_mg);Serial.print(',');
+            Serial.print(r->f.rsv[0]);
         } else if (r->f.kind == FLOG_KIND_GPS) {
             Serial.print(r->f.p.gps.lat_e7); Serial.print(',');
             Serial.print(r->f.p.gps.lon_e7); Serial.print(',');

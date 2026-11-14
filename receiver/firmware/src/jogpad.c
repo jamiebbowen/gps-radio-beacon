@@ -22,7 +22,6 @@ static const uint8_t btn_reg_offset[JOGPAD_BTN_COUNT] = { 2, 3, 1, 4, 0 };
 #define JOGPAD_POLL_MS  20
 
 static uint8_t pad_present = 0;
-static uint8_t pad_x = 128;
 static uint8_t pad_y = 128;
 static uint8_t btn_held[JOGPAD_BTN_COUNT];
 static uint32_t last_poll_ms = 0;
@@ -36,11 +35,8 @@ uint8_t Jogpad_Init(void)
   uint8_t probe = 0;
   pad_present = (I2CBus_MemRead(JOGPAD_ADDR_8BIT, JOGPAD_REG_AXES, &probe, 1)
                  == HAL_OK) ? 1 : 0;
-  if (pad_present) pad_x = probe;   /* free first axis sample from the probe */
   return pad_present;
 }
-
-uint8_t Jogpad_IsPresent(void) { return pad_present; }
 
 void Jogpad_Update(void)
 {
@@ -54,8 +50,7 @@ void Jogpad_Update(void)
    * released button (would fire spurious "press finished" events). */
   uint8_t axes[2];
   if (I2CBus_MemRead(JOGPAD_ADDR_8BIT, JOGPAD_REG_AXES, axes, 2) == HAL_OK) {
-    pad_x = axes[0];
-    pad_y = axes[1];
+    pad_y = axes[1];   /* X (axes[0]) drives nothing on this receiver */
   }
 
   uint8_t states[JOGPAD_BTN_COUNT];
@@ -68,7 +63,6 @@ void Jogpad_Update(void)
   }
 }
 
-uint8_t Jogpad_GetX(void) { return pad_x; }
 uint8_t Jogpad_GetY(void) { return pad_y; }
 
 uint8_t Jogpad_ButtonHeld(Jogpad_Button b)

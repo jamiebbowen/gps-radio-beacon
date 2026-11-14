@@ -76,6 +76,8 @@ static uint32_t tx_other = 0;
 static uint32_t radio_enables = 0, radio_disables = 0;
 static uint8_t  radio_enabled_flag = 0;
 static int      tx_result = 0;
+static uint8_t  last_imu_pkt[IMU_TRACE_PACKET_SIZE];  /* newest IMU on air */
+static uint8_t  have_last_imu = 0;
 
 void radio_enable(void)  { radio_enables++; radio_enabled_flag = 1; }
 void radio_disable(void) { radio_disables++; radio_enabled_flag = 0; }
@@ -89,6 +91,10 @@ int transmit_packet(const uint8_t *data, size_t length)
         tx_by_type[t]++;
         if (t == PACKET_TYPE_FLIGHT_EVENT && length >= 3)
             fev_code_count[data[2]]++;      /* code field, offset 2 */
+        if (t == PACKET_TYPE_IMU && length == sizeof(last_imu_pkt)) {
+            memcpy(last_imu_pkt, data, sizeof(last_imu_pkt));
+            have_last_imu = 1;
+        }
     } else if (t >= 0x20 && t <= 0x7E) {
         tx_callsigns++;              /* printable = callsign text */
     } else {
@@ -150,7 +156,10 @@ void    gps_init(void) {}
 uint16_t gps_poll_rx(void) { return 0; }
 const GPSCoordinates_t* gps_get_current_coordinates(void) { return &fake_coords; }
 uint8_t gps_get_health(void) { return HB_GPS_HEALTH(HB_GPS_ACQUIRING, 0); }
-uint32_t gps_get_fix_age_ms(void) { return 250; }
+static uint8_t gps_in_flight_flag = 0;   /* last gps_set_in_flight() value */
+void gps_set_in_flight(uint8_t f) { gps_in_flight_flag = f; }
+static uint32_t fake_fix_age_ms = 250;  /* GPS fix age seen by the anomaly logic */
+uint32_t gps_get_fix_age_ms(void) { return fake_fix_age_ms; }
 
 /* flight_log.cpp is target-only (raw NVMCTRL); stub its API here. The
  * host test's concern is WHEN the recorder is armed/written, not the
@@ -161,18 +170,23 @@ static uint32_t flog_gps_calls = 0;
 static uint32_t flog_event_calls = 0;
 void     flight_log_init(void) {}
 void     flight_log_arm(void) { flog_armed_count++; }
-uint8_t  flight_log_armed(void) { return flog_armed_count > 0; }
-uint8_t  flight_log_busy(void) { return 0; }
-void     flight_log_imu(uint32_t ms, int16_t, int16_t, int16_t, int16_t, int16_t, int16_t, int16_t)
-         { (void)ms; flog_imu_calls++; }
+static int16_t  flog_imu_last[7];   /* ax, ay, az, gx, gy, gz, peak */
+void     flight_log_imu(uint32_t ms, int16_t ax, int16_t ay, int16_t az,
+                        int16_t gx, int16_t gy, int16_t gz, int16_t pk)
+{
+    (void)ms; flog_imu_calls++;
+    int16_t v[7] = { ax, ay, az, gx, gy, gz, pk };
+    memcpy(flog_imu_last, v, sizeof(v));
+}
 void     flight_log_gps(uint32_t ms, int32_t, int32_t, int16_t, uint8_t, uint8_t)
          { (void)ms; flog_gps_calls++; }
+static uint32_t flog_kind_count[16];   /* flash-log event records by kind */
 void     flight_log_event(uint32_t ms, uint8_t kind)
-         { (void)ms; (void)kind; flog_event_calls++; }
+         { (void)ms; flog_event_calls++; flog_kind_count[kind & 15]++; }
 static uint8_t flog_last_event_code = 0;
 static int16_t flog_last_event_value = 0;
 void     flight_log_event_ex(uint32_t ms, uint8_t kind, uint8_t code, int16_t value)
-         { (void)ms; (void)kind; flog_event_calls++;
+         { (void)ms; flog_event_calls++; flog_kind_count[kind & 15]++;
            flog_last_event_code = code; flog_last_event_value = value; }
 static uint32_t flog_fused_calls = 0;
 void     flight_log_fused(uint32_t ms, int32_t, int32_t, int16_t, int16_t, int16_t, int16_t, uint8_t)
@@ -185,7 +199,8 @@ static uint8_t  flog_prev_flying_flag = 0;
 static uint32_t flog_resume_calls = 0;
 static uint32_t flog_landed_marks = 0;
 uint8_t  flight_log_prev_flying(void) { return flog_prev_flying_flag; }
-uint8_t  flight_log_resume(void)      { flog_resume_calls++; return 1; }
+static uint8_t flog_resume_result = 1;  /* 0 = append point not found */
+uint8_t  flight_log_resume(void)      { flog_resume_calls++; return flog_resume_result; }
 void     flight_log_mark_landed(void) { flog_landed_marks++; }
 uint8_t  flog_armed_count_value(void) { return flog_armed_count; }
 uint32_t flog_gps_calls_value(void)   { return flog_gps_calls; }
@@ -197,13 +212,16 @@ int  radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms)
 int  radio_transmit_ack(uint8_t rocket_id, uint8_t cmd_code,
                         uint8_t seq_hi, uint8_t seq_lo, uint8_t echo)
 { (void)rocket_id; (void)cmd_code; (void)seq_hi; (void)seq_lo; (void)echo; return 0; }
-float   gps_nmea_to_decimal(const char *n, char d)
+double   gps_nmea_to_decimal(const char *n, char d)
 {
     double v = atof(n);
+    /* (int) of a non-finite value is UB: report it as NaN, which every
+     * caller rejects - the same contract as the firmware converter. */
+    if (!isfinite(v)) return NAN;
     int deg = (int)(v / 100.0);
     double out = deg + (v - deg * 100.0) / 60.0;
     if (d == 'S' || d == 'W') out = -out;
-    return (float)out;
+    return out;
 }
 
 static void script_fix(double lat, double lon, double alt, int sats,
@@ -347,6 +365,8 @@ int main(void)
     /* The loop must have taken the launch transition to LAUNCH + fast TX */
     CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
     CHECK(beacon_state == BEACON_STATE_LAUNCH);
+    sim_run(50);                                  /* one loop pass */
+    CHECK(gps_in_flight_flag == 1);               /* GPS watchdog: no resets */
     CHECK(transmit_fast_flag == 1);
     CHECK(radio_enables == enables_before + 1);   /* radio keyed once */
     CHECK(radio_enabled_flag == 1);
@@ -376,6 +396,21 @@ int main(void)
     uint32_t mxs = type_count(PACKET_TYPE_MAXIMA) - mx0;
     CHECK(fus == 20);                             /* 1500 ms cadence exactly */
     CHECK((imu == 15 || imu == 16));              /* 2 s paced inertial stream */
+    /* The flash copy is the packet that went on the air, field for field
+     * (it used to be re-derived with different, wrapping conversions). */
+    CHECK(have_last_imu == 1);
+    {
+        ImuTracePacket_t onair;
+        memcpy(&onair, last_imu_pkt, sizeof(onair));
+        CHECK((onair.ts_ms & IMU_TS_V3_FLAG) != 0);
+        CHECK(flog_imu_last[0] == onair.accel_x_cg &&
+              flog_imu_last[1] == onair.accel_y_cg &&
+              flog_imu_last[2] == onair.accel_z_cg &&
+              flog_imu_last[3] == onair.gyro_x_dds &&
+              flog_imu_last[4] == onair.gyro_y_dds &&
+              flog_imu_last[5] == onair.gyro_z_dds &&
+              flog_imu_last[6] == onair.peak_accel_mg);
+    }
     CHECK(mxs >= 5 && mxs <= 7);                  /* 5 s maxima recap cadence */
     CHECK(flog_gps_calls_value() >= 14);          /* GPS rows landing in the flash log */
     /* Raw GPS position packets stop on air - fused+IMU carry the invade */
@@ -398,6 +433,8 @@ int main(void)
     sim_run((LAND_QUIET_S + 20) * 1000UL);
     CHECK(launch_detect_has_landed() == true);
     CHECK(beacon_state == BEACON_STATE_BATTERY_SAVE);
+    CHECK(gps_in_flight_flag == 0);               /* landed: resets allowed */
+    CHECK(fev_code_count[FLIGHT_EVENT_NONE] == 0);  /* no code-0x00 events aired */
     /* Certified LANDED event: FLIGHT_EVENT_REPEATS copies went on the air
      * (spacing ~1.2 s << the quiet window above) and nothing else fired.
      * The landing transition also fires one final maxima copy. */
@@ -427,6 +464,14 @@ int main(void)
     uint32_t hello_before = type_count(PACKET_TYPE_HELLO);
     fake_rstc.RCAUSE.reg  = RSTC_RCAUSE_WDT;     /* the reset that killed it */
     flog_prev_flying_flag = 1;                   /* marker row still FLYING */
+    /* A real reset clears RAM: the scheduler clock restarts at 0. Running
+     * setup() with the old ~700 s uptime hid a resume that could never
+     * leave LAUNCH (launch time 0 doubled as "never launched"). */
+    system_time_seconds = 0;
+    ms_counter = 0;
+    last_transmission_time = 0;
+    last_callsign_tx_s = 0;
+    post_launch_start_time = 0;
     setup();                                     /* <- the reboot itself   */
     CHECK(beacon_state == BEACON_STATE_LAUNCH);  /* airborne cadence now */
     CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
@@ -442,6 +487,16 @@ int main(void)
     sim_run(5000);
     CHECK(fev_code_count[FLIGHT_EVENT_ANOM_REBOOT] == FLIGHT_EVENT_REPEATS);
 
+    /* The resumed flight is on the normal post-boost schedule: time since
+     * launch counts from the resume, LAUNCH hands over to POST_LAUNCH,
+     * and the continuous-TX phase ends so the FCC callsign airs again. */
+    CHECK(launch_detect_get_time_since_launch(system_time_seconds) >= 4);
+    CHECK(beacon_state == BEACON_STATE_POST_LAUNCH);
+    CHECK(transmit_fast_flag == 0);
+    uint32_t calls_after_resume = tx_callsigns;
+    sim_run((flight_cadence_callsign_interval_s() + 5) * 1000UL);
+    CHECK(tx_callsigns > calls_after_resume);    /* ID resumes in flight */
+
     /* The resumed flight still completes its life-cycle: quiet + stable
      * re-latches landing, which flips the marker to LANDED again. */
     sim_run((LAND_QUIET_S + 20) * 1000UL);
@@ -453,6 +508,111 @@ int main(void)
     /* (loop() feeds it every pass; the sim asserting loop-liveness is
      *  the point of the whole file) */
     CHECK(fake_wdt.CLEAR.reg == WDT_CLEAR_CLEAR_KEY_Val);
+
+    /* ---------- Fresh boot after a brown-out, then a flight whose landing
+     * never latches: in-flight anomaly events, the recovery-duration exit
+     * to BATTERY_SAVE, and the no-fix heartbeat fallback on the ground --- */
+    fake_rstc.RCAUSE.reg = RSTC_RCAUSE_BODVDD;
+    flog_prev_flying_flag = 0;                   /* marker row LANDED */
+    beacon_state = BEACON_STATE_TURN_ON;         /* what a RAM reset leaves */
+    transmit_fast_flag = 0;
+    transmit_beacon_flag = 1;
+    system_time_seconds = 0;
+    ms_counter = 0;
+    last_transmission_time = 0;
+    last_callsign_tx_s = 0;
+    post_launch_start_time = 0;
+    Serial.clear();
+    setup();
+    CHECK(strstr(Serial.log, "BROWN-OUT") != NULL);   /* boot banner says so */
+    CHECK(beacon_state == BEACON_STATE_TURN_ON);
+    sim_run(70000);                              /* turn-on grace -> pad */
+    CHECK(beacon_state == BEACON_STATE_PRE_LAUNCH);
+    uint32_t rcause_recs = flog_kind_count[8];
+    sim_run_burst(500, 25.0f);                   /* boost */
+    CHECK(beacon_state == BEACON_STATE_LAUNCH);
+    CHECK(flog_kind_count[8] == rcause_recs + 1);   /* reset cause opens the record */
+    sim_run(3000);
+    CHECK(beacon_state == BEACON_STATE_POST_LAUNCH);
+
+    /* GPS outage aloft: certified entry copies, a tightened inertial
+     * cadence (ANOM_BEACON_INTERVAL_S), and periodic re-announces */
+    uint32_t outage0 = fev_code_count[FLIGHT_EVENT_ANOM_GPS_OUTAGE];
+    uint32_t imu_o0 = type_count(PACKET_TYPE_IMU);
+    fake_fix_age_ms = ANOM_GPS_OUTAGE_MS + 1000;
+    sim_run(ANOM_EVENT_REPEAT_MS + 3000);
+    CHECK(flight_events_anomaly_active());
+    CHECK(fev_code_count[FLIGHT_EVENT_ANOM_GPS_OUTAGE] >= outage0 + FLIGHT_EVENT_REPEATS + 1);
+    uint32_t imu_outage = type_count(PACKET_TYPE_IMU) - imu_o0;
+    fake_fix_age_ms = 250;
+    sim_run(ANOM_CLEAR_MS + 2000);
+    CHECK(!flight_events_anomaly_active());
+    CHECK(fev_code_count[FLIGHT_EVENT_NONE] == 0);
+    uint32_t imu_c0 = type_count(PACKET_TYPE_IMU);
+    sim_run(ANOM_EVENT_REPEAT_MS + 3000);       /* same span, no anomaly */
+    CHECK(imu_outage > type_count(PACKET_TYPE_IMU) - imu_c0);
+
+    /* DUMP is refused for the whole airborne span, POST_LAUNCH too */
+    Serial.clear();
+    uint32_t dumps_pl = flog_dump_calls;
+    Serial.inject("DUMP\n");
+    loop();
+    CHECK(flog_dump_calls == dumps_pl);
+    CHECK(strstr(Serial.log, "airborne") != NULL);
+
+    /* The airframe never goes quiet (stuck in a tree in the wind):
+     * landing never latches and POST_LAUNCH ends on its timeout */
+    sim_run_burst((POST_LAUNCH_RECOVERY_DURATION_SEC + 5) * 1000UL, 5.0f);
+    CHECK(launch_detect_has_landed() == false);
+    CHECK(beacon_state == BEACON_STATE_BATTERY_SAVE);
+    CHECK(flog_kind_count[7] >= 1);             /* battery-save record */
+
+    /* Fix lost on the ground: the rejected position TX falls back to a
+     * heartbeat so the receiver still hears the beacon */
+    fake_coords.valid = 0;
+    uint32_t hb_ground = type_count(PACKET_TYPE_HEARTBEAT);
+    sim_run(130000);
+    CHECK(type_count(PACKET_TYPE_HEARTBEAT) > hb_ground);
+
+    /* ...densely during the walk-in, then the battery-save ramp thins it
+     * to one per BATTERY_SAVE_HB_SLOW_INTERVAL_SEC (config.h) */
+    uint32_t hb_dense0 = type_count(PACKET_TYPE_HEARTBEAT);
+    sim_run(300000);                                   /* 5 min, still dense */
+    uint32_t hb_dense = type_count(PACKET_TYPE_HEARTBEAT) - hb_dense0;
+    sim_run((BATTERY_SAVE_HB_FAST_SEC - 430) * 1000UL); /* past the window   */
+    uint32_t hb_slow0 = type_count(PACKET_TYPE_HEARTBEAT);
+    sim_run(300000);                                   /* 5 min, sparse     */
+    uint32_t hb_slow = type_count(PACKET_TYPE_HEARTBEAT) - hb_slow0;
+    printf("  battery-save no-fix heartbeats per 5 min: dense %u, sparse %u\n",
+           (unsigned)hb_dense, (unsigned)hb_slow);
+    CHECK(hb_dense >= 50);
+    CHECK(hb_slow >= 8 && hb_slow <= 11);
+    script_fix(SIM_LAT, SIM_LON, SIM_ALT, 9, 1);
+
+    /* Overlong serial line: dropped, the parser resyncs at the newline */
+    uint32_t dumps = flog_dump_calls;
+    Serial.inject("XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\nDUMP\n");
+    loop();
+    CHECK(flog_dump_calls == dumps + 1);
+
+    /* Mid-flight reboot whose flash resume fails (append point not
+     * found): the flight state still resumes, but the surviving record
+     * is never re-armed (erased) and no reset-cause row is appended */
+    fake_rstc.RCAUSE.reg = RSTC_RCAUSE_WDT;
+    flog_prev_flying_flag = 1;
+    flog_resume_result = 0;
+    uint8_t  arms_fail = flog_armed_count_value();
+    uint32_t rc_fail   = flog_kind_count[8];
+    system_time_seconds = 0;
+    ms_counter = 0;
+    last_transmission_time = 0;
+    last_callsign_tx_s = 0;
+    post_launch_start_time = 0;
+    setup();
+    CHECK(beacon_state == BEACON_STATE_LAUNCH);
+    CHECK(flog_armed_count_value() == arms_fail);
+    CHECK(flog_kind_count[8] == rc_fail);
+    flog_resume_result = 1;
 
     printf("mainloop sim: GPS=%lu FUS=%lu HB=%lu CALL=%lu EVT=%lu\n",
            (unsigned long)type_count(PACKET_TYPE_GPS),

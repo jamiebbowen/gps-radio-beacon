@@ -58,13 +58,16 @@ uint8_t LoRa_GetDeviceStatus(uint8_t *status)
 }
 uint8_t LoRa_GetIRQStatus(uint16_t *irq) { *irq = fake_irq_value; return LORA_OK; }
 
-/* Two-way scaffolding: captures what RF_Receiver_SendCommand transmits */
+/* Two-way uplink: captures what the command scheduler transmits */
 static uint32_t lora_tx_calls = 0;
 static uint8_t  lora_tx_buf[32];
 static size_t   lora_tx_len = 0;
-uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length)
+static uint16_t lora_tx_preamble = 0;
+uint8_t LoRa_TransmitPreamble(const uint8_t *data, uint8_t length,
+                              uint16_t preamble_symbols)
 {
     lora_tx_calls++;
+    lora_tx_preamble = preamble_symbols;
     if (length <= sizeof(lora_tx_buf)) {
         memcpy(lora_tx_buf, data, length);
         lora_tx_len = length;
@@ -105,7 +108,9 @@ uint8_t LoRa_ReadPacket(LoRa_Packet_t *pkt)
     if (fake_crc_error) {
         fake_crc_error = 0;
         *pkt = fake_pkt;   /* corrupt frames still carry their bytes - the
-                            * receiver's crc_dump forensics rely on them */
+                            * receiver's crc_dump forensics rely on them;
+                            * test_lora's test_crc_error_captures_corrupt_
+                            * payload pins the real driver to this contract */
         return LORA_CRC_ERROR;
     }
     *pkt = fake_pkt;
@@ -139,11 +144,31 @@ uint8_t LoRa_CadResult(void) { return fake_cad_result; }
  * exercise one-shot diagnostics and error paths without hardware. */
 #include "../firmware/src/rf_receiver.c"
 
+/* Test-side reset of the in-flight contact latch (the firmware clears it
+ * only by rebooting; tests reach the module statics directly). */
+static void clear_flight_contact_latch(void)
+{
+    flight_contact_latch = 0;
+    rescan_suppression_count = 0;
+}
+
+/* Age of the newest position packet - what main.c's freshness logic
+ * consumes (UINT32_MAX = none yet). Unsigned subtraction is wrap-safe. */
+static uint32_t position_age_ms(uint32_t now)
+{
+    uint32_t t = RF_Receiver_GetLastPacketTime();
+    return t ? (uint32_t)(now - t) : UINT32_MAX;
+}
+
 /* HAL fakes (declared in the stub headers) */
 void HAL_GPIO_Init(GPIO_TypeDef *p, GPIO_InitTypeDef *i) { (void)p; (void)i; }
+/* One pin can be driven high: the LoRa BUSY line in the BUSY test */
+static GPIO_TypeDef *fake_high_port = NULL;
+static uint16_t      fake_high_pin  = 0;
 GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *p, uint16_t pin)
 {
-    (void)p; (void)pin; return GPIO_PIN_RESET;
+    return (p != NULL && p == fake_high_port && pin == fake_high_pin)
+               ? GPIO_PIN_SET : GPIO_PIN_RESET;
 }
 void HAL_GPIO_WritePin(GPIO_TypeDef *p, uint16_t pin, GPIO_PinState s)
 {
@@ -211,6 +236,17 @@ static void inject_heartbeat(uint8_t rocket_id, uint8_t channel,
     fake_pkt.rssi = -87;
     fake_pkt.snr = 6;
     fake_pkt_pending = 1;
+}
+
+/* Heartbeat with an explicit V3 reset cause (channel 0, 5 sats) */
+static void inject_heartbeat_rc(uint8_t rocket_id, uint16_t uptime_s,
+                                uint8_t reset_info)
+{
+    inject_heartbeat(rocket_id, 0, 5, uptime_s);
+    HeartbeatPacket_t hb;
+    memcpy(&hb, fake_pkt.data, sizeof(hb));
+    hb.reset_info = reset_info;
+    memcpy(fake_pkt.data, &hb, sizeof(hb));
 }
 
 /* Legacy 7-byte heartbeat (pre-gps_health TX firmware) */
@@ -422,9 +458,12 @@ TEST(test_heartbeat_lifecycle)
 {
     HeartbeatPacket_t hb;
     uint32_t age_ms = 0;
+    /* The page getter only reports OUR beacon: start unbound so rocket 3
+     * (OUR_ROCKET_ID, which later tests assume) claims the channel. */
+    bound_rocket_id = RF_ROCKET_UNBOUND;
 
     /* Nothing heard yet */
-    CHECK(RF_Receiver_GetHeartbeat(&hb) == 0);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, NULL) == 0);
     CHECK(RF_Receiver_GetLastHeartbeat(&hb, &age_ms) == 0);
 
     inject_heartbeat(3, 5, 7, 42);
@@ -435,12 +474,12 @@ TEST(test_heartbeat_lifecycle)
     CHECK(RF_Receiver_GetLastPacketTime() == 0);
 
     /* One-shot getter: first call yes, second no */
-    CHECK(RF_Receiver_GetHeartbeat(&hb) == 1);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, NULL) == 1);
     CHECK(hb.rocket_id == 3 && hb.channel == 5 && hb.satellites == 7);
     CHECK(hb.uptime_s == 42);
     CHECK(HB_GPS_STATE(hb.gps_health) == HB_GPS_ACQUIRING);
     CHECK(HB_GPS_RESETS(hb.gps_health) == 0);
-    CHECK(RF_Receiver_GetHeartbeat(&hb) == 0);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, NULL) == 0);
 
     /* Non-consuming getter keeps returning it, with a growing age */
     CHECK(RF_Receiver_GetLastHeartbeat(&hb, &age_ms) == 1);
@@ -464,11 +503,68 @@ TEST(test_heartbeat_lifecycle)
      * from whatever the radio buffer held before. */
     inject_heartbeat_v1(4, 6);
     run_for(250, 250);
-    CHECK(RF_Receiver_GetHeartbeat(&hb) == 1);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, NULL) == 1);
     CHECK(hb.rocket_id == 4 && hb.channel == 6);
     CHECK(hb.uptime_s == 99);
     CHECK(hb.gps_health == HB_GPS_UNKNOWN);
     CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    bound_rocket_id = OUR_ROCKET_ID;
+}
+
+TEST(test_heartbeat_foreign_and_reset_tracking)
+{
+    /* Two beacons on one channel: only OUR beacon's heartbeats may feed the
+     * preflight/nav pages and the TX-reset detector. A foreign heartbeat
+     * with a lower uptime used to log a false "TX reset" ERROR row. */
+    uint8_t saved_bound = bound_rocket_id;
+    bound_rocket_id = RF_ROCKET_UNBOUND;
+    HeartbeatPacket_t hb;
+    RF_HbInfo_t info;
+    uint32_t age_ms = 0;
+
+    inject_heartbeat_rc(7, 500, 0x01);        /* first ID heard: binds */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, &info) == 1);
+    CHECK(info.foreign == 0 && info.reset_event == RF_HB_RESET_NONE);
+
+    inject_heartbeat_rc(9, 20, 0x40);         /* someone else's beacon */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, &info) == 1);
+    CHECK(hb.rocket_id == 9);                 /* still logged as intel */
+    CHECK(info.foreign == 1);
+    CHECK(info.reset_event == RF_HB_RESET_NONE);
+    CHECK(RF_Receiver_GetLastHeartbeat(&hb, &age_ms) == 1);
+    CHECK(hb.rocket_id == 7);                 /* pages only see ours */
+
+    inject_heartbeat_rc(7, 505, 0x01);        /* ours, still running */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, &info) == 1);
+    CHECK(info.foreign == 0 && info.reset_event == RF_HB_RESET_NONE);
+
+    inject_heartbeat_rc(7, 3, 0x01);          /* ours rebooted */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, &info) == 1);
+    CHECK(info.reset_event == RF_HB_UPTIME_REGRESSED);
+    CHECK(info.prev_uptime == 505);
+
+    inject_heartbeat_rc(7, 8, 0x40);          /* cause register changed */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, &info) == 1);
+    CHECK(info.reset_event == RF_HB_CAUSE_CHANGED);
+    CHECK(info.prev_reset_info == 0x01);
+
+    /* A channel change starts tracking from scratch */
+    CHECK(RF_Receiver_NextChannel() == 1);
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    CHECK(RF_Receiver_GetLastHeartbeat(&hb, &age_ms) == 0);
+    bound_rocket_id = RF_ROCKET_UNBOUND;
+    inject_heartbeat_rc(7, 1, 0x01);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, &info) == 1);
+    CHECK(info.reset_event == RF_HB_RESET_NONE);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, NULL) == 0);    /* one-shot */
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    bound_rocket_id = saved_bound;
 }
 
 TEST(test_heartbeat_v3_reset_cause)
@@ -492,7 +588,7 @@ TEST(test_heartbeat_v3_reset_cause)
     run_for(250, 250);
 
     HeartbeatPacket_t out;
-    CHECK(RF_Receiver_GetHeartbeat(&out) == 1);
+    CHECK(RF_Receiver_GetHeartbeat(&out, NULL) == 1);
     CHECK(out.reset_info == HB_RESET_WDT);
     CHECK(strcmp(HB_RESET_NAME(HB_RESET_WDT),     "WDT")   == 0);
     CHECK(strcmp(HB_RESET_NAME(HB_RESET_BODVDD),  "BOD-v") == 0);
@@ -505,7 +601,7 @@ TEST(test_heartbeat_v3_reset_cause)
     inject_heartbeat(OUR_ROCKET_ID, 0, 5, 12);
     fake_pkt.length = HEARTBEAT_PACKET_SIZE_V2;
     run_for(250, 250);
-    CHECK(RF_Receiver_GetHeartbeat(&out) == 1);
+    CHECK(RF_Receiver_GetHeartbeat(&out, NULL) == 1);
     CHECK(out.reset_info == 0);
 }
 
@@ -519,9 +615,9 @@ static void inject_imu_trace(uint8_t rocket_id, uint16_t ts_ms,
         .accel_x_cg  = ax_cg,
         .accel_y_cg  = -50,       /* moved off 0 so we can check fields */
         .accel_z_cg  = az_cg,
-        .gyro_x_cds  = 12,
-        .gyro_y_cds  = 34,
-        .gyro_z_cds  = -56,
+        .gyro_x_dds  = 12,
+        .gyro_y_dds  = 34,
+        .gyro_z_dds  = -56,
         .peak_accel_mg = 31000,
         .temp_c10    = 250,
     };
@@ -667,7 +763,7 @@ TEST(test_maxima_and_hello_dispatch)
 
 TEST(test_flight_contact_latch_blocks_auto_rescan)
 {
-    RF_Receiver_ClearFlightContactLatch();
+    clear_flight_contact_latch();
     CHECK(RF_Receiver_FlightContactLatched() == 0);
 
     /* Our beacon launches in front of us: one launch-flagged GPS packet */
@@ -695,7 +791,7 @@ TEST(test_flight_contact_latch_blocks_auto_rescan)
     RF_Receiver_StopScan();
 
     /* Power-cycle semantic: clearing restores pre-launch behavior */
-    RF_Receiver_ClearFlightContactLatch();
+    clear_flight_contact_latch();
     (void)RF_Receiver_ScanUpdate();
     CHECK(RF_Receiver_IsScanning() == 1);
     RF_Receiver_StopScan();
@@ -703,19 +799,19 @@ TEST(test_flight_contact_latch_blocks_auto_rescan)
 
 TEST(test_flight_contact_latch_sources)
 {
-    RF_Receiver_ClearFlightContactLatch();
+    clear_flight_contact_latch();
 
     /* A certified T0 from our beacon latches */
     inject_launch_t0(OUR_ROCKET_ID, 8);
     run_for(500, 250);
     CHECK(RF_Receiver_FlightContactLatched() == 1);
-    RF_Receiver_ClearFlightContactLatch();
+    clear_flight_contact_latch();
 
     /* Any flight event from our beacon latches */
     inject_flight_event(OUR_ROCKET_ID, FLIGHT_EVENT_APOGEE, 900);
     run_for(500, 250);
     CHECK(RF_Receiver_FlightContactLatched() == 1);
-    RF_Receiver_ClearFlightContactLatch();
+    clear_flight_contact_latch();
 
     /* A V3 fused packet carrying FUSED_FLAG_LAUNCH_DETECTED latches -
      * the flag lives at byte 17 on V3 (byte 18 is the rocket_id). */
@@ -724,7 +820,7 @@ TEST(test_flight_contact_latch_sources)
                         FUSED_FLAG_LAUNCH_DETECTED | FUSED_FLAG_V3;
     run_for(500, 250);
     CHECK(RF_Receiver_FlightContactLatched() == 1);
-    RF_Receiver_ClearFlightContactLatch();
+    clear_flight_contact_latch();
 
     /* Foreign flight traffic must NOT latch: it isn't our launch */
     inject_flight_event(FOREIGN_ROCKET_ID, FLIGHT_EVENT_APOGEE, 900);
@@ -789,21 +885,31 @@ TEST(test_imu_trace_and_launch_t0)
     run_for(500, 250);
 
     ImuTracePacket_t out;
-    CHECK(RF_Receiver_GetImuTrace(&out) == 1);
+    uint8_t fmt = 0;
+    CHECK(RF_Receiver_GetImuTrace(&out, &fmt) == 1);
+    CHECK(fmt == 2);             /* pre-V3 units: no ts_ms marker */
     CHECK(out.rocket_id == OUR_ROCKET_ID);
     CHECK(out.ts_ms == 500);
     CHECK(out.accel_x_cg == 6234 && out.accel_z_cg == -9800);
-    CHECK(out.gyro_y_cds == 34);
+    CHECK(out.gyro_y_dds == 34);
     CHECK(out.peak_accel_mg == 31000);
     CHECK(out.temp_c10 == 0);    /* V2 wire has no temp field (zero-filled) */
-    CHECK(RF_Receiver_GetImuTrace(&out) == 0);    /* one-shot */
+    CHECK(RF_Receiver_GetImuTrace(&out, NULL) == 0);    /* one-shot */
 
     /* Legacy V1 (20 B, with temp_c10) still decodes while the fleet rolls */
     inject_imu_trace(OUR_ROCKET_ID, 500, 6234, -9800);
     fake_pkt.length = IMU_TRACE_PACKET_SIZE_V1;
     run_for(250, 250);
-    CHECK(RF_Receiver_GetImuTrace(&out) == 1);
+    CHECK(RF_Receiver_GetImuTrace(&out, &fmt) == 1);
     CHECK(out.temp_c10 == 250);
+    CHECK(fmt == 1);             /* 20-byte legacy layout */
+
+    /* V3 (true g units, 0.1 deg/s gyro): bit 15 of ts_ms marks it */
+    inject_imu_trace(OUR_ROCKET_ID, (uint16_t)(500 | IMU_TS_V3_FLAG), 6234, -9800);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetImuTrace(&out, &fmt) == 1);
+    CHECK(fmt == 3);
+    CHECK((out.ts_ms & IMU_TS_MS_MASK) == 500);
 
     /* Packet-liveliness latch updated even though nav state was untouched */
     CHECK(RF_Receiver_GetLastPacketTime() != 0);
@@ -828,7 +934,7 @@ TEST(test_imu_trace_foreign_id_dropped)
     inject_imu_trace(FOREIGN_ROCKET_ID, 123, 9999, -9999);
     run_for(500, 250);
     ImuTracePacket_t out;
-    CHECK(RF_Receiver_GetImuTrace(&out) == 0);
+    CHECK(RF_Receiver_GetImuTrace(&out, NULL) == 0);
 }
 
 TEST(test_two_way_ack_lifecycle)
@@ -853,19 +959,129 @@ TEST(test_two_way_ack_lifecycle)
     fake_pkt.snr = 10; fake_pkt_pending = 1;
     run_for(250, 250);
 
-    CHECK(RF_Receiver_ConsumeAckFlag() == 1);
-    AckPacket_t out; uint32_t age;
-    CHECK(RF_Receiver_GetLastAck(&out, &age) == 1);
-    CHECK(out.cmd_code == CMD_PING && out.echo == 0x77);
-    CHECK(RF_Receiver_ConsumeAckFlag() == 0);
+    /* An ACK with no command in flight is ignored (RequestPing below
+     * starts clean: only ACKs arriving after it count). */
+    flight_contact_latch = 0;
+    RF_CmdResult_t cr;
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 0);
 
-    /* SendCommand emits exactly one 6-byte wire frame */
+    /* PING: one 6-byte frame with the long command preamble */
     lora_tx_calls = 0; lora_tx_len = 0;
-    CHECK(RF_Receiver_SendCommand(CMD_TUNE_NEXT_CH, 0) == 1);
+    RF_Receiver_RequestPing();
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_SENT && cr.attempt == 1);
     CHECK(lora_tx_calls == 1);
     CHECK(lora_tx_len == CMD_ACK_PACKET_SIZE);
     CHECK(lora_tx_buf[0] == PACKET_TYPE_CMD);
-    CHECK(lora_tx_buf[2] == CMD_TUNE_NEXT_CH);
+    CHECK(lora_tx_buf[1] == OUR_ROCKET_ID);
+    CHECK(lora_tx_buf[2] == CMD_PING);
+    CHECK(lora_tx_preamble == LORA_CMD_PREAMBLE_SYMBOLS);
+    uint16_t seq = (uint16_t)((lora_tx_buf[3] << 8) | lora_tx_buf[4]);
+
+    /* The beacon's ACK (matching cmd + seq) completes it, with the ACK's
+     * own RSSI/SNR - the old log row always printed rssi=0 snr=0 */
+    ack_in.seq_hi = (uint8_t)(seq >> 8);
+    ack_in.seq_lo = (uint8_t)(seq & 0xFF);
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    memcpy(fake_pkt.data, &ack_in, sizeof(ack_in));
+    fake_pkt.length = CMD_ACK_PACKET_SIZE; fake_pkt.rssi = -40;
+    fake_pkt.snr = 10; fake_pkt_pending = 1;
+    run_for(250, 250);
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_ACK && cr.cmd == CMD_PING && cr.seq == seq);
+    CHECK(cr.echo == 0x77 && cr.rssi == -40 && cr.snr == 10);
+    RF_Receiver_ServiceCommands();               /* done: idle */
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 0);
+    CHECK(lora_tx_calls == 1);
+}
+
+TEST(test_two_way_ping_retries_then_gives_up)
+{
+    /* No ACK: retried after each RF_CMD_ACK_WAIT_MS window, then given up.
+     * An ACK for some other sequence number does not count. */
+    flight_contact_latch = 0;
+    RF_CmdResult_t cr;
+    lora_tx_calls = 0;
+    RF_Receiver_RequestPing();
+    for (int k = 1; k <= RF_CMD_MAX_ATTEMPTS; k++) {
+        RF_Receiver_ServiceCommands();
+        CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+        CHECK(cr.event == RF_CMD_EV_SENT && cr.attempt == k);
+        if (k == 1) {
+            AckPacket_t stale = {
+                .packet_type = PACKET_TYPE_ACK, .rocket_id = OUR_ROCKET_ID,
+                .cmd_code = CMD_PING, .seq_hi = 0xEE, .seq_lo = 0xEE, .echo = 1,
+            };
+            memset(&fake_pkt, 0, sizeof(fake_pkt));
+            memcpy(fake_pkt.data, &stale, sizeof(stale));
+            fake_pkt.length = CMD_ACK_PACKET_SIZE; fake_pkt_pending = 1;
+            run_for(250, 250);
+            RF_Receiver_ServiceCommands();
+            CHECK(RF_Receiver_TakeCommandResult(&cr) == 0);   /* ignored */
+        }
+        run_for(RF_CMD_ACK_WAIT_MS + 250, 250);
+    }
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_NO_ACK && cr.attempt == RF_CMD_MAX_ATTEMPTS);
+    CHECK(lora_tx_calls == RF_CMD_MAX_ATTEMPTS);
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 0);
+}
+
+TEST(test_two_way_ping_cancelled_when_binding_lost)
+{
+    /* An operator scan / channel change mid-PING drops the binding: the
+     * remaining attempts are cancelled, not sent to nobody. */
+    RF_CmdResult_t cr;
+    flight_contact_latch = 0;
+    uint8_t saved = bound_rocket_id;
+    lora_tx_calls = 0;
+    RF_Receiver_RequestPing();
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_SENT);
+    bound_rocket_id = RF_ROCKET_UNBOUND;
+    run_for(RF_CMD_ACK_WAIT_MS + 250, 250);
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_CANCELLED);
+    CHECK(lora_tx_calls == 1);                   /* no further attempts */
+    bound_rocket_id = saved;
+}
+
+TEST(test_two_way_ping_suppressed_while_flying)
+{
+    /* A flying beacon doesn't listen, and each attempt would make this
+     * receiver deaf for ~1.8 s: never transmit once flight was seen. */
+    RF_CmdResult_t cr;
+    lora_tx_calls = 0;
+    flight_contact_latch = 1;
+    beacon_landed_seen = 0;
+    RF_Receiver_RequestPing();
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_SUPPRESSED);
+    CHECK(lora_tx_calls == 0);
+
+    /* The beacon announces LANDED: it listens again, PINGs go out */
+    inject_flight_event(OUR_ROCKET_ID, FLIGHT_EVENT_LANDED, 0);
+    run_for(250, 250);
+    FlightEventPacket_t fe;
+    (void)RF_Receiver_GetFlightEvent(&fe);      /* consume it */
+    CHECK(beacon_landed_seen == 1);
+    RF_Receiver_RequestPing();
+    RF_Receiver_ServiceCommands();
+    CHECK(RF_Receiver_TakeCommandResult(&cr) == 1);
+    CHECK(cr.event == RF_CMD_EV_SENT);
+    CHECK(lora_tx_calls == 1);
+
+    cmd_active = 0;                             /* leave the scheduler idle */
+    cmd_waiting = 0;
+    flight_contact_latch = 0;
+    beacon_landed_seen = 0;
 }
 
 TEST(test_two_way_foreign_ack_dropped)
@@ -887,7 +1103,7 @@ TEST(test_two_way_foreign_ack_dropped)
     fake_pkt_pending = 1;
     run_for(250, 250);
 
-    CHECK(RF_Receiver_ConsumeAckFlag() == 0);   /* foreign ACK dropped */
+    CHECK(ack_pending == 0);                    /* foreign ACK dropped */
 }
 
 TEST(test_position_packet_flow)
@@ -908,9 +1124,9 @@ TEST(test_position_packet_flow)
     /* Consuming the packet clears the ready flag */
     CHECK(RF_Receiver_DataAvailable() == 0);
 
-    /* Freshness: stale after the timeout, not before */
-    CHECK(RF_Receiver_IsDataStale(now_ms + 1000) == 0);
-    CHECK(RF_Receiver_IsDataStale(now_ms + 600000) == 1);
+    /* Freshness: the position timestamp is this packet's arrival */
+    CHECK(position_age_ms(now_ms) < 1000);
+    CHECK(position_age_ms(now_ms + 600000) >= 600000);
 }
 
 TEST(test_channel_scan_locks_on_packet)
@@ -1166,6 +1382,25 @@ TEST(test_init_failure_paths)
     fake_device_status_fail = 0;
 }
 
+TEST(test_busy_diagnostic_reads_the_lora_busy_line)
+{
+    /* The diagnostic read PB0 - a floating spare since BUSY moved to PA9
+     * in board v2.8 - so the RF page's BUSY field showed noise. */
+    fake_high_port = LORA_BUSY_PORT;
+    fake_high_pin  = LORA_BUSY_PIN;
+    CHECK(RF_Receiver_Init() == RF_OK);
+    uint8_t busy = 0;
+    RF_Receiver_GetIRQDiagnostics(NULL, NULL, NULL, NULL, &busy);
+    CHECK(busy == 1);
+
+    fake_high_port = GPIOB;               /* the old (wrong) pin high */
+    fake_high_pin  = GPIO_PIN_0;
+    CHECK(RF_Receiver_Init() == RF_OK);
+    RF_Receiver_GetIRQDiagnostics(NULL, NULL, NULL, NULL, &busy);
+    CHECK(busy == 0);
+    fake_high_port = NULL;
+}
+
 TEST(test_spi_selftest_oneshot_in_poll)
 {
     /* If init never ran the self-test (result still 0xFF), the first
@@ -1236,43 +1471,9 @@ TEST(test_fused_packet_flow)
 
 TEST(test_get_gps_data_without_packet)
 {
-    RF_Parser_Reset();
+    RF_Parser_Init();
     GPS_Data gps;
     CHECK(RF_Receiver_GetGPSData(&gps) == RF_ERROR);
-}
-
-TEST(test_data_staleness_tracking)
-{
-    /* Channel switch discards the previous rocket's freshness */
-    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
-    CHECK(RF_Receiver_GetLastPacketTime() == 0);
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 1);    /* nothing yet */
-
-    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
-    now_ms += 10; Test_SetTick(now_ms);
-    CHECK(RF_Receiver_DataAvailable() == 1);
-    GPS_Data gps;
-    (void)RF_Receiver_GetGPSData(&gps);
-
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);
-    CHECK(RF_Receiver_IsDataStale(now_ms + RF_DATA_STALE_TIMEOUT_MS + 1) == 1);
-    CHECK(RF_Receiver_GetLastPacketTime() != 0);
-}
-
-TEST(test_signal_quality_thresholds)
-{
-    last_rssi = -125; last_snr = 5;      /* below RSSI floor */
-    CHECK(RF_Receiver_IsSignalQualityGood() == 0);
-
-    last_rssi = -90; last_snr = -12;     /* below SNR floor */
-    CHECK(RF_Receiver_IsSignalQualityGood() == 0);
-
-    last_rssi = -90; last_snr = 5;
-    CHECK(RF_Receiver_IsSignalQualityGood() == 1);
-
-    int16_t rssi = 0; int8_t snr = 0;
-    RF_Receiver_GetSignalQuality(&rssi, &snr);
-    CHECK(rssi == -90 && snr == 5);
 }
 
 TEST(test_cad_result_failure_falls_back_to_dwell)
@@ -1371,30 +1572,13 @@ TEST(test_noise_sweep_null_guard)
 
 TEST(test_diagnostics_getters)
 {
-    uint32_t bytes = 0; uint8_t matches = 0; uint8_t last4[4] = {0};
-    RF_Receiver_GetDiagnostics(&bytes, &matches, last4);
-    CHECK(bytes > 0);                       /* packets flowed in earlier tests */
-    RF_Receiver_GetDiagnostics(NULL, NULL, NULL);  /* must not crash */
-
-    uint16_t csum = 0xFFFF;
-    RF_Receiver_GetExtendedDiagnostics(&csum);
-    CHECK(csum == 0);                       /* dead counter with LoRa CRC */
-    RF_Receiver_GetExtendedDiagnostics(NULL);
-
     char ascii[64];
-    RF_Receiver_GetAsciiBuffer(ascii, sizeof(ascii));
-    CHECK(ascii[sizeof(ascii) - 1] == '\0');
-    RF_Receiver_GetAsciiBuffer(NULL, 0);           /* must not crash */
     (void)RF_Receiver_GetLastPacketASCII(ascii, sizeof(ascii));
 
     GPS_Data gps; char cs[16]; uint8_t ck;
     (void)RF_Receiver_GetParsedData(&gps, cs, sizeof(cs), &ck);
 
     CHECK(RF_Receiver_GetLoRaPacketCount() > 0);
-
-    /* Deprecated UART-era shims: fixed answers, no side effects */
-    RF_Receiver_SetBaudFudgeFactor(1234);
-    CHECK(RF_Receiver_GetBaudFudgeFactor() == RF_BAUD_FUDGE_FACTOR_DEFAULT);
 
     uint32_t irqs = 1; uint32_t pkts = 0; uint32_t dups = 1;
     RF_Receiver_GetPacketLossDiagnostics(&irqs, &pkts, &dups);
@@ -1691,7 +1875,7 @@ TEST(test_over_horizon_walk_reacquisition)
     GPS_Data kept;
     CHECK(RF_Receiver_GetParsedData(&kept, NULL, 0, NULL) == 1);
     CHECK_NEAR(kept.latitude, 39.890, 1e-4);
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 1);
+    CHECK(position_age_ms(now_ms) > 30000);          /* long silence */
     CHECK(RF_Receiver_IsScanning() == 0);            /* silence < trigger */
 
     /* ~20 min in the auto re-scan starts looking. CAD must be skipped
@@ -1720,7 +1904,7 @@ TEST(test_over_horizon_walk_reacquisition)
     CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
     CHECK_NEAR(pos.latitude, 39.962, 1e-4);
     CHECK_NEAR(pos.longitude, -105.021, 1e-4);
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);
+    CHECK(position_age_ms(now_ms) < 1000);
     CHECK(RF_Receiver_GetLastPacketTime() == now_ms);
 }
 
@@ -1761,7 +1945,7 @@ TEST(test_fringe_link_crc_forensics)
 
     CHECK(RF_Receiver_GetCrcErrors() == crc0 + 40);   /* heard-but-corrupt */
     CHECK(RF_Receiver_GetLoRaPacketCount() == pkts0 + 10);
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);      /* freshest just arrived */
+    CHECK(position_age_ms(now_ms) < 1000);            /* freshest just arrived */
     CHECK(RF_Receiver_IsScanning() == 0);             /* < 5 min silence: no rescan */
     CHECK(RF_Receiver_NoiseAlert() == 0);             /* quiet band, no false alarm */
 }
@@ -1796,7 +1980,7 @@ TEST(test_tick_wraparound_ages)
     /* Cross 2^32. Nothing may read as "49 days old" (huge stale age) or
      * as fresh forever (age pinned at 0). */
     wrap_run(5000);                    /* now ~5.5 s past the last packet */
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);
+    CHECK(position_age_ms(now_ms) > 5000 && position_age_ms(now_ms) < 6000);
     HeartbeatPacket_t hb;
     uint32_t age_ms = 0;
     CHECK(RF_Receiver_GetLastHeartbeat(&hb, &age_ms) == 1);
@@ -1805,7 +1989,7 @@ TEST(test_tick_wraparound_ages)
     /* Past the stale timeout on the far side of the wrap, the flag still
      * matures normally. */
     wrap_run(30000);
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 1);
+    CHECK(position_age_ms(now_ms) > 35000 && position_age_ms(now_ms) < 36000);
 
     /* Scan dwell across the boundary: start it pre-wrap, and it must hop
      * exactly once after one dwell - the dwell arithmetic must not wrap-
@@ -1960,7 +2144,7 @@ TEST(test_receiver_cold_boot_mid_flight)
     last_any_packet_ms = 0;
     foreign_lock_streak = 0;
     rf_packet_ready = 0;                 /* a prior test may leave one pending */
-    RF_Parser_Reset();
+    RF_Parser_Init();
     (void)LoRa_SetChannel(0);
 
     RF_Receiver_StartScan();
@@ -1991,7 +2175,7 @@ TEST(test_receiver_cold_boot_mid_flight)
     GPS_Data pos;
     CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
     CHECK_NEAR(pos.latitude, 39.80, 1e-4);
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);
+    CHECK(position_age_ms(now_ms) < 1000);
 }
 
 TEST(test_receiver_cold_boot_mid_walk)
@@ -2010,7 +2194,7 @@ TEST(test_receiver_cold_boot_mid_walk)
     last_any_packet_ms = 0;
     foreign_lock_streak = 0;
     rf_packet_ready = 0;
-    RF_Parser_Reset();
+    RF_Parser_Init();
     (void)LoRa_SetChannel(0);
 
     RF_Receiver_StartScan();
@@ -2289,7 +2473,7 @@ TEST(test_heartbeat_uptime_regression_keeps_tracking)
     inject_heartbeat(OUR_ROCKET_ID, 0, 0, 7);
     run_for(250, 250);
     HeartbeatPacket_t hb;
-    CHECK(RF_Receiver_GetHeartbeat(&hb) == 1);
+    CHECK(RF_Receiver_GetHeartbeat(&hb, NULL) == 1);
     CHECK(hb.uptime_s == 7);
     CHECK(RF_Receiver_GetBoundRocketId() == OUR_ROCKET_ID);  /* no rebind drama */
 
@@ -2307,6 +2491,7 @@ int main(void)
     /* Failure paths first: they re-init repeatedly and must end with a
      * clean, successful init for the rest of the suite. */
     run_test_init_failure_paths();
+    run_test_busy_diagnostic_reads_the_lora_busy_line();
     CHECK(RF_Receiver_Init() == RF_OK);
 
     run_test_radio_wedge_rx_recovery();
@@ -2315,6 +2500,7 @@ int main(void)
     run_test_channel_cycling_covers_all_channels();
     run_test_callsign_captured_in_binary_mode();
     run_test_heartbeat_lifecycle();
+    run_test_heartbeat_foreign_and_reset_tracking();
     run_test_heartbeat_v3_reset_cause();
     run_test_imu_trace_and_launch_t0();
     run_test_launch_t0_one_shot();
@@ -2325,14 +2511,15 @@ int main(void)
     run_test_crc_dump_captures_corrupt_head();
     run_test_imu_trace_foreign_id_dropped();
     run_test_two_way_ack_lifecycle();
+    run_test_two_way_ping_retries_then_gives_up();
+    run_test_two_way_ping_cancelled_when_binding_lost();
+    run_test_two_way_ping_suppressed_while_flying();
     run_test_two_way_foreign_ack_dropped();
     run_test_band_garbage_packets_are_ignored();
     run_test_final_packet_position_persists_through_blackout();
     run_test_position_packet_flow();
     run_test_fused_packet_flow();
     run_test_get_gps_data_without_packet();
-    run_test_data_staleness_tracking();
-    run_test_signal_quality_thresholds();
     run_test_channel_scan_locks_on_packet();
     run_test_channel_scan_cad_fast_phase();
     run_test_cad_result_failure_falls_back_to_dwell();

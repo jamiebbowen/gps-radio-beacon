@@ -62,25 +62,12 @@ uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length);
 uint8_t RF_Parser_GetParsedData(GPS_Data *gps_data, char *callsign, uint16_t callsign_size, uint8_t *checksum);
 
 /**
- * @brief Get checksum error count (deprecated - LoRa has built-in CRC)
- * @param checksum_errors Pointer to store checksum error count (always returns 0)
- * @retval None
- */
-void RF_Parser_GetChecksumErrors(uint16_t *checksum_errors);
-
-/**
  * @brief Get the last valid packet from the parser
  * @param buffer Buffer to store the last valid packet
  * @param max_len Maximum length of the buffer
  * @retval Length of the packet stored in the buffer
  */
 uint16_t RF_Parser_GetLastValidPacket(char *buffer, uint16_t max_len);
-
-/**
- * @brief Reset parser state
- * @retval None
- */
-void RF_Parser_Reset(void);
 
 /**
  * @brief Get diagnostics from the parser
@@ -90,26 +77,9 @@ void RF_Parser_Reset(void);
  * @retval None
  */
 void RF_Parser_GetDiagnostics(uint32_t *attempts, uint32_t *successes, uint32_t *failures);
-/**
- * @brief Get detailed failure diagnostics
- * @param null_packet Pointer to store null packet failures
- * @param insufficient_fields Pointer to store insufficient fields failures
- * @param checksum_invalid Pointer to store checksum failures (deprecated, always 0)
- * @param marker_not_found Pointer to store marker failures (deprecated, always 0)
- * @param callsign_too_short Pointer to store callsign failures (deprecated, always 0)
- * @retval None
- */
-void RF_Parser_GetDetailedFailures(uint32_t *null_packet, uint32_t *insufficient_fields, 
-                                   uint32_t *checksum_invalid, uint32_t *marker_not_found,
-                                   uint32_t *callsign_too_short);
 
-/**
- * @brief Get the last raw packet from the parser
- * @param buffer Buffer to store the last raw packet
- * @param max_len Maximum length of the buffer
- * @retval Length of the packet stored in the buffer
- */
-uint16_t RF_Parser_GetLastRawPacket(char *buffer, uint16_t max_len);
+/** NULL/empty packet failures since init. */
+void RF_Parser_GetDetailedFailures(uint32_t *null_packet);
 
 #ifdef __cplusplus
 }

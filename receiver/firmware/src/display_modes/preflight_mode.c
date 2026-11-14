@@ -31,7 +31,8 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
                            uint8_t tx_sensor_degraded,
                            uint8_t rx_fix_ok, uint8_t rx_sats,
                            uint8_t compass_ok, uint8_t sd_ok,
-                           uint16_t rx_vdd_mv)
+                           uint16_t rx_vdd_mv,
+                           const Preflight_Result_t *pf)
 {
     /* Sized for worst-case formatted expansion (sats up to 255, fix up to
      * 255, 32-bit link age + signed dBm), not just visible columns -
@@ -71,7 +72,7 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
 
     /* TX GPS: fix + sats from the last position packet; when there's no fix
      * the heartbeat health field says WHY (wiring vs still acquiring). */
-    uint8_t tx_gps_ok = (tx_fix >= 1 && tx_sats >= 4);
+    uint8_t tx_gps_ok = (pf != NULL) && pf->tx_gps_ok;   /* shared evaluation */
     if (tx_gps_ok) {
         snprintf(buf, sizeof(buf), "TX GPS   OK %usat fix%u",
                  (unsigned)tx_sats, (unsigned)tx_fix);
@@ -99,7 +100,7 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
      * per-minute RFSTATS line; by then a brown-out may have already
      * scrambled SD state mid-session. 3.20V is ~the lowest the LDO can
      * still maintain regulation with the current draw profile. */
-    if (rx_vdd_mv > 0 && rx_vdd_mv < 3200) {
+    if (pf != NULL && pf->low_power) {
         snprintf(buf, sizeof(buf), "PWR LOW  %u.%02uV",
                  rx_vdd_mv / 1000, (rx_vdd_mv % 1000) / 10);
         Display_DrawTextRowCol(4, 0, buf);
@@ -120,15 +121,16 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
     Display_DrawTextRowCol(6, 0, tx_sensor_degraded ? "TX IMU   CHK dead!"
                                                     : "TX IMU   OK");
 
-    /* Verdict order: hardware health is a gate; a TESTING-mode beacon flash
-     * blocks readiness with an unmissable verdict (a pad-passed-but-wrong-
-     * firmware launch should never look ready). Battery rail is a gate. */
-    uint8_t tst_build = link_ok && RF_Receiver_TestingBuildSuspect();
-    if (tst_build) {
+    /* Verdict: the shared evaluation (preflight_eval.c), so this checklist
+     * and the navigation page's ready-to-fly row can never disagree. A
+     * TESTING-build beacon and a low pack are vetoes that outrank the
+     * individual checks. */
+    uint8_t verdict = (pf != NULL) ? pf->verdict : (uint8_t)PF_NOT_READY;
+    if (verdict == PF_VETO_TEST_BUILD) {
         Display_DrawTextRowCol(7, 3, "NOT READY - TST BUILD!");
-    } else if (rx_vdd_mv > 0 && rx_vdd_mv < 3200) {
+    } else if (verdict == PF_VETO_LOW_POWER) {
         Display_DrawTextRowCol(7, 3, "PWR LOW - CHANGE PACK");
-    } else if (link_ok && tx_gps_ok && rx_fix_ok && compass_ok) {
+    } else if (verdict == PF_READY) {
         Display_DrawTextRowCol(7, 2, "** READY TO FLY **");
     } else {
         Display_DrawTextRowCol(7, 3, "NOT READY - CHK");

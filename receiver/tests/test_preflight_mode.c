@@ -76,9 +76,21 @@ static void render(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
                    uint8_t compass_ok, uint8_t sd_ok, uint16_t vdd)
 {
     cap_clear();
+    /* The shared evaluation, built from the same inputs main.c uses */
+    Preflight_Inputs_t in;
+    memset(&in, 0, sizeof(in));
+    in.link_ok = link_ok;
+    in.tx_fix = tx_fix;
+    in.tx_sats = tx_sats;
+    in.rx_fix_ok = rx_fix_ok;
+    in.compass_ok = compass_ok;
+    in.rx_vdd_mv = vdd;
+    in.testing_suspect = (uint8_t)fake_testing_build;
+    Preflight_Result_t pf;
+    Preflight_Evaluate(&in, &pf);
     DisplayMode_Preflight(link_ok, link_age_s, rssi,
                           tx_fix, tx_sats, tx_hb_state, sensor_deg,
-                          rx_fix_ok, rx_sats, compass_ok, sd_ok, vdd);
+                          rx_fix_ok, rx_sats, compass_ok, sd_ok, vdd, &pf);
 }
 
 /* ------------------------------------------------------------------ */

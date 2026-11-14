@@ -49,15 +49,6 @@ typedef struct {
     char current_log_file[SD_CARD_MAX_FILENAME];
 } SD_Card_Info;
 
-/* Log Entry Types */
-typedef enum {
-    LOG_TYPE_GPS_LOCAL = 0,
-    LOG_TYPE_GPS_REMOTE,
-    LOG_TYPE_RF_PACKET,
-    LOG_TYPE_COMPASS,
-    LOG_TYPE_SYSTEM_EVENT,
-    LOG_TYPE_ERROR
-} Log_Entry_Type;
 
 /* Function Prototypes -------------------------------------------------------*/
 
@@ -66,12 +57,6 @@ typedef enum {
  * @retval SD_Card_Status
  */
 SD_Card_Status SD_Card_Init(void);
-
-/**
- * @brief Deinitialize SD card module
- * @retval SD_Card_Status
- */
-SD_Card_Status SD_Card_DeInit(void);
 
 /**
  * @brief Check if SD card is present
@@ -85,41 +70,6 @@ bool SD_Card_IsPresent(void);
  * @retval SD_Card_Status
  */
 SD_Card_Status SD_Card_GetInfo(SD_Card_Info *info);
-
-/**
- * @brief Create a new log file with timestamp
- * @param filename Buffer to store created filename
- * @param max_len Maximum length of filename buffer
- * @retval SD_Card_Status
- */
-SD_Card_Status SD_Card_CreateLogFile(char *filename, uint32_t max_len);
-
-/**
- * @brief Log GPS data to SD card
- * @param gps_data Pointer to GPS data structure
- * @param log_type Type of GPS log (local or remote)
- * @retval SD_Card_Status
- */
-SD_Card_Status SD_Card_LogGPS(GPS_Data *gps_data, Log_Entry_Type log_type);
-
-/**
- * @brief Log RF packet data to SD card
- * @param packet_data Pointer to packet data
- * @param packet_length Length of packet data
- * @param rssi Signal strength (if available)
- * @retval SD_Card_Status
- */
-SD_Card_Status SD_Card_LogRFPacket(const char *packet_data, uint32_t packet_length, int16_t rssi);
-
-/**
- * @brief Log compass data to SD card
- * @param heading Compass heading in degrees
- * @param raw_x Raw magnetometer X value
- * @param raw_y Raw magnetometer Y value
- * @param raw_z Raw magnetometer Z value
- * @retval SD_Card_Status
- */
-SD_Card_Status SD_Card_LogCompass(float heading, int16_t raw_x, int16_t raw_y, int16_t raw_z);
 
 /**
  * @brief Log system event to SD card
@@ -178,8 +128,8 @@ SD_Card_Status SD_Card_LogBase(const GPS_Data *base_gps);
  * @brief Log one inertial-trace packet as an IMU row (flight forensics)
  * @retval SD_CARD_OK even when there's no log file yet (dropped quietly)
  */
-SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, int16_t rssi,
-                                   int8_t snr);
+SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, uint8_t fmt,
+                                   int16_t rssi, int8_t snr);
 
 /**
  * @brief Save last known beacon location to BEACON.TXT for persistence across power cycles
@@ -200,12 +150,6 @@ SD_Card_Status SD_Card_SaveLastBeacon(float lat, float lon, float alt);
 SD_Card_Status SD_Card_LoadLastBeacon(float *lat, float *lon, float *alt);
 
 /**
- * @brief Flush any pending writes to SD card
- * @retval SD_Card_Status
- */
-SD_Card_Status SD_Card_Flush(void);
-
-/**
  * @brief Get current timestamp string for logging
  * @param timestamp_str Buffer to store timestamp
  * @param max_len Maximum length of timestamp buffer
@@ -214,34 +158,12 @@ SD_Card_Status SD_Card_Flush(void);
 void SD_Card_GetTimestamp(char *timestamp_str, uint32_t max_len);
 
 /**
- * @brief Format SD card (WARNING: Erases all data)
- * @retval SD_Card_Status
- */
-SD_Card_Status SD_Card_Format(void);
-
-/**
  * @brief Write/read-back self-test: writes a known pattern, closes, reopens,
  *        verifies content, then deletes the test file.
  * @retval SD_CARD_OK if write and read-back match, SD_CARD_ERROR otherwise
  */
 SD_Card_Status SD_Card_SelfTest(void);
 void SD_Card_GetSelfTestError(uint8_t *step, uint8_t *fres);
-
-/**
- * @brief Save BNO055 compass calibration to COMPCAL.BIN
- * @param data  22-byte buffer from Compass_GetCalibrationData()
- * @param len   Must be >= 22
- * @retval SD_Card_Status
- */
-SD_Card_Status SD_Card_SaveCompassCal(const uint8_t *data, uint8_t len);
-
-/**
- * @brief Load BNO055 compass calibration from COMPCAL.BIN
- * @param data  Output buffer, at least 22 bytes
- * @param len   Must be >= 22
- * @retval SD_CARD_OK on success, SD_CARD_ERROR if file missing or corrupt
- */
-SD_Card_Status SD_Card_LoadCompassCal(uint8_t *data, uint8_t len);
 
 /**
  * @brief Persist the BNO055 quaternion-heading convention lock (1-8)

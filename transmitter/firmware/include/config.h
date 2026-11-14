@@ -9,8 +9,6 @@
  * Toggle TESTING_MODE to switch between production and testing configurations.
  */
 
-#define LAUNCH_DEBOUNCE_TIME_MS         200   // 200ms debounce time for launch detection
-
 // Set to 1 for testing mode, 0 for production mode
 #ifndef TESTING_MODE
 #define TESTING_MODE 0
@@ -21,6 +19,15 @@
  * pad the heartbeat IS the beacon interval instead - see the TURN_ON /
  * PRELAUNCH cadence constants below. */
 #define HEARTBEAT_INTERVAL_SEC 5
+
+/* BATTERY_SAVE heartbeat ramp. After landing, a beacon with no usable fix
+ * (buried, under canopy, GPS dead) is heard only through heartbeats, so
+ * they stay dense (HEARTBEAT_INTERVAL_SEC) for the walk-in, when the crew
+ * direction-finds on RSSI. After BATTERY_SAVE_HB_FAST_SEC they slow to
+ * BATTERY_SAVE_HB_SLOW_INTERVAL_SEC: each ~1.1 s SF10 burst at 5 s is
+ * ~22% PA duty, at 30 s ~4%, which buys hours on a long recovery. */
+#define BATTERY_SAVE_HB_FAST_SEC          1800  /* 30 min dense */
+#define BATTERY_SAVE_HB_SLOW_INTERVAL_SEC   30
 
 /* ---------------------------------------------------------------------------
  * Beep-before-silence pad policy (turn-on grace + quiet pad)
@@ -214,29 +221,17 @@
 
 #if TESTING_MODE
     // Testing Configuration - Fast intervals for development/testing
-    #define PRE_LAUNCH_INTERVAL_SEC         30    // 30 seconds between transmissions in pre-launch
     #define POST_LAUNCH_DURATION_SEC        10    // 10 seconds in LAUNCH state before POST_LAUNCH
     #define POST_LAUNCH_RECOVERY_DURATION_SEC 1200  // 20 minutes duration in post-launch state
     #define BATTERY_SAVE_INTERVAL_SEC       30    // 30 seconds between transmissions in battery save
     #define CALLSIGN_TRANSMIT_INTERVAL_SEC  30    // 30 seconds between callsign transmissions
     
-    // Debug features enabled in testing mode
-    #define DEBUG_OUTPUT_ENABLED        1     // Enable debug output
-    #define INCLUDE_CARRIAGE_RETURNS    1     // Include \r\n for terminal debugging
-    
 #else
     // Production Configuration - Conservative intervals for flight
-    #define PRE_LAUNCH_INTERVAL_SEC         5     // 5 s between raw GPS packets on the pad
-                                                  // (dense for range testing; bench-quiet flight
-                                                  //  prep variant: 30 s, see git history)
     #define POST_LAUNCH_DURATION_SEC        1     // 1 second in LAUNCH state before POST_LAUNCH
     #define POST_LAUNCH_RECOVERY_DURATION_SEC 600 // 10 minutes duration in post-launch state
     #define BATTERY_SAVE_INTERVAL_SEC       60    // 60 seconds between transmissions in battery save
     #define CALLSIGN_TRANSMIT_INTERVAL_SEC  300   // 5 minutes between callsign transmissions
-    
-    // Debug features disabled in production mode
-    #define DEBUG_OUTPUT_ENABLED        0     // Disable debug output
-    #define INCLUDE_CARRIAGE_RETURNS    0     // No \r\n in production (RF efficiency)
     
 #endif
 

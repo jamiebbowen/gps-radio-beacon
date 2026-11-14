@@ -283,7 +283,7 @@ Before deploying, verify:
 
 ### Packet Format Matches:
 - [ ] Binary typed packets V2: GPS 14 B / fused 20 B / heartbeat 8 B (+ callsign)
-- [ ] Same struct layout and scaling in rf_packet.h (TX) vs rf_parser.c (RX)
+- [ ] Same struct layout in both packet_format.h copies (drift guard + PF_STATIC_ASSERT) and matching scaling in rf_parser.c (RX)
 - [ ] Legacy ASCII path ($$data$$CHKSUM) only if USE_BINARY_PACKETS=0
 
 ### Antennas Connected:

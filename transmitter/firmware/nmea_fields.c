@@ -9,6 +9,7 @@
 #include "include/nmea_fields.h"
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 int nmea_get_field(const char *sentence, uint8_t index,
                    char *out, uint8_t out_size) {
@@ -42,24 +43,36 @@ int nmea_get_field(const char *sentence, uint8_t index,
     return (int)n;
 }
 
-float nmea_coord_to_decimal(const char *nmea_coord, char direction) {
+double nmea_coord_to_decimal(const char *nmea_coord, char direction) {
     if (nmea_coord == NULL || nmea_coord[0] == '\0') {
-        return 0.0f;
+        return 0.0;
     }
 
     /* ddmm.mmmmm: degrees are everything above the hundreds place, minutes
      * are the remainder. Done in double so the ~9 significant digits of an
-     * NMEA coordinate survive until the final rounding to float. */
+     * NMEA coordinate survive (float32 would cost ~0.5 m). */
     double nmea_value = atof(nmea_coord);
+    /* Validate BEFORE the (int) cast, which is undefined behaviour for a
+     * non-finite or out-of-range value: atof() parses "nan"/"inf"
+     * literally, and a corrupt-but-checksummed field can carry any number
+     * of digits. 0 <= value < 18100 covers every legal ddmm/dddmm field
+     * (180 deg 00'); the negated test also catches NaN. Invalid -> NAN,
+     * which every caller rejects via isfinite(). */
+    if (!(nmea_value >= 0.0 && nmea_value < 18100.0)) {
+        return NAN;
+    }
     int degrees = (int)(nmea_value / 100.0);
     double minutes = nmea_value - (degrees * 100.0);
+    if (minutes >= 60.0) {
+        return NAN;   /* "3960.0" is not 40 deg - it is a corrupt field */
+    }
     double decimal = (double)degrees + (minutes / 60.0);
 
     if (direction == 'S' || direction == 'W') {
         decimal = -decimal;
     }
 
-    return (float)decimal;
+    return decimal;
 }
 
 static int hex_val(char c) {
@@ -84,9 +97,14 @@ int nmea_checksum_ok(const char *sentence) {
         return 0;  /* no checksum field: truncated or corrupt */
     }
 
+    /* Short-circuit: when '*' is the last character p[1] is the NUL
+     * terminator, and reading p[2] would run past the end of the string. */
     int hi = hex_val(p[1]);
+    if (hi < 0) {
+        return 0;
+    }
     int lo = hex_val(p[2]);
-    if (hi < 0 || lo < 0) {
+    if (lo < 0) {
         return 0;
     }
     return (uint8_t)((hi << 4) | lo) == cksum;

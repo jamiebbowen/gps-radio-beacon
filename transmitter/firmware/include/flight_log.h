@@ -3,6 +3,23 @@
 
 #include <stdint.h>
 
+/* Record kinds (the DUMP 'kind' column) */
+#define FLOG_KIND_IMU           1
+#define FLOG_KIND_GPS           2
+#define FLOG_KIND_LAUNCH        3
+#define FLOG_KIND_LANDED        4
+#define FLOG_KIND_FLIGHT_EVENT  5
+#define FLOG_KIND_POST_LAUNCH   6
+#define FLOG_KIND_BATTERY_SAVE  7
+#define FLOG_KIND_BOOT          8
+#define FLOG_KIND_FUSED         9
+#define FLOG_KIND_STATE        10   /* persistent flight-state marker    */
+
+/* Fused-record flags byte */
+#define FLOG_FUS_GPS_FRESH   0x01
+#define FLOG_FUS_DR          0x02
+#define FLOG_FUS_IMU_HEALTHY 0x04
+
 /**
  * On-beacon flight log in the SAMD51's own internal flash.
  *
@@ -44,17 +61,16 @@
  * the first FLOG_BYTES-8KB so a full data region can never clobber the
  * marker. The erase takes NVMCTL row-erase time per row (~20 ms each,
  * ~500 ms total), which happens once at T0 - on the pad the PAYOFF is
- * worth it. In flight the writes append with a 512B page commit; if power
- * dies mid-page, only that page is lost.
+ * worth it. In flight every record is programmed as it is logged (two
+ * 16-byte quad words, magic last), so a power loss costs at most the
+ * record being written.
  */
 
 void flight_log_init(void);
-/** Called when launch_detect confirms; erases the region (~250 ms) and
- *  arms the recorder. Pre-launched again before erase completes -> caller
- *  must wait for flight_log_armed(). */
+/** Called when launch_detect confirms: synchronously erases the whole
+ *  region (32 block erases) and arms the recorder. A second call while
+ *  armed is a no-op. */
 void flight_log_arm(void);
-uint8_t flight_log_armed(void);
-uint8_t flight_log_busy(void);          /* erase in progress */
 
 /** Nonzero when the state row still says FLYING - i.e. the previous run
  *  was airborne when the chip reset. Checked at boot before arming. */
@@ -67,10 +83,14 @@ uint8_t flight_log_resume(void);
  *  boot reads it as a power-on, not a mid-flight reset. */
 void flight_log_mark_landed(void);
 
-/** Raw IMU sample: centi-g and centi-deg/s, same units as the IMU packet. */
+/** IMU record format byte (rsv[0]): V3 units - centi-g, 0.1 deg/s,
+ *  milli-g, the same as the IMU trace packet. Pre-V3 records read 0. */
+#define FLOG_IMU_FMT_V3  3
+
+/** Raw IMU sample in V3 packet units (the encoded packet's own fields). */
 void flight_log_imu(uint32_t ms,
                     int16_t ax_cg, int16_t ay_cg, int16_t az_cg,
-                    int16_t gx_cds, int16_t gy_cds, int16_t gz_cds,
+                    int16_t gx_dds, int16_t gy_dds, int16_t gz_dds,
                     int16_t peak_mg);
 void flight_log_gps(uint32_t ms,
                     int32_t lat_e7, int32_t lon_e7, int16_t alt_m,

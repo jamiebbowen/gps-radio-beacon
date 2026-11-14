@@ -577,6 +577,26 @@ TEST(test_rotated_quaternion)
     CHECK(fabsf(f.v_e) < 0.5f);
 }
 
+TEST(test_long_predict_gap_is_integrated_not_dropped)
+{
+    /* A blocking SF10 transmit holds the loop ~1.1 s. ekf_predict ignores
+     * any single step over 1 s, and nav_predict had already advanced its
+     * clock - so every such gap was silently lost (at 100 m/s, ~110 m of
+     * travel per transmit). Long gaps are now integrated in sub-steps. */
+    fresh_nav_with_anchor();
+    s_ekf.x[3] = 100.0f;                 /* 100 m/s north */
+    float n0 = s_ekf.x[0];
+    float pnn0 = s_ekf.P[0][0];
+    step(1200);                          /* one blocked transmit */
+    CHECK(fabsf(s_ekf.x[0] - (n0 + 120.0f)) < 0.5f);
+    CHECK(s_ekf.P[0][0] > pnn0);         /* uncertainty grew with it */
+
+    /* An abnormal stall coasts on velocity, bounded to NAV_MAX_GAP_S */
+    float n1 = s_ekf.x[0];
+    step(60000);
+    CHECK(fabsf(s_ekf.x[0] - (n1 + 100.0f * 30.0f)) < 1.0f);
+}
+
 TEST(test_zero_dt_predict_is_noop)
 {
     fresh_nav_with_anchor();
@@ -604,21 +624,18 @@ TEST(test_freshness_flags_age_out)
     NavFused_t f;
     nav_get_fused(&f);
     CHECK(f.gps_fresh == true && f.dead_reckoning == false);
-    CHECK(f.age_ds == 0);
 
     /* 2 s: not fresh, but not dead-reckoning yet (DR at 3 s) */
     now_ms += 2000;
     nav_get_fused(&f);
     CHECK(f.gps_fresh == false);
     CHECK(f.dead_reckoning == false);
-    CHECK(f.age_ds == 20);
     CHECK(f.imu_healthy == false);          /* accel is 2 s stale too */
 
-    /* 30 s: dead reckoning; age saturates at 255 ds */
+    /* 30 s: dead reckoning */
     now_ms += 28000;
     nav_get_fused(&f);
     CHECK(f.dead_reckoning == true);
-    CHECK(f.age_ds == 255);
 }
 
 TEST(test_sensor_degraded_silence_window)
@@ -705,6 +722,7 @@ int main(void)
     run_test_degenerate_quat_coasts();
     run_test_rotated_quaternion();
     run_test_zero_dt_predict_is_noop();
+    run_test_long_predict_gap_is_integrated_not_dropped();
     run_test_freshness_flags_age_out();
     run_test_sensor_degraded_silence_window();
     run_test_sensor_degraded_is_a_level_not_a_latch();

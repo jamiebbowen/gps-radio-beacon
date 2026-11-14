@@ -6,10 +6,14 @@ on:
   pull_request:
 
 jobs:
-  # Host-side unit tests (receiver parsers/math + transmitter EKF/NMEA).
-  # These are pure gcc/g++ builds - fast and hermetic.
+  # Host-side unit tests for every receiver and transmitter module, the
+  # analysis tools and the SD extractor. Pure gcc/g++ builds - fast and
+  # hermetic.
   host-tests:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash   # -eo pipefail: a failing make in a pipe fails the step
     steps:
       - uses: actions/checkout@v5
 
@@ -19,20 +23,31 @@ jobs:
       - name: Run transmitter unit tests
         run: make -C transmitter/tests test
 
+      # Every unit test again under ASan + UBSan + float-cast-overflow.
+      - name: Sanitizer run
+        run: make sanitize
+
       # The SD extractor is the only path flight data takes off the card -
       # its abuse paths (corrupt blocks, no mountable pair) are host-tested.
       - name: Run lfs_extract resilience tests
         run: make -C tools/lfs_extract test
 
-      # Fails if the firmware NAV log format and the host analysis tools
-      # drift apart (parses the checked-in flight_data logs).
-      - name: Log-format regression smoke test
+      # Analysis-tool unit tests, log_summary self-test and the packet-format
+      # drift guard (both packet_format.h copies must agree). The real-log
+      # smoke test only runs where flight_data/ exists; it is gitignored.
+      - name: Tools tests and packet-format drift guard
         run: make tools-test
 
-      - name: Coverage summary
+      # Coverage floors (tools/check_coverage.py): a module that drops below
+      # its line or branch floor fails the job and is named in the log.
+      - name: Receiver coverage gate
         run: |
-          make -C receiver/tests coverage | grep -E "File|Lines" || true
-          make -C transmitter/tests coverage | grep -E "File|Lines" || true
+          gcc --version | head -1
+          make -C receiver/tests coverage | python3 tools/check_coverage.py rx
+
+      - name: Transmitter coverage gate
+        if: success() || failure()   # report both suites' floors
+        run: make -C transmitter/tests coverage | python3 tools/check_coverage.py tx
 
   # Receiver firmware cross-compile (STM32F401, arm-none-eabi-gcc).
   # STM32CubeF4 is deliberately not tracked in this repo (1+ GB); fetch the
@@ -67,12 +82,19 @@ jobs:
             Drivers/STM32F4xx_HAL_Driver \
             Drivers/CMSIS/Device/ST/STM32F4xx
 
-      - name: Build receiver firmware
-        run: make -C receiver/firmware compile
+      - name: Build receiver firmware (warnings are errors)
+        run: make -C receiver/firmware compile WERROR=1
+
+      # No project function may be dead (only inlined-in-file is allowed).
+      - name: Reachability scan
+        run: python3 tools/reachability.py --tx-map /nonexistent
 
   # Transmitter firmware build (ItsyBitsy M4, arduino-cli).
   transmitter-firmware:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
 
@@ -90,5 +112,22 @@ jobs:
           arduino-cli core install adafruit:samd@1.7.17
           arduino-cli lib install RadioLib@7.1.2 "Adafruit BNO08x@1.2.5"
 
+      # All warnings on; any warning in the sketch's own sources fails the
+      # build (core and library warnings are not ours to fix).
       - name: Build transmitter firmware
-        run: make -C transmitter/firmware compile
+        run: |
+          arduino-cli compile --fqbn adafruit:samd:adafruit_itsybitsy_m4 \
+            --warnings all --build-path /tmp/tx-build transmitter/firmware \
+            2>&1 | tee /tmp/tx-build.log
+          if grep -E "transmitter/firmware/[^:]+:[0-9]+:[0-9]+: (warning|error):" /tmp/tx-build.log; then
+            echo "::error::warnings in transmitter sources"
+            exit 1
+          fi
+
+      # The image must end below FLOG_BASE (0x40000): the flight log owns the
+      # flash above it.
+      - name: Flash-size guard
+        run: python3 tools/check_tx_flash.py /tmp/tx-build/firmware.ino.elf
+
+      - name: Reachability scan
+        run: python3 tools/reachability.py --rx-map /nonexistent --tx-map /tmp/tx-build/firmware.ino.map

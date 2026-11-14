@@ -41,15 +41,10 @@ void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps,
   uint32_t parse_successes = 0;
   uint32_t parse_failures = 0;
   uint32_t null_packet = 0;
-  uint32_t insufficient_fields = 0;
-  uint32_t checksum_invalid = 0;
-  uint32_t marker_not_found = 0;
-  uint32_t callsign_too_short = 0;
   
   /* Get parser diagnostics */
   RF_Parser_GetDiagnostics(&parse_attempts, &parse_successes, &parse_failures);
-  RF_Parser_GetDetailedFailures(&null_packet, &insufficient_fields, &checksum_invalid, 
-                                &marker_not_found, &callsign_too_short);
+  RF_Parser_GetDetailedFailures(&null_packet);
   
   /* Get LoRa packet count and IRQ diagnostics */
   uint32_t lora_packets = RF_Receiver_GetLoRaPacketCount();
@@ -73,7 +68,7 @@ void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps,
   }
   
   /* Display parser diagnostics */
-  sprintf(buffer, "P: %lu/%lu M%lu C%lu F%lu", (unsigned long)parse_successes, (unsigned long)parse_attempts, (unsigned long)marker_not_found, (unsigned long)checksum_invalid, (unsigned long)insufficient_fields);
+  sprintf(buffer, "P: %lu/%lu F%lu N%lu", (unsigned long)parse_successes, (unsigned long)parse_attempts, (unsigned long)parse_failures, (unsigned long)null_packet);
   Display_DrawTextRowCol(1, 0, buffer);
   
   /* Determine which GPS data to display */

@@ -61,6 +61,8 @@ static int      fail_after_txns  = -1;     /* -1=off: BUSY jams after N transact
 static uint8_t  dma_fail         = 0;      /* Receive_DMA returns HAL_ERROR */
 static uint8_t  dma_stall        = 0;      /* DMA never completes     */
 static uint8_t  txdone_on_tx     = 1;      /* SET_TX latches TX_DONE  */
+static uint16_t chip_preamble    = 0;      /* last SET_PACKETPARAMS   */
+static uint16_t chip_tx_preamble = 0;      /* preamble in force at TX */
 static uint8_t  irq_during_read  = 0;      /* fire DIO1 mid-read (race test) */
 
 /* Transaction accumulation (CS low .. CS high) */
@@ -104,8 +106,12 @@ static void chip_handle_txn(void)
     switch (txn[0]) {
         case SX1268_CMD_SET_STANDBY:  chip_mode = 2; break;
         case SX1268_CMD_SET_RX:       chip_mode = 5; break;
+        case SX1268_CMD_SET_PACKETPARAMS:
+            if (txn_len >= 3) chip_preamble = (uint16_t)(((uint16_t)txn[1] << 8) | txn[2]);
+            break;
         case SX1268_CMD_SET_TX:
             chip_mode = 6;
+            chip_tx_preamble = chip_preamble;
             if (txdone_on_tx) chip_irq |= SX1268_IRQ_TX_DONE;
             break;
         case SX1268_CMD_SET_CAD:      chip_cad_starts++; break;
@@ -419,8 +425,6 @@ TEST(test_receive_small_packet)
     CHECK(p.crc_error == false);
     CHECK(p.rssi == -95);                      /* raw 190 / -2 */
     CHECK(p.snr == 5);                         /* raw 0x14 / 4 */
-    CHECK(LoRa_GetRSSI() == -95);
-    CHECK(LoRa_GetSNR() == 5);
     CHECK(LoRa_PacketAvailable() == 0);        /* flag consumed */
 }
 
@@ -472,6 +476,31 @@ TEST(test_receive_dma_packet_and_dma_faults)
     HAL_SPI_RxCpltCallback(&other);
     CHECK(lora_spi_dma_busy == 1);
     lora_spi_dma_busy = 0;
+}
+
+TEST(test_crc_error_captures_corrupt_payload)
+{
+    /* The SX126x keeps a CRC-failed payload in its buffer. The "CRC
+     * garbage" forensics row must show THAT frame: the old code returned
+     * before reading it, so the caller logged its previous good packet. */
+    fresh_init();
+    const uint8_t junk[5] = {0xDE, 0xAD, 0xBE, 0xEF, 0x42};
+    memcpy(chip_payload, junk, sizeof(junk));
+    chip_payload_len = sizeof(junk);
+    chip_irq |= SX1268_IRQ_RX_DONE | SX1268_IRQ_CRC_ERROR;
+    exti_pending |= LORA_DIO1_PIN;
+    LORA_DIO1_IRQHandler();
+
+    LoRa_Packet_t p;
+    memset(&p, 0xAA, sizeof(p));      /* stale "previous packet" contents */
+    p.length = 9;
+    p.crc_error = false;
+    CHECK(LoRa_ReadPacket(&p) == LORA_CRC_ERROR);
+    CHECK(p.crc_error == true);
+    CHECK(p.length == 5);
+    CHECK(memcmp(p.data, junk, sizeof(junk)) == 0);
+    CHECK(chip_irq == 0);                      /* IRQs cleared */
+    CHECK(LoRa_PacketAvailable() == 0);        /* flag consumed */
 }
 
 TEST(test_crc_error_and_no_data)
@@ -607,8 +636,6 @@ TEST(test_status_and_accessors)
     CHECK(LoRa_GetDeviceStatus(&status) == LORA_BUSY);
     fake_busy_pin = 0;
 
-    CHECK(LoRa_GetStatus() == fake_status_byte);
-
     int16_t rssi = 0;
     CHECK(LoRa_GetRssiInst(&rssi) == LORA_OK);
     CHECK(rssi == -100);                       /* raw 200 / -2 */
@@ -618,7 +645,7 @@ TEST(test_status_and_accessors)
     chip_irq = 0x0203;
     CHECK(LoRa_GetIRQStatus(&irq) == LORA_OK);
     CHECK(irq == 0x0203);
-    CHECK(LoRa_ClearIRQStatus(0x0203) == LORA_OK);
+    CHECK(LoRa_ClearIRQ(0x0203) == LORA_OK);
     CHECK(chip_irq == 0);
 
     CHECK(LoRa_SetReceiveMode() == LORA_OK);
@@ -643,7 +670,7 @@ TEST(test_uninitialized_guards)
     CHECK(LoRa_StartCad() == LORA_ERROR);
     CHECK(LoRa_CadResult() == LORA_CAD_FAIL);
     CHECK(LoRa_GetRssiInst(&rssi) == LORA_ERROR);
-    CHECK(LoRa_Transmit((const uint8_t *)"x", 1) == LORA_ERROR);
+    CHECK(LoRa_TransmitPreamble((const uint8_t *)"x", 1, LORA_PREAMBLE_LENGTH) == LORA_ERROR);
 
     lora_initialized = saved;
 }
@@ -652,22 +679,37 @@ TEST(test_uninitialized_guards)
 /* Transmit (kept-safe path)                                           */
 /* ------------------------------------------------------------------ */
 
+TEST(test_transmit_long_preamble_for_commands)
+{
+    /* Command uplink: the PING goes out with the long preamble so the
+     * beacon's ~40 ms listen sniff lands inside it; RX gets the normal
+     * preamble setting back afterwards. */
+    fresh_init();
+    const uint8_t cmd[6] = {0x07, 3, 1, 0, 1, 0x55};
+    CHECK(LoRa_TransmitPreamble(cmd, sizeof(cmd), LORA_CMD_PREAMBLE_SYMBOLS) == LORA_OK);
+    CHECK(chip_tx_preamble == LORA_CMD_PREAMBLE_SYMBOLS);
+    CHECK(chip_preamble == LORA_PREAMBLE_LENGTH);    /* restored for RX */
+    CHECK(chip_mode == 5);
+    CHECK(LoRa_TransmitPreamble(cmd, sizeof(cmd), LORA_PREAMBLE_LENGTH) == LORA_OK);
+    CHECK(chip_tx_preamble == LORA_PREAMBLE_LENGTH);  /* normal preamble */
+}
+
 TEST(test_transmit)
 {
     fresh_init();
 
-    CHECK(LoRa_Transmit(NULL, 5) == LORA_ERROR);
-    CHECK(LoRa_Transmit((const uint8_t *)"x", 0) == LORA_ERROR);
+    CHECK(LoRa_TransmitPreamble(NULL, 5, LORA_PREAMBLE_LENGTH) == LORA_ERROR);
+    CHECK(LoRa_TransmitPreamble((const uint8_t *)"x", 0, LORA_PREAMBLE_LENGTH) == LORA_ERROR);
 
     /* Success: TX_DONE latches on SET_TX */
     const uint8_t msg[4] = {1, 2, 3, 4};
-    CHECK(LoRa_Transmit(msg, sizeof(msg)) == LORA_OK);
+    CHECK(LoRa_TransmitPreamble(msg, sizeof(msg), LORA_PREAMBLE_LENGTH) == LORA_OK);
     CHECK(chip_mode == 5);                     /* restored to RX */
     CHECK(rxen_state == GPIO_PIN_SET);         /* RF switch back to RX */
 
     /* TX_DONE never arrives: 1 s timeout, still restored to RX */
     txdone_on_tx = 0;
-    CHECK(LoRa_Transmit(msg, sizeof(msg)) == LORA_TIMEOUT);
+    CHECK(LoRa_TransmitPreamble(msg, sizeof(msg), LORA_PREAMBLE_LENGTH) == LORA_TIMEOUT);
     CHECK(chip_mode == 5);
     txdone_on_tx = 1;
 }
@@ -685,7 +727,7 @@ TEST(test_command_failure_propagation)
     CHECK(LoRa_CadResult() == LORA_CAD_FAIL);
     uint16_t irq = 0;
     CHECK(LoRa_GetIRQStatus(&irq) == LORA_ERROR);   /* ReadCommand busy ret */
-    CHECK(LoRa_Transmit(pkt, sizeof(pkt)) == LORA_ERROR); /* WriteBuffer busy */
+    CHECK(LoRa_TransmitPreamble(pkt, sizeof(pkt), LORA_PREAMBLE_LENGTH) == LORA_ERROR); /* WriteBuffer busy */
     fake_busy_pin = 0;
 
     /* ReadPacket: IRQ read succeeds (RX_DONE), buffer-status read fails */
@@ -737,6 +779,7 @@ int main(void)
     run_test_receive_small_packet();
     run_test_receive_negative_snr();
     run_test_receive_dma_packet_and_dma_faults();
+    run_test_crc_error_captures_corrupt_payload();
     run_test_crc_error_and_no_data();
     run_test_irq_race_keeps_flag();
     run_test_exti_handler_gating();
@@ -745,6 +788,7 @@ int main(void)
     run_test_status_and_accessors();
     run_test_uninitialized_guards();
     run_test_transmit();
+    run_test_transmit_long_preamble_for_commands();
     run_test_command_failure_propagation();
 
     return TEST_SUMMARY();

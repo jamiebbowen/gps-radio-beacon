@@ -96,13 +96,13 @@ int  radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms)
 int  radio_transmit_ack(uint8_t rocket_id, uint8_t cmd_code,
                         uint8_t seq_hi, uint8_t seq_lo, uint8_t echo)
 { (void)rocket_id; (void)cmd_code; (void)seq_hi; (void)seq_lo; (void)echo; return 0; }
-float gps_nmea_to_decimal(const char *n, char d)
+double gps_nmea_to_decimal(const char *n, char d)
 {
     double v = atof(n);
     int deg = (int)(v / 100.0);
     double out = deg + (v - deg*100.0) / 60.0;
     if (d == 'S' || d == 'W') out = -out;
-    return (float)out;
+    return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -111,7 +111,7 @@ float gps_nmea_to_decimal(const char *n, char d)
 
 /* beacon.cpp's V3 heartbeat carries the boot reset cause; firmware.ino owns
  * the global that hosts it on real hardware */
-volatile uint8_t g_boot_rcause = 0;
+uint8_t g_boot_rcause = 0;
 
 #include "../firmware/launch_detect.cpp"
 #include "../firmware/nav.cpp"

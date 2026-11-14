@@ -49,6 +49,10 @@ extern "C" {
 #define LORA_SYNC_WORD          0x12        // Private sync word
 #define LORA_TX_POWER_DBM       22          // 22 dBm (~160mW - SX1268 chip maximum)
 #define LORA_PREAMBLE_LENGTH    8           // Preamble length
+/* Command uplink preamble: the beacon listens for ~40 ms about once a
+ * second, so a command preamble longer than that period always contains
+ * one of its sniffs. 80 symbols x 16.384 ms (SF10 / 62.5 kHz) = 1.31 s. */
+#define LORA_CMD_PREAMBLE_SYMBOLS 80
 
 /* SX1268 Pin Configuration for STM32F4 
  * Using SPI2: PB13=SCK, PB14=MISO, PB15=MOSI
@@ -228,24 +232,6 @@ uint8_t LoRa_PacketAvailable(void);
 uint8_t LoRa_ReadPacket(LoRa_Packet_t *packet);
 
 /**
- * @brief Get RSSI of last received packet
- * @retval RSSI in dBm
- */
-int16_t LoRa_GetRSSI(void);
-
-/**
- * @brief Get SNR of last received packet
- * @retval SNR in dB
- */
-int8_t LoRa_GetSNR(void);
-
-/**
- * @brief Get status of LoRa module
- * @retval Status byte
- */
-uint8_t LoRa_GetStatus(void);
-
-/**
  * @brief Clear IRQ flags
  * @param irq_mask IRQ mask to clear
  * @retval Status code
@@ -258,13 +244,6 @@ uint8_t LoRa_ClearIRQ(uint16_t irq_mask);
  * @retval Status code
  */
 uint8_t LoRa_GetIRQStatus(uint16_t *irq_status);
-
-/**
- * @brief Clear IRQ status
- * @param irq_mask IRQ mask to clear
- * @retval Status code
- */
-uint8_t LoRa_ClearIRQStatus(uint16_t irq_mask);
 
 /**
  * @brief Get device status/mode
@@ -288,7 +267,8 @@ uint8_t LoRa_GetRssiInst(int16_t *rssi_dbm);
  * @param length Length of data
  * @retval Status code
  */
-uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length);
+uint8_t LoRa_TransmitPreamble(const uint8_t *data, uint8_t length,
+                              uint16_t preamble_symbols);
 
 /**
  * @brief Get total IRQ count (DIO1 interrupts fired)

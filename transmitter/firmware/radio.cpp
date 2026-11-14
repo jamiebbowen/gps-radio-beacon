@@ -25,8 +25,8 @@ static const uint8_t MAX_INIT_RETRIES = 3;
 static uint8_t tx_fail_streak = 0;
 #define TX_FAIL_STREAK_LIMIT 8
 
-/* E22-400M33S RF switch control (PCB v2: TXEN on pin 12, RXEN on pin 13,
- * both MCU-driven; DIO2 is NOT used as switch control). Truth table:
+/* E22-400M33S RF switch control (PCB v2: TXEN on A4, RXEN on A5 - see
+ * mpu_config.h - both MCU-driven; DIO2 is NOT used as switch control). Truth table:
  *   RX mode = RXEN 1 / TXEN 0,  TX mode = RXEN 0 / TXEN 1,  idle = both 0.
  * Break-before-make on every transition so the PA output is never routed
  * into the LNA path. Defaults to the RX side up in enable() - same idle
@@ -333,39 +333,61 @@ int radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms) {
         return 0;
     }
 
+    /* Listening needs the radio powered with the RF switch on the LNA side.
+     * Put the caller's power state back afterwards: between pad heartbeats
+     * the radio is normally off, and leaving RXEN high kept the LNA powered
+     * for nothing. */
+    bool was_enabled = radio_enabled;
     if (!radio_enabled) radio_enable();
 
     rf_switch_rx();  // antenna on the LNA side for the listen window
-    int state = radio.startReceive();
-    if (state != RADIOLIB_ERR_NONE) return -state;
-
-    /* Poll the RX_DONE / timeout IRQ flags until the window closes. */
-    uint32_t start = millis();
-    while (millis() - start < timeout_ms) {
-        uint32_t flags = radio.getIrqFlags();
-        if (flags & RADIOLIB_SX126X_IRQ_RX_DONE) {
-            if (flags & RADIOLIB_SX126X_IRQ_CRC_ERR) {  /* corrupt: ignore */
-                radio.standby();
-                return 0;
+    int result = 0;
+    /* PREAMBLE_DETECTED on top of RadioLib's RX defaults: the command
+     * uplink's long preamble is what tells us a frame is coming. */
+    int state = radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF,
+                                   RADIOLIB_IRQ_RX_DEFAULT_FLAGS |
+                                       (1UL << RADIOLIB_IRQ_PREAMBLE_DETECTED),
+                                   RADIOLIB_IRQ_RX_DEFAULT_MASK, 0);
+    if (state != RADIOLIB_ERR_NONE) {
+        result = state;          /* RadioLib error codes are already < 0 */
+    } else {
+        /* Poll the IRQ flags until the window closes. A detected preamble
+         * or header stretches the window once to CMD_RX_EXTEND_MS: the
+         * 40 ms sniff usually wakes up in the middle of the receiver's long
+         * preamble, and standby() there would abort the frame. */
+        uint32_t start = millis();
+        uint32_t window = timeout_ms;
+        bool extended = false;
+        while (millis() - start < window) {
+            uint32_t flags = radio.getIrqFlags();
+            if (flags & RADIOLIB_SX126X_IRQ_RX_DONE) {
+                if (!(flags & RADIOLIB_SX126X_IRQ_CRC_ERR)) { /* corrupt: ignore */
+                    size_t n = radio.getPacketLength();
+                    if (n > max_len) n = max_len;
+                    state = radio.readData(out, n);
+                    result = (state == RADIOLIB_ERR_NONE) ? (int)n : state;
+                }
+                break;
             }
-            size_t n = radio.getPacketLength();
-            if (n > max_len) n = max_len;
-            state = radio.readData(out, n);
-            radio.standby();
-            return (state == RADIOLIB_ERR_NONE) ? (int)n : -state;
+            if (flags & (RADIOLIB_SX126X_IRQ_TIMEOUT | RADIOLIB_SX126X_IRQ_HEADER_ERR)) break;
+            if (!extended && (flags & (RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED |
+                                       RADIOLIB_SX126X_IRQ_HEADER_VALID))) {
+                window = (CMD_RX_EXTEND_MS > timeout_ms) ? CMD_RX_EXTEND_MS : timeout_ms;
+                extended = true;
+            }
+            delay(1);
         }
-        if (flags & RADIOLIB_SX126X_IRQ_TIMEOUT) break;
-        delay(1);
+        radio.standby();
     }
-    radio.standby();
-    return 0;
+    if (!was_enabled) radio_disable();
+    return result;
 }
 
 /** Transmit a 6-byte ACK packet as an answer to a parsed command. */
 int radio_transmit_ack(uint8_t rocket_id, uint8_t cmd_code,
                        uint8_t seq_hi, uint8_t seq_lo, uint8_t echo) {
     uint8_t buf[6];
-    buf[0] = 0x09; /* PACKET_TYPE_ACK */
+    buf[0] = PACKET_TYPE_ACK;
     buf[1] = rocket_id;
     buf[2] = cmd_code;
     buf[3] = seq_hi;

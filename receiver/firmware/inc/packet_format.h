@@ -3,9 +3,6 @@
 
 #include <stdint.h>
 
-// Packet format selection (must match transmitter!)
-#define USE_BINARY_PACKETS  1  // Set to 1 for binary, 0 for ASCII
-
 /* Binary GPS packet structure: V2 = 14 bytes, V1 (legacy, no rocket_id)
  * = 13 bytes. rocket_id lets us drop a foreign beacon on the same channel
  * running this same firmware (see the airframe binding in rf_receiver.c).
@@ -24,8 +21,7 @@ typedef struct __attribute__((packed)) {
 
 // Packet types
 #define PACKET_TYPE_GPS         0x01
-#define PACKET_TYPE_CALLSIGN    0x02  // Future use
-#define PACKET_TYPE_TELEMETRY   0x03  // Future use
+// 0x02, 0x03: retired draft IDs, never sent on the air - do not reuse
 #define PACKET_TYPE_FUSED       0x04  // EKF-fused position + velocity (TX nav module)
 #define PACKET_TYPE_HEARTBEAT   0x05  // No-fix keepalive (see HeartbeatPacket_t)
 #define PACKET_TYPE_IMU         0x06  // Inertial trace during ascent (forensics)
@@ -127,7 +123,6 @@ typedef struct __attribute__((packed)) {
 #define FUSED_FLAG_V3                0x01  /* Bit 0: V3 wire marker (always set
                                               * on the air; distinguishes V3
                                               * from legacy 19-byte V1)      */
-#define FUSED_FLAG_RESERVED_MASK     FUSED_FLAG_V3  /* old name for bit 0    */
 
 /* Fused packet: V3 = 19 bytes (no age_ds: the receiver derives staleness
  * from GPS_FRESH + inter-arrival time; the V2 rocket_id byte had pushed
@@ -166,25 +161,32 @@ typedef struct __attribute__((packed)) {
 } LaunchT0Packet_t;
 #define LAUNCH_T0_PACKET_SIZE   6
 
-/* IMU inertial trace: 16 bytes, interleaved with fused packets during
- * LAUNCH/POST_LAUNCH at ~1 Hz. The missing-narrative parts of a
- * shred-the-airframe failure mode. */
+/* IMU inertial trace: 18 bytes (V2/V3; 20 B legacy V1), interleaved with
+ * fused packets during LAUNCH/POST_LAUNCH at ~1 Hz. The missing-narrative
+ * parts of a shred-the-airframe failure mode.
+ * V3 (bit 15 of ts_ms = IMU_TS_V3_FLAG) fixed the units: V2 firmware sent
+ * accel in cm/s^2 and peak in mm/s^2 under the centi-g / milli-g labels
+ * (9.8x too large; the peak wrapped above ~3.3 g) and gyro in centi-deg/s,
+ * wrapping above 327 deg/s. V3 values saturate instead of wrapping.
+ */
 typedef struct __attribute__((packed)) {
     uint8_t  packet_type;    // PACKET_TYPE_IMU
     uint8_t  rocket_id;
-    uint16_t ts_ms;          // ms mod 1000
-    int16_t  accel_x_cg;     // centi-g, BNO085 linear accel
+    uint16_t ts_ms;          // bits 9..0: ms mod 1000; bit 15: IMU_TS_V3_FLAG
+    int16_t  accel_x_cg;     // centi-g, BNO085 linear accel (V3 units)
     int16_t  accel_y_cg;
     int16_t  accel_z_cg;
-    int16_t  gyro_x_cds;     // centi-deg/s
-    int16_t  gyro_y_cds;
-    int16_t  gyro_z_cds;
+    int16_t  gyro_x_dds;     // deci-deg/s (V3); pre-V3 TX: centi-deg/s
+    int16_t  gyro_y_dds;
+    int16_t  gyro_z_dds;
     int16_t  peak_accel_mg;  // milli-g peak |a| since previous IMU packet
     int16_t  temp_c10;       // V1 only: BNO085 temperature * 10 (never
                              // wired; zero-filled on V2-length packets)
 } ImuTracePacket_t;
 #define IMU_TRACE_PACKET_SIZE    18   /* V2: temp dropped (never wired) */
 #define IMU_TRACE_PACKET_SIZE_V1 20   /* legacy layout with temp_c10    */
+#define IMU_TS_V3_FLAG  0x8000u  /* ts_ms bit 15: V3 units (see above) */
+#define IMU_TS_MS_MASK  0x03FFu  /* ts_ms bits 9..0: ms within second  */
 
 /* FLIGHT_EVENT: 8 bytes; must match the transmitter copy (host tests pin
  * the literals on both sides). One packet type carries the certified
@@ -260,7 +262,27 @@ typedef struct __attribute__((packed)) {
 // Convert decimal degrees to encoded integer
 #define ENCODE_COORD(deg)       ((int32_t)((deg) * GPS_COORD_SCALE))
 
-// Convert encoded integer back to decimal degrees
-#define DECODE_COORD(val)       ((double)(val) / GPS_COORD_SCALE)
+
+/* Compile-time wire-size checks: changing a packet struct without its
+ * *_PACKET_SIZE (or the reverse) fails the build on both MCUs and in the
+ * host tests, instead of corrupting packets on the air. */
+#if defined(__cplusplus)
+  #define PF_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#else
+  #define PF_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#endif
+/* Receive-side structs hold the largest layout still accepted from the
+ * air (legacy IMU V1 with temp_c10, legacy 8-byte HELLO): rf_receiver
+ * copies up to that many bytes into them. */
+PF_STATIC_ASSERT(sizeof(BinaryGPSPacket_t) == GPS_PACKET_SIZE, "BinaryGPSPacket_t size");
+PF_STATIC_ASSERT(sizeof(HeartbeatPacket_t) == HEARTBEAT_PACKET_SIZE, "HeartbeatPacket_t size");
+PF_STATIC_ASSERT(sizeof(FusedPosPacket_t) == FUSED_PACKET_SIZE, "FusedPosPacket_t size");
+PF_STATIC_ASSERT(sizeof(LaunchT0Packet_t) == LAUNCH_T0_PACKET_SIZE, "LaunchT0Packet_t size");
+PF_STATIC_ASSERT(sizeof(ImuTracePacket_t) == IMU_TRACE_PACKET_SIZE_V1, "ImuTracePacket_t size");
+PF_STATIC_ASSERT(sizeof(FlightEventPacket_t) == FLIGHT_EVENT_PACKET_SIZE, "FlightEventPacket_t size");
+PF_STATIC_ASSERT(sizeof(MaximaPacket_t) == MAXIMA_PACKET_SIZE, "MaximaPacket_t size");
+PF_STATIC_ASSERT(sizeof(HelloPacket_t) == HELLO_PACKET_SIZE_V1, "HelloPacket_t size");
+PF_STATIC_ASSERT(sizeof(CmdPacket_t) == CMD_ACK_PACKET_SIZE, "CmdPacket_t size");
+PF_STATIC_ASSERT(sizeof(AckPacket_t) == CMD_ACK_PACKET_SIZE, "AckPacket_t size");
 
 #endif // _PACKET_FORMAT_H_

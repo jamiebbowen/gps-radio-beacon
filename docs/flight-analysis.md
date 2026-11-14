@@ -40,12 +40,14 @@ python3 receiver/tools/analyze_flight.py /path/to/Lxxxxxxx.TXT [OPTIONS]
 
 ## Output sections
 
-The printed summary has six sections:
+The printed summary has six sections, plus an inertial-trace section when
+the log has IMU rows:
 
 ```
 FLIGHT ANALYSIS  (Lxxxxxxx.TXT)
 --- ALTITUDE                        apogee MSL/AGL, final altitude
 --- VELOCITY / ACCEL                peak ascent/descent rate, peak |a| in G
+--- INERTIAL TRACE                  beacon IMU: peak accel, max gyro rate
 --- HORIZONTAL / RECOVERY           max drift, ground track, landing offset
 --- RF LINK                         pre/post-launch cadence, RSSI range
 --- PREDICTED RANGE                 FSPL extrapolation from worst RSSI
@@ -65,6 +67,39 @@ Derivatives are computed by central difference over the packet cadence
 **always underestimates** of the true instantaneous values -- a real Mach
 1 rocket reaches ~340 m/s in under a second, so with 1.7 s sampling the
 averaged peak can be much lower than reality.
+
+### Inertial trace (IMU rows)
+
+The beacon's own accelerometer and gyro, forwarded at flight cadence. Unlike
+the GPS-derived numbers above, the peak column is the hardware peak inside
+each packet window. A row reads:
+
+```
+<ts>,IMU,ts_ms,ax,ay,az,gx,gy,gz,peak,temp_c10,rssi,snr,ImuFmt
+```
+
+Older receivers wrote no `snr` and/or `ImuFmt` column; every width parses.
+The units depend on the beacon firmware that sent the packet:
+
+| ImuFmt | Beacon firmware | accel `ax..az` | gyro `gx..gz` | `peak` |
+|--------|-----------------|----------------|---------------|--------|
+| 3 | V3 (bit 15 of the packet's `ts_ms` set) | centi-g | 0.1 deg/s | milli-g |
+| 2 | pre-V3, 18-byte packet | cm/s^2 | 0.01 deg/s | mm/s^2 |
+| 1 | pre-V3, 20-byte packet | cm/s^2 | 0.01 deg/s | mm/s^2 |
+
+Pre-V3 values were int16 casts that wrapped: a peak above ~3.3 g or a rate
+above ~327 deg/s reads as garbage (often negative). V3 values saturate at
+the int16 limits instead, so a pinned value means "at least this much".
+
+Without an `ImuFmt` column, `analyze_flight.py` takes the format from the
+V3 marker bit in `ts_ms` (older receivers logged it raw, so V3 rows show
+`ts_ms` values of 32768 and up). It reports everything in g and deg/s and
+says how many rows were pre-V3. The first beacon firmware with V3 units is
+commit 87becf3; receivers log the `ImuFmt` column from 41cca4b.
+
+The beacon's on-chip flight log stores the same packet fields. Its DUMP
+output ends each IMU row with a format byte: 3 for V3, 0 for records written
+by earlier firmware (pre-V3 units, as above).
 
 ### Horizontal / recovery
 

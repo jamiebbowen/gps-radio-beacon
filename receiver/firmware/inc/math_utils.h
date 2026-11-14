@@ -42,6 +42,25 @@ float calculate_bearing(float lat1, float lon1, float lat2, float lon2);
  */
 float normalize_angle(float angle);
 
+/** One navigation solution: base fix -> beacon distance and bearing, plus
+ *  the arrow angle relative to the live heading. */
+typedef struct {
+  uint8_t valid;          /* both points non-zero and in range            */
+  uint8_t base_stale;     /* base was a last-known fix, not a live one    */
+  float   distance_km;
+  float   bearing_deg;    /* true bearing base -> target, [0, 360)        */
+  float   relative_deg;   /* bearing minus heading, [0, 360)              */
+} Nav_Solution_t;
+
+/**
+ * @brief Compute a navigation solution. valid stays 0 unless both points
+ *        are non-zero and within lat/lon range; base_stale is passed
+ *        through either way.
+ */
+void Nav_Compute(float base_lat, float base_lon, uint8_t base_live,
+                 float tgt_lat, float tgt_lon, float heading_deg,
+                 Nav_Solution_t *out);
+
 /**
  * @brief Predicate: is a restored last-beacon position implausibly far
  *        from the operator's own local fix? A rocket flight moves the

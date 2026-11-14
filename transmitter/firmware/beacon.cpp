@@ -1,4 +1,5 @@
 #include "include/beacon.h"
+#include "include/fixed_point.h"
 #include "include/config.h"
 #include "include/mpu_config.h"
 #include "include/radio.h"
@@ -13,37 +14,33 @@
 #include <stdlib.h>
 #include <math.h>
 
-// Checksum function removed - LoRa provides built-in CRC validation
-
 /* 255 is the receiver's "unbound" sentinel for the airframe filter; an
  * airframe claiming it would be invisible to that filter. */
 static_assert(ROCKET_ID != 255, "ROCKET_ID 255 is reserved (RX unbound sentinel)");
 
 /**
- * Transmit GPS data via LoRa beacon with proper framing and checksum
- * @param coords Pointer to GPS coordinates structure
- * @param system_time_seconds Current system time in seconds
- * @param transmit_fast If true, transmit GPS data in fast mode
- * @return 1 if transmission was successful, 0 if coordinates were invalid
+ * The fix gate shared by every position sender (the flight-window sender
+ * and the pad audit in firmware.ino): valid, past the "0" pre-fix
+ * placeholder, enough satellites, fix quality >= 1, sane altitude.
+ * @param log_reason nonzero: print why a fix is rejected
+ * @return 1 if the fix may go on the air
  */
-uint8_t beacon_transmit_gps_data(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast) {
-    (void)system_time_seconds; /* kept in the signature for parity with heartbeat/T0 senders */
-    char packet[256];  // LoRa packet buffer (plenty of room)
-    int pos = 0;
-    
-    // Check if we have valid GPS data
+uint8_t beacon_validate_fix(const GPSCoordinates_t *coords, uint8_t log_reason)
+{
+    if (coords == NULL) return 0;
     if (!coords->valid || (coords->lat[0] == '0' && strlen(coords->lat) == 1)) {
-        Serial.print(F("[Beacon] Rejecting GPS - valid="));
-        Serial.print(coords->valid);
-        Serial.print(F(" lat='"));
-        Serial.print(coords->lat);
-        Serial.print(F("' lon='"));
-        Serial.print(coords->lon);
-        Serial.println(F("'"));
+        if (log_reason) {
+            Serial.print(F("[Beacon] Rejecting GPS - valid="));
+            Serial.print(coords->valid);
+            Serial.print(F(" lat='"));
+            Serial.print(coords->lat);
+            Serial.print(F("' lon='"));
+            Serial.print(coords->lon);
+            Serial.println(F("'"));
+        }
         return 0;
     }
-    
-    // Require minimum 4 satellites for reliable fix
+
     /* Minimum satellites: 4 (3D fix) in flight. Once the landing latch is
      * set, a 3-sat 2D fix still carries recovery-grade horizontal
      * coordinates - and a rocket under canopy with 3 sats would otherwise
@@ -53,118 +50,30 @@ uint8_t beacon_transmit_gps_data(const GPSCoordinates_t* coords, uint32_t system
     int sat_count = atoi(coords->satellites);
     int min_sats = launch_detect_has_landed() ? 3 : 4;
     if (sat_count < min_sats) {
-        Serial.print(F("[Beacon] Rejecting GPS - insufficient satellites: "));
-        Serial.println(sat_count);
+        if (log_reason) {
+            Serial.print(F("[Beacon] Rejecting GPS - insufficient satellites: "));
+            Serial.println(sat_count);
+        }
         return 0;
     }
-    
-    // Check GPS fix quality (GGA field 6)
-    // 0=no fix, 1=GPS fix (SPS), 2=DGPS fix, 3=PPS fix, etc.
+
     if (coords->fix_quality < 1) {
-        Serial.print(F("[Beacon] Rejecting GPS - no fix, quality: "));
-        Serial.println(coords->fix_quality);
+        if (log_reason) {
+            Serial.print(F("[Beacon] Rejecting GPS - no fix, quality: "));
+            Serial.println(coords->fix_quality);
+        }
         return 0;
     }
-    
-    // Sanity check altitude (reasonable range: -500m to 50000m)
+
     float altitude = atof(coords->altitude);
     if (!isfinite(altitude) || altitude < -500.0f || altitude > 50000.0f) {
-        Serial.print(F("[Beacon] Rejecting GPS - unreasonable altitude: "));
-        Serial.println(altitude);
+        if (log_reason) {
+            Serial.print(F("[Beacon] Rejecting GPS - unreasonable altitude: "));
+            Serial.println(altitude);
+        }
         return 0;
     }
-    
-    /* Coordinate sanity: atof() parses "nan"/"inf" field text literally,
-     * so a checksum-valid corrupt sentence can carry non-finite or
-     * out-of-range coordinates through the earlier gates. Reject before
-     * the radio is powered rather than put "nan" on the air. */
-    {
-        float lat_d = gps_nmea_to_decimal(coords->lat, coords->lat_dir);
-        float lon_d = gps_nmea_to_decimal(coords->lon, coords->lon_dir);
-        if (!isfinite(lat_d) || !isfinite(lon_d) ||
-            lat_d < -90.0f || lat_d > 90.0f ||
-            lon_d < -180.0f || lon_d > 180.0f) {
-            Serial.println(F("[Beacon] Rejecting GPS - bad coords"));
-            return 0;
-        }
-    }
-    
-    Serial.println(F("[Beacon] GPS data valid, building packet..."));
-    
-    if (!transmit_fast) {
-        // Enable radio
-        radio_enable();
-        delay(10);
-    }
-
-    // Build packet: simple CSV format - LoRa handles framing and CRC
-    // Add latitude with sign
-    if (coords->lat_dir == 'S') {
-        packet[pos++] = '-';
-    }
-    if (strlen(coords->lat) > 0) {
-        for (uint8_t i = 0; coords->lat[i] != '\0'; i++) {
-            packet[pos++] = coords->lat[i];
-        }
-    }
-    
-    packet[pos++] = ',';
-    
-    // Add longitude with sign
-    if (coords->lon_dir == 'W') {
-        packet[pos++] = '-';
-    }
-    if (strlen(coords->lon) > 0) {
-        for (uint8_t i = 0; coords->lon[i] != '\0'; i++) {
-            packet[pos++] = coords->lon[i];
-        }
-    }
-    
-    packet[pos++] = ',';
-    
-    // Add altitude
-    if (strlen(coords->altitude) > 0) {
-        for (uint8_t i = 0; coords->altitude[i] != '\0'; i++) {
-            packet[pos++] = coords->altitude[i];
-        }
-    }
-
-    if (!transmit_fast) {
-        packet[pos++] = ',';
-        
-        // Add satellite count (only in full packets)
-        if (strlen(coords->satellites) > 0) {
-            for (uint8_t i = 0; coords->satellites[i] != '\0'; i++) {
-                packet[pos++] = coords->satellites[i];
-            }
-        }
-    }
-
-#if INCLUDE_CARRIAGE_RETURNS
-    // Add newline (only in testing mode)
-    packet[pos++] = '\r';
-    packet[pos++] = '\n';
-#endif
-    
-    // Null terminate
-    packet[pos] = '\0';
-    
-    // Transmit via LoRa
-    Serial.print("[Beacon] Transmitting GPS packet: ");
-    Serial.println(packet);
-    int result = transmit_string(packet);
-    
-    if (result != 0) {
-        Serial.print(F("[Beacon] ✗ Transmission failed, error code: "));
-        Serial.println(result);
-    }
-    
-    if (!transmit_fast) {
-        delay(1);
-        radio_disable();
-    }
-    
-    return (result == 0) ? 1 : 0;  // RadioLib returns 0 on success
+    return 1;
 }
 
 /**
@@ -176,52 +85,17 @@ uint8_t beacon_transmit_gps_data(const GPSCoordinates_t* coords, uint32_t system
  */
 uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast) {
     (void)system_time_seconds; /* API parity with the ASCII variant; binary packets carry GPS time */
-    // Perform all the same validation checks as ASCII version
-    if (!coords->valid || (coords->lat[0] == '0' && strlen(coords->lat) == 1)) {
-        Serial.print(F("[Beacon] Rejecting GPS - valid="));
-        Serial.print(coords->valid);
-        Serial.print(F(" lat='"));
-        Serial.print(coords->lat);
-        Serial.print(F("' lon='"));
-        Serial.print(coords->lon);
-        Serial.println(F("'"));
-        return 0;
-    }
-    
-    /* Minimum satellites: 4 (3D fix) in flight. Once the landing latch is
-     * set, a 3-sat 2D fix still carries recovery-grade horizontal
-     * coordinates - and a rocket under canopy with 3 sats would otherwise
-     * go position-silent exactly when the crew is walking in (it would
-     * heartbeat instead, with only the stale pre-canopy fix surviving).
-     * The 0x20 flag marks degraded geometry so the log explains itself. */
+    if (!beacon_validate_fix(coords, 1)) return 0;
     int sat_count = atoi(coords->satellites);
-    int min_sats = launch_detect_has_landed() ? 3 : 4;
-    if (sat_count < min_sats) {
-        Serial.print(F("[Beacon] Rejecting GPS - insufficient satellites: "));
-        Serial.println(sat_count);
-        return 0;
-    }
-    
-    if (coords->fix_quality < 1) {
-        Serial.print(F("[Beacon] Rejecting GPS - no fix, quality: "));
-        Serial.println(coords->fix_quality);
-        return 0;
-    }
-    
     float altitude = atof(coords->altitude);
-    if (!isfinite(altitude) || altitude < -500.0f || altitude > 50000.0f) {
-        Serial.print(F("[Beacon] Rejecting GPS - unreasonable altitude: "));
-        Serial.println(altitude);
-        return 0;
-    }
-    
+
     /* Convert + validate BEFORE the radio is powered: atof() parses
      * "nan"/"inf" field text literally, and ENCODE_COORD's float->int32
      * cast of a non-finite value is undefined behavior - a checksum-valid
      * corrupt sentence could otherwise put garbage coordinates on the
      * air. Out-of-range is rejected too: lat +-90, lon +-180. */
-    float lat_decimal = gps_nmea_to_decimal(coords->lat, coords->lat_dir);
-    float lon_decimal = gps_nmea_to_decimal(coords->lon, coords->lon_dir);
+    double lat_decimal = gps_nmea_to_decimal(coords->lat, coords->lat_dir);
+    double lon_decimal = gps_nmea_to_decimal(coords->lon, coords->lon_dir);
     if (!isfinite(lat_decimal) || !isfinite(lon_decimal) ||
         lat_decimal < -90.0f || lat_decimal > 90.0f ||
         lon_decimal < -180.0f || lon_decimal > 180.0f) {
@@ -348,7 +222,7 @@ uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t syste
     /* V3 heartbeat: carries the boot's SAMD51 reset-cause register, so a
      * in-flight brown-out (supply sag) or watchdog hang shows up as an
      * identity in the receiver log instead of hiding in an uptime gap. */
-    extern volatile uint8_t g_boot_rcause;
+    extern uint8_t g_boot_rcause;
     hb.reset_info  = (uint8_t)g_boot_rcause;
     
     if (!transmit_fast) {
@@ -388,8 +262,8 @@ void beacon_poll_commands(uint8_t in_flight)
 {
     if (in_flight) return;   /* flight windows are TX-dense; don't listen */
     if (!radio_is_transmitting()) {
-        uint8_t buf[32];
-        int n = radio_poll_rx(buf, sizeof(buf), 40 /*ms*/);
+        uint8_t buf[32] = {0};
+        int n = radio_poll_rx(buf, sizeof(buf), 40 /*ms*/);   /* <0 = error */
         if (n >= CMD_ACK_PACKET_SIZE && buf[0] == PACKET_TYPE_CMD &&
             buf[1] == (uint8_t)ROCKET_ID) {
             uint8_t echo;
@@ -433,11 +307,11 @@ uint8_t beacon_transmit_launch_t0(uint32_t system_time_seconds, uint8_t transmit
  * Transmit an inertial trace packet. Called at ~1 Hz during the flight
  * window. Feeds from the launch-detect layer's cached linear-accel + gyro.
  * peak/reset kept here so every packet reports peak-since-previous-packet.
- * The same value is handed to the on-chip flight log via
- * beacon_last_imu_peak_mg() right after this call in the main loop.
+ * The encoded packet is kept so the on-chip flight log stores exactly what
+ * went on the air (beacon_last_imu_trace(), right after this call).
  */
-static int16_t s_last_imu_peak_mg = 0;
-int16_t beacon_last_imu_peak_mg(void) { return s_last_imu_peak_mg; }
+static ImuTracePacket_t s_last_imu;
+void beacon_last_imu_trace(ImuTracePacket_t *out) { if (out) *out = s_last_imu; }
 
 uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast) {
     ImuTracePacket_t p;
@@ -445,32 +319,33 @@ uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast) {
     p.packet_type = PACKET_TYPE_IMU;
     p.rocket_id   = (uint8_t)ROCKET_ID;
     /* Millisecond-carrier timestamp (0..999) fused with the SD log's
-     * seconds-level Timestamp column on the receiver side. */
-    p.ts_ms       = (uint16_t)(millis() % 1000UL);
+     * seconds-level Timestamp column on the receiver side; bit 15 tells
+     * the receiver these are V3 units. */
+    p.ts_ms       = (uint16_t)((millis() % 1000UL) | IMU_TS_V3_FLAG);
 
     float ax, ay, az;
     launch_detect_get_accel_xyz(&ax, &ay, &az);
     float gx, gy, gz;
     launch_detect_get_gyro_rads(&gx, &gy, &gz);
 
-    p.accel_x_cg = (int16_t)lroundf(ax * 100.0f);
-    p.accel_y_cg = (int16_t)lroundf(ay * 100.0f);
-    p.accel_z_cg = (int16_t)lroundf(az * 100.0f);
-    /* Gyro from BNO085 calibrated report: radians/second. Convert to
-     * centi-deg/s: rad * 57.2958 * 100 = _deg * 5729.58 - under int16 when
-     * we're below 5.7 rad/s; clamps above (flutter past 327 deg/s stays
-     *  saturated - the story lies in the burst, not the absolute rate). */
-    p.gyro_x_cds = (int16_t)lroundf(gx * 5729.58f);
-    p.gyro_y_cds = (int16_t)lroundf(gy * 5729.58f);
-    p.gyro_z_cds = (int16_t)lroundf(gz * 5729.58f);
+    /* BNO085 linear accel (m/s^2) -> centi-g */
+    p.accel_x_cg = sat_i16(ax / MS2_PER_G * 100.0f);
+    p.accel_y_cg = sat_i16(ay / MS2_PER_G * 100.0f);
+    p.accel_z_cg = sat_i16(az / MS2_PER_G * 100.0f);
+    /* Calibrated gyro (rad/s) -> deci-deg/s. +-3276.7 deg/s covers the
+     * BNO085's +-2000 deg/s range (and the 1000 deg/s tumble alarm);
+     * anything beyond saturates instead of wrapping. */
+    p.gyro_x_dds = sat_i16(gx * DEG_PER_RAD * 10.0f);
+    p.gyro_y_dds = sat_i16(gy * DEG_PER_RAD * 10.0f);
+    p.gyro_z_dds = sat_i16(gz * DEG_PER_RAD * 10.0f);
 
-    /* Peak linear accel since last IMU packet */
-    static float peak_g = 0.0f;
-    float curr_g = launch_detect_get_current_accel();
-    if (curr_g > peak_g) peak_g = curr_g;
-    p.peak_accel_mg = (int16_t)lroundf(peak_g * 1000.0f);
-    s_last_imu_peak_mg = p.peak_accel_mg;
-    peak_g = 0.0f;
+    /* Peak linear accel (m/s^2) since the last IMU packet -> milli-g */
+    static float peak_ms2 = 0.0f;
+    float curr_ms2 = launch_detect_get_current_accel();
+    if (curr_ms2 > peak_ms2) peak_ms2 = curr_ms2;
+    p.peak_accel_mg = sat_i16(peak_ms2 / MS2_PER_G * 1000.0f);
+    peak_ms2 = 0.0f;
+    s_last_imu = p;
 
     if (!transmit_fast) {
         radio_enable();
@@ -496,7 +371,6 @@ static struct {
     uint8_t  left;          /* transmissions remaining (0 = free slot)  */
     uint32_t due_ms;        /* next allowed TX time                     */
 } event_q[FLIGHT_EVENT_Q_DEPTH];
-static uint32_t event_q_dropped = 0;
 
 void beacon_queue_flight_event(uint8_t code, int16_t value, uint8_t repeats)
 {
@@ -509,12 +383,10 @@ void beacon_queue_flight_event(uint8_t code, int16_t value, uint8_t repeats)
             return;
         }
     }
-    event_q_dropped++;
-}
-
-uint32_t beacon_flight_event_dropped(void)
-{
-    return event_q_dropped;
+    /* All slots busy: the edge is lost. Loud on USB so a bench run can
+     * see it; on the air the anomaly re-announce covers level events. */
+    Serial.print(F("[Beacon] Flight event queue full, dropped 0x"));
+    Serial.println(code, HEX);
 }
 
 uint8_t beacon_transmit_flight_event(uint8_t code, int16_t value,
@@ -656,9 +528,6 @@ void beacon_transmit_callsign(uint8_t transmit_fast) {
     Serial.println(callsign_msg);
     transmit_string(callsign_msg);
     
-#if INCLUDE_CARRIAGE_RETURNS
-    transmit_string("\r\n");
-#endif
     
     if (!transmit_fast) {
         delay(1);

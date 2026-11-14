@@ -41,11 +41,6 @@ uint8_t SD_FastSpeedEnabled(void);
 /* Private defines -----------------------------------------------------------*/
 #define SD_CARD_LOG_BUFFER_SIZE     256
 
-#define COMPCAL_FILENAME    "COMPCAL.BIN"
-#define COMPCAL_MAGIC_0     0xB0
-#define COMPCAL_MAGIC_1     0x55
-#define COMPCAL_DATA_LEN    22
-#define COMPCAL_FILE_LEN    25
 
 /* Quaternion-heading convention lock (compass.c). Hardware-shaped, not
  * session-shaped: persisted so later boots reuse the field-verified
@@ -120,7 +115,7 @@ static struct lfs_file_config log_file_cfg = {
     .attr_count = 0,
 };
 
-/* Shared ad-hoc file config for short-lived opens (BEACON.TXT, COMPCAL.BIN,
+/* Shared ad-hoc file config for short-lived opens (BEACON.TXT, QLOCK.BIN,
  * self-test file). Safe because we never open two of these concurrently; the
  * log file has its own dedicated cache above. Under LFS_NO_MALLOC every file
  * open must supply its own cache buffer, so lfs_file_opencfg is the only
@@ -167,7 +162,7 @@ static const char SD_NAV_ROW_FMT[] =
 /* Private function prototypes -----------------------------------------------*/
 static SD_Card_Status SD_Card_WriteLogEntry(const char *entry);
 static void           SD_Card_UpdateInfo(void);
-static SD_Card_Status sd_open_new_log_file(char *filename_out, uint32_t max_len);
+static SD_Card_Status sd_open_new_log_file(void);
 
 /* ========================================================================= */
 /* Init / deinit / presence                                                  */
@@ -237,21 +232,6 @@ SD_Card_Status SD_Card_Init(void)
     return SD_CARD_OK;
 }
 
-SD_Card_Status SD_Card_DeInit(void)
-{
-    if (log_file_open) {
-        lfs_file_close(&lfs, &log_file);
-        log_file_open = 0;
-    }
-    if (lfs_mounted) {
-        lfs_unmount(&lfs);
-        lfs_mounted = 0;
-    }
-    memset(&sd_info, 0, sizeof(sd_info));
-    sd_initialized = 0;
-    return SD_CARD_OK;
-}
-
 bool SD_Card_IsPresent(void)
 {
     GPIO_PinState pin_state = HAL_GPIO_ReadPin(SD_DETECT_GPIO_PORT, SD_DETECT_PIN);
@@ -301,7 +281,7 @@ static void SD_Card_UpdateInfo(void)
  * LittleFS has no 8.3 restriction, but we keep the old naming scheme so
  * existing post-flight tooling still works.
  */
-static SD_Card_Status sd_open_new_log_file(char *filename_out, uint32_t max_len)
+static SD_Card_Status sd_open_new_log_file(void)
 {
     if (!sd_initialized || !lfs_mounted) return SD_CARD_ERROR;
 
@@ -354,7 +334,11 @@ static SD_Card_Status sd_open_new_log_file(char *filename_out, uint32_t max_len)
     }
 
     /* Sync so the header + file existence is durable before any data. */
-    lfs_file_sync(&lfs, &log_file);
+    if (lfs_file_sync(&lfs, &log_file) < 0) {
+        lfs_file_close(&lfs, &log_file);
+        log_file_open = 0;
+        return SD_CARD_ERROR;
+    }
 
     log_file_open = 1;
     strncpy(sd_info.current_log_file, filename, SD_CARD_MAX_FILENAME - 1);
@@ -362,22 +346,7 @@ static SD_Card_Status sd_open_new_log_file(char *filename_out, uint32_t max_len)
     sd_info.files_logged++;
     sd_info.bytes_written += (uint32_t)written;
 
-    if (filename_out && max_len) {
-        strncpy(filename_out, filename, max_len - 1);
-        filename_out[max_len - 1] = '\0';
-    }
     return SD_CARD_OK;
-}
-
-SD_Card_Status SD_Card_CreateLogFile(char *filename, uint32_t max_len)
-{
-    if (filename == NULL || max_len == 0) return SD_CARD_ERROR;
-    if (log_file_open) {
-        strncpy(filename, sd_info.current_log_file, max_len - 1);
-        filename[max_len - 1] = '\0';
-        return SD_CARD_OK;
-    }
-    return sd_open_new_log_file(filename, max_len);
 }
 
 /* ========================================================================= */
@@ -440,6 +409,23 @@ static uint8_t sd_try_log_recovery(void)
  * electrically safe, and next boot re-runs the ladder fresh anyway. */
 static uint8_t  sd_io_err_streak = 0;
 
+/* Internal diagnostic rows (bus step up/down) go through their own local
+ * buffer: the caller of sd_note_write_err may still hold the entry it is
+ * about to retry in log_buffer, and formatting the diagnostic there
+ * clobbered that entry (the retry then wrote the diagnostic with the
+ * original row's length - stale bytes and a NUL - and the row was lost). */
+static void sd_append_internal(const char *line)
+{
+    if (!log_file_open) return;
+    size_t len = strlen(line);
+    lfs_ssize_t w = lfs_file_write(&lfs, &log_file, line, len);
+    if (w >= 0 && (size_t)w == len) {
+        sd_info.bytes_written += (uint32_t)w;
+        sd_dirty = 1;
+        sd_dirty_rows++;
+    }
+}
+
 static void sd_note_write_ok(void)
 {
     sd_io_err_streak = 0;
@@ -454,11 +440,12 @@ static void sd_note_write_ok(void)
             sd_last_stepdown_ms = now;   /* any ladder change = new quiet window */
             if (after != before && log_file_open) {
                 char ts[16];
+                char msg[96];
                 SD_Card_GetTimestamp(ts, sizeof(ts));
-                snprintf(log_buffer, sizeof(log_buffer),
+                snprintf(msg, sizeof(msg),
                          "%s,EVENT,SD bus stepped up to /%u after %u clean writes\n",
                          ts, (unsigned)after, (unsigned)SD_IO_OK_STEPUP_STREAK);
-                lfs_file_write(&lfs, &log_file, log_buffer, strlen(log_buffer));
+                sd_append_internal(msg);
             }
         }
     }
@@ -472,11 +459,12 @@ static void sd_note_write_err(void)
         uint8_t div = SD_StepSpeedDown();
         sd_last_stepdown_ms = HAL_GetTick();
         char ts[16];
+        char msg[96];
         SD_Card_GetTimestamp(ts, sizeof(ts));
-        snprintf(log_buffer, sizeof(log_buffer),
+        snprintf(msg, sizeof(msg),
                  "%s,ERROR,SD bus stepped down to /%u after %u IO errors\n",
                  ts, (unsigned)div, (unsigned)SD_IO_ERR_STEPDOWN_STREAK);
-        if (log_file_open) lfs_file_write(&lfs, &log_file, log_buffer, strlen(log_buffer));
+        sd_append_internal(msg);
     }
 }
 
@@ -545,39 +533,6 @@ void SD_Card_GetTimestamp(char *timestamp_str, uint32_t max_len)
              (unsigned long)(tick / 1000), (unsigned long)(tick % 1000));
 }
 
-SD_Card_Status SD_Card_LogGPS(GPS_Data *gps_data, Log_Entry_Type log_type)
-{
-    if (gps_data == NULL || !sd_initialized) return SD_CARD_ERROR;
-    char ts[32];
-    SD_Card_GetTimestamp(ts, sizeof(ts));
-    const char *type_str = (log_type == LOG_TYPE_GPS_LOCAL) ? "GPS_LOCAL" : "GPS_REMOTE";
-    snprintf(log_buffer, sizeof(log_buffer),
-             "%s,%s,%.6f,%.6f,%.1f,%d,%d,%.1f\n",
-             ts, type_str,
-             gps_data->latitude, gps_data->longitude, gps_data->altitude,
-             gps_data->fix, gps_data->satellites, gps_data->speed);
-    return SD_Card_WriteLogEntry(log_buffer);
-}
-
-SD_Card_Status SD_Card_LogRFPacket(const char *packet_data, uint32_t packet_length, int16_t rssi)
-{
-    (void)packet_length;
-    if (packet_data == NULL || !sd_initialized) return SD_CARD_ERROR;
-    char ts[32];
-    SD_Card_GetTimestamp(ts, sizeof(ts));
-    snprintf(log_buffer, sizeof(log_buffer), "%s,RF_PACKET,%d,%s\n", ts, rssi, packet_data);
-    return SD_Card_WriteLogEntry(log_buffer);
-}
-
-SD_Card_Status SD_Card_LogCompass(float heading, int16_t x, int16_t y, int16_t z)
-{
-    if (!sd_initialized) return SD_CARD_ERROR;
-    char ts[32];
-    SD_Card_GetTimestamp(ts, sizeof(ts));
-    snprintf(log_buffer, sizeof(log_buffer), "%s,COMPASS,%.1f,%d,%d,%d\n", ts, heading, x, y, z);
-    return SD_Card_WriteLogEntry(log_buffer);
-}
-
 /* Syncs are deferred (SD_Card_ServiceSync): the 2026-09-11 bench cards
  * showed the per-row sync picking up ~2 s LittleFS metadata-compaction
  * bursts mid-packet-flow. Committing at an idle window instead bounds the
@@ -635,10 +590,21 @@ void SD_Card_ServiceSync(uint8_t rf_idle)
         sd_dirty_rows = 0;
         sd_sync_count++;
         uint32_t wstart = HAL_GetTick();
-        lfs_file_sync(&lfs, &log_file);
+        int serr = lfs_file_sync(&lfs, &log_file);
         uint32_t wd = HAL_GetTick() - wstart;
         if (wd > sd_max_write_ms) sd_max_write_ms = wd;
-        if (wd > 500u) sd_note_big_sync(wd);
+        if (serr < 0) {
+            /* The commit failed: the rows it carried are not on the card.
+             * Count it like a write error (feeds the bus-speed reflex),
+             * keep the session dirty, and re-establish the handle now
+             * rather than writing on into a poisoned one. */
+            sd_info.write_errors++;
+            sd_note_write_err();
+            sd_dirty = 1;
+            (void)sd_try_log_recovery();
+        } else if (wd > 500u) {
+            sd_note_big_sync(wd);
+        }
     }
 }
 
@@ -683,8 +649,8 @@ SD_Card_Status SD_Card_LogBase(const GPS_Data *base_gps)
  * flight cadence, so this hits the SD log unconditionally once we've heard
  * the beacon (same lazy-file via the ensure hook around IMU packets).
  */
-SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, int16_t rssi,
-                                   int8_t snr)
+SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, uint8_t fmt,
+                                   int16_t rssi, int8_t snr)
 {
     if (!sd_initialized || imu == NULL) return SD_CARD_ERROR;
     if (!log_file_open) return SD_CARD_ERROR;
@@ -692,21 +658,13 @@ SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, int16_t rssi,
     char ts[32];
     SD_Card_GetTimestamp(ts, sizeof(ts));
     snprintf(log_buffer, sizeof(log_buffer),
-             "%s,IMU,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
-             ts, (unsigned)imu->ts_ms,
+             "%s,IMU,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%u\n",
+             ts, (unsigned)(imu->ts_ms & IMU_TS_MS_MASK),
              (int)imu->accel_x_cg, (int)imu->accel_y_cg, (int)imu->accel_z_cg,
-             (int)imu->gyro_x_cds, (int)imu->gyro_y_cds, (int)imu->gyro_z_cds,
-             (int)imu->peak_accel_mg, (int)imu->temp_c10, (int)rssi, (int)snr);
+             (int)imu->gyro_x_dds, (int)imu->gyro_y_dds, (int)imu->gyro_z_dds,
+             (int)imu->peak_accel_mg, (int)imu->temp_c10, (int)rssi, (int)snr,
+             (unsigned)fmt);   /* ImuFmt: units of the columns before it */
     return SD_Card_WriteLogEntry(log_buffer);
-}
-
-SD_Card_Status SD_Card_Flush(void)
-{
-    if (!sd_initialized) return SD_CARD_ERROR;
-    if (log_file_open) lfs_file_sync(&lfs, &log_file);
-    sd_dirty = 0;
-    sd_dirty_rows = 0;
-    return SD_CARD_OK;
 }
 
 /**
@@ -729,7 +687,7 @@ SD_Card_Status SD_Card_EnsureLogFile(void)
         return sd_try_log_recovery() ? SD_CARD_OK : SD_CARD_ERROR;
     }
     if (!lfs_mounted) return SD_CARD_ERROR;
-    return sd_open_new_log_file(NULL, 0);
+    return sd_open_new_log_file();
 }
 
 /* ========================================================================= */
@@ -749,7 +707,7 @@ SD_Card_Status SD_Card_LogNavigation(GPS_Data *beacon_gps, GPS_Data *base_gps,
          * file when there is nothing to resume or the recovery was
          * rate-limited but the card is healthy (log continuity wins). */
         if (sd_info.current_log_file[0] == '\0' || !sd_try_log_recovery()) {
-            if (sd_open_new_log_file(NULL, 0) != SD_CARD_OK) return SD_CARD_ERROR;
+            if (sd_open_new_log_file() != SD_CARD_OK) return SD_CARD_ERROR;
         }
     }
 
@@ -899,50 +857,6 @@ SD_Card_Status SD_Card_LoadLastBeacon(float *lat, float *lon, float *alt)
 /* Compass calibration persistence                                           */
 /* ========================================================================= */
 
-SD_Card_Status SD_Card_SaveCompassCal(const uint8_t *data, uint8_t len)
-{
-    if (!data || len < COMPCAL_DATA_LEN) return SD_CARD_ERROR;
-    if (!sd_initialized || !lfs_mounted) return SD_CARD_ERROR;
-
-    uint8_t buf[COMPCAL_FILE_LEN];
-    buf[0] = COMPCAL_MAGIC_0;
-    buf[1] = COMPCAL_MAGIC_1;
-    memcpy(&buf[2], data, COMPCAL_DATA_LEN);
-    uint8_t csum = 0;
-    for (uint8_t i = 0; i < COMPCAL_DATA_LEN; i++) csum ^= data[i];
-    buf[COMPCAL_FILE_LEN - 1] = csum;
-
-    lfs_file_t f;
-    int err = LFS_OPEN(&lfs, &f, COMPCAL_FILENAME,
-                       LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC);
-    if (err) return SD_CARD_ERROR;
-
-    lfs_ssize_t w = lfs_file_write(&lfs, &f, buf, COMPCAL_FILE_LEN);
-    int close_err = lfs_file_close(&lfs, &f);
-    return (w == COMPCAL_FILE_LEN && close_err == 0) ? SD_CARD_OK : SD_CARD_ERROR;
-}
-
-SD_Card_Status SD_Card_LoadCompassCal(uint8_t *data, uint8_t len)
-{
-    if (!data || len < COMPCAL_DATA_LEN) return SD_CARD_ERROR;
-    if (!sd_initialized || !lfs_mounted) return SD_CARD_ERROR;
-
-    lfs_file_t f;
-    int err = LFS_OPEN(&lfs, &f, COMPCAL_FILENAME, LFS_O_RDONLY);
-    if (err) return SD_CARD_ERROR;
-
-    uint8_t buf[COMPCAL_FILE_LEN];
-    lfs_ssize_t r = lfs_file_read(&lfs, &f, buf, COMPCAL_FILE_LEN);
-    lfs_file_close(&lfs, &f);
-    if (r != COMPCAL_FILE_LEN) return SD_CARD_ERROR;
-    if (buf[0] != COMPCAL_MAGIC_0 || buf[1] != COMPCAL_MAGIC_1) return SD_CARD_ERROR;
-    uint8_t csum = 0;
-    for (uint8_t i = 0; i < COMPCAL_DATA_LEN; i++) csum ^= buf[2 + i];
-    if (csum != buf[COMPCAL_FILE_LEN - 1]) return SD_CARD_ERROR;
-    memcpy(data, &buf[2], COMPCAL_DATA_LEN);
-    return SD_CARD_OK;
-}
-
 SD_Card_Status SD_Card_SaveQuatLock(uint8_t conv)
 {
     if (conv < 1 || conv > 8) return SD_CARD_ERROR;
@@ -1014,26 +928,6 @@ SD_Card_Status SD_Card_LoadDeclination(float *deg)
 /* ========================================================================= */
 /* Format (destroys all data)                                                */
 /* ========================================================================= */
-
-SD_Card_Status SD_Card_Format(void)
-{
-    if (!sd_info.is_present) return SD_CARD_NOT_PRESENT;
-
-    if (log_file_open) { lfs_file_close(&lfs, &log_file); log_file_open = 0; }
-    if (lfs_mounted)   { lfs_unmount(&lfs); lfs_mounted = 0; }
-
-    if (lfs_format(&lfs, &lfs_sd_cfg) != 0) return SD_CARD_ERROR;
-    if (lfs_mount(&lfs, &lfs_sd_cfg) != 0)  return SD_CARD_ERROR;
-
-    lfs_mounted = 1;
-    sd_info.is_mounted = 1;
-    sd_info.files_logged  = 0;
-    sd_info.bytes_written = 0;
-    sd_info.write_errors  = 0;
-    memset(sd_info.current_log_file, 0, sizeof(sd_info.current_log_file));
-    SD_Card_UpdateInfo();
-    return SD_CARD_OK;
-}
 
 /* ========================================================================= */
 /* Self-test (write, sync, close, reopen, read, verify, delete)              */

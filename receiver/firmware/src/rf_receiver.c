@@ -61,7 +61,6 @@ static SPI_HandleTypeDef hspi_lora;
  * future TX paths don't need to re-plumb __HAL_LINKDMA. */
 static DMA_HandleTypeDef hdma_spi2_tx;
 static DMA_HandleTypeDef hdma_spi2_rx;
-static uint32_t rf_bytes_received = 0;
 static uint32_t rf_lora_packets_received = 0;  // Total LoRa packets received
 static uint32_t rf_crc_errors = 0;  // Packets heard but rejected by CRC (heard-and-corrupt vs never-heard)
 static uint32_t rf_irq_checks = 0;  // How many times we've checked IRQ status
@@ -69,7 +68,6 @@ static uint16_t rf_last_irq_status = 0;  // Last IRQ status we read
 static uint8_t rf_last_device_mode = 0;  // Last device operating mode
 static uint8_t rf_spi_test_result = 0xFF;  // SPI communication test (0=fail, 1=pass, 0xFF=not tested)
 static uint8_t rf_last_busy_state = 0;  // Last BUSY pin state
-static uint8_t rf_header_matches = 0;
 static uint32_t rf_wedges_recovered = 0;  // mid-session RX-loss recoveries
 static uint32_t wedge_deaf_start_ms = 0;    /* not-RX window opened at     */
 static uint32_t wedge_last_deaf_ms = 0;     /* last completed deaf stretch */
@@ -81,7 +79,6 @@ static uint8_t  crc_dump_len = 0;           /* bytes captured (<= 8)       */
 static uint8_t  crc_dump_total_len = 0;     /* on-air length of that frame */
 static uint8_t  crc_dump_pending = 0;       /* awaits the main-loop row    */
 static volatile uint8_t rf_packet_ready = 0;
-static uint8_t rf_last_bytes[4] = {0};
 static char rf_ascii_buffer[RF_ASCII_BUFFER_SIZE];
 static LoRa_Packet_t last_packet;
 static int16_t last_rssi = 0;
@@ -136,13 +133,20 @@ static uint32_t scan_cad_deadline = 0;   /* per-state timeout */
 static uint8_t scan_cad_strikes = 0;     /* consecutive timed-out CADs */
 
 /* Last heartbeat received (no-fix keepalive from the beacon) */
-static HeartbeatPacket_t last_heartbeat;
+static HeartbeatPacket_t last_heartbeat;      /* newest heard, any rocket (log) */
 static uint8_t heartbeat_pending = 0;
-static uint32_t last_heartbeat_time = 0;   /* 0 = never heard one */
+static RF_HbInfo_t heartbeat_info;            /* context of the pending one     */
+static HeartbeatPacket_t own_heartbeat;       /* newest from OUR beacon (pages) */
+static uint32_t own_heartbeat_time = 0;       /* 0 = never heard one            */
+/* TX-reset detector, our beacon only: a new binding or channel restarts it */
+static uint8_t  hb_track_init = 0;
+static uint16_t hb_prev_uptime = 0;
+static uint8_t  hb_prev_reset_info = 0;
 
 /* Flight-window forensics: inertial trace + certified launch T0 */
 static ImuTracePacket_t last_imu_trace;
 static uint8_t imu_pending = 0;
+static uint8_t last_imu_fmt = 0;    /* 1 = V1, 2 = pre-V3 units, 3 = V3 */
 static uint32_t last_imu_time = 0;
 static LaunchT0Packet_t last_launch_t0;
 static uint8_t launch_t0_pending = 0;
@@ -161,12 +165,16 @@ static uint8_t hello_pending = 0;
  * Set for the rest of the power-on session; only an operator action or a
  * reboot clears it. Counted suppressions keep the policy visible in logs. */
 static uint8_t  flight_contact_latch = 0;
+/* The bound beacon has reported landing (LANDED flag or event): it listens
+ * for commands again, so the uplink is no longer suppressed. */
+static uint8_t  beacon_landed_seen = 0;
 static uint32_t rescan_suppression_count = 0;
 
 /* Two-way answer channel (TX -> RX) */
 static AckPacket_t last_ack;
 static uint8_t ack_pending = 0;
-static uint32_t last_ack_time = 0;
+static int16_t ack_rssi = 0;     /* signal of the ACK itself */
+static int8_t  ack_snr = 0;
 
 /* Bench-firmware detector. A beacon flashed with TESTING_MODE=1 sounds
  * identical to production BUT IDs every 30 s instead of every 5 min (and
@@ -257,7 +265,7 @@ uint8_t RF_Receiver_Init(void)
   }
   
   /* Check BUSY pin */
-  rf_last_busy_state = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0) == GPIO_PIN_SET) ? 1 : 0;
+  rf_last_busy_state = (HAL_GPIO_ReadPin(LORA_BUSY_PORT, LORA_BUSY_PIN) == GPIO_PIN_SET) ? 1 : 0;
   
   return RF_OK;
 }
@@ -291,6 +299,9 @@ static uint8_t RF_RocketFilter(uint8_t has_id, uint8_t id)
     }
     if (bound_rocket_id == RF_ROCKET_UNBOUND) {
         bound_rocket_id = id;
+        /* A new airframe: its heartbeats owe nothing to the last one's */
+        hb_track_init = 0;
+        own_heartbeat_time = 0;
     }
     if (bound_rocket_id == id) {
         last_identified_ms = HAL_GetTick();
@@ -341,7 +352,7 @@ uint8_t RF_Receiver_DataAvailable(void)
     }
     
     /* Check BUSY pin state */
-    rf_last_busy_state = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0) == GPIO_PIN_SET) ? 1 : 0;
+    rf_last_busy_state = (HAL_GPIO_ReadPin(LORA_BUSY_PORT, LORA_BUSY_PIN) == GPIO_PIN_SET) ? 1 : 0;
     
     /* Get device status to verify mode */
     uint8_t device_status = 0;
@@ -470,23 +481,10 @@ uint8_t RF_Receiver_DataAvailable(void)
     } else if (rd == LORA_OK) {
       rf_lora_packets_received++;  // Count every LoRa packet received
       last_any_packet_ms = now_ms;
-      rf_bytes_received += last_packet.length;
       last_rssi = last_packet.rssi;
       last_snr = last_packet.snr;
       
-      /* Update last-bytes diagnostics with the trailing bytes of the packet.
-       * Guard against packets shorter than 4 bytes: indexing
-       * data[length - 4 + i] with length < 4 read out of bounds. */
-      {
-        uint16_t tail = (last_packet.length >= 4) ? 4 : last_packet.length;
-        uint16_t start = last_packet.length - tail;
-        for (uint16_t i = 0; i < tail; i++) {
-          rf_last_bytes[i] = last_packet.data[start + i];
-        }
-      }
-      
       /* Parse packet based on format */
-#if USE_BINARY_PACKETS
       /* Binary packet format - dispatch by type + length. Both the legacy
        * (V1, no rocket_id) and current (V2) layouts are accepted; V2
        * packets pass through the airframe filter first so a foreign beacon
@@ -499,12 +497,15 @@ uint8_t RF_Receiver_DataAvailable(void)
                             last_packet.data[13]) &&
             RF_Parser_ParseBinaryPacket(last_packet.data, last_packet.length) == RF_PARSER_OK) {
           rf_packet_ready = 1;
-          rf_header_matches++;
           last_packet_time = HAL_GetTick();
           /* Launch evidence from OUR bound beacon: latch against scanning */
           if (last_packet.length == GPS_PACKET_SIZE &&
               (last_packet.data[12] & FLAG_LAUNCH_DETECTED)) {
             flight_contact_latch = 1;
+          }
+          if (last_packet.length == GPS_PACKET_SIZE &&
+              (last_packet.data[12] & FLAG_LANDED)) {
+            beacon_landed_seen = 1;
           }
         }
       } else if ((last_packet.length == FUSED_PACKET_SIZE
@@ -522,7 +523,6 @@ uint8_t RF_Receiver_DataAvailable(void)
         if (RF_RocketFilter(v_has_id, v_id) &&
             RF_Parser_ParseFusedPacket(last_packet.data, last_packet.length) == RF_PARSER_OK) {
           rf_packet_ready = 1;
-          rf_header_matches++;
           last_packet_time = HAL_GetTick();
           /* Launch evidence in the flags byte - index is version-
            * dependent: V3 flags at [17] (id at [18]), V1/V2 flags at
@@ -532,6 +532,9 @@ uint8_t RF_Receiver_DataAvailable(void)
                                  (last_packet.data[17] & FUSED_FLAG_V3)) ? 17 : 18;
             if (last_packet.data[flags_idx] & FUSED_FLAG_LAUNCH_DETECTED) {
               flight_contact_latch = 1;
+            }
+            if (last_packet.data[flags_idx] & FUSED_FLAG_LANDED) {
+              beacon_landed_seen = 1;
             }
           }
         }
@@ -544,6 +547,8 @@ uint8_t RF_Receiver_DataAvailable(void)
          * carries a trailing temp_c10; V2 (18 B) leaves it zero-filled. */
         memset(&last_imu_trace, 0, sizeof(last_imu_trace));
         memcpy(&last_imu_trace, last_packet.data, last_packet.length);
+        last_imu_fmt = (last_packet.length == IMU_TRACE_PACKET_SIZE_V1) ? 1 :
+                       ((last_imu_trace.ts_ms & IMU_TS_V3_FLAG) ? 3 : 2);
         if (RF_RocketFilter(1, last_imu_trace.rocket_id)) {
           imu_pending = 1;
           last_imu_time = HAL_GetTick();
@@ -570,6 +575,7 @@ uint8_t RF_Receiver_DataAvailable(void)
           flight_event_pending = 1;
           last_packet_time = HAL_GetTick();
           flight_contact_latch = 1;   /* flight events only exist in flight */
+          if (last_flight_event.code == FLIGHT_EVENT_LANDED) beacon_landed_seen = 1;
         }
         /* V2 only: the 12-byte V1 layout (u16 gyro) never flew, and its
          * low gyro byte would decode nonsense under the u8 x16 scheme. */
@@ -602,7 +608,8 @@ uint8_t RF_Receiver_DataAvailable(void)
         /* A TX ACK is only worth hearing if it's addressed to OUR beacon */
         if (RF_RocketFilter(1, last_ack.rocket_id)) {
           ack_pending = 1;
-          last_ack_time = HAL_GetTick();
+          ack_rssi = last_packet.rssi;
+          ack_snr = last_packet.snr;
           last_packet_time = HAL_GetTick();
         }
       } else if ((last_packet.length == HEARTBEAT_PACKET_SIZE
@@ -617,12 +624,30 @@ uint8_t RF_Receiver_DataAvailable(void)
          * gps_health byte; zero-fill decodes it as HB_GPS_UNKNOWN.
          * Foreign heartbeats are still recorded (they are useful "someone
          * else is on this channel" intel) - they just can't steal the
-         * binding and never touch position state. */
+         * binding, never touch position state, and never feed the pages'
+         * heartbeat rows or the TX-reset detector. */
         memset(&last_heartbeat, 0, sizeof(last_heartbeat));
         memcpy(&last_heartbeat, last_packet.data, last_packet.length);
-        (void)RF_RocketFilter(1, last_heartbeat.rocket_id);
+        uint8_t ours = RF_RocketFilter(1, last_heartbeat.rocket_id);
+        memset(&heartbeat_info, 0, sizeof(heartbeat_info));
+        heartbeat_info.foreign = ours ? 0 : 1;
+        if (ours) {
+          own_heartbeat = last_heartbeat;
+          own_heartbeat_time = HAL_GetTick();
+          if (hb_track_init) {
+            if (last_heartbeat.uptime_s < hb_prev_uptime) {
+              heartbeat_info.reset_event = RF_HB_UPTIME_REGRESSED;
+            } else if (last_heartbeat.reset_info != hb_prev_reset_info) {
+              heartbeat_info.reset_event = RF_HB_CAUSE_CHANGED;
+            }
+          }
+          heartbeat_info.prev_uptime = hb_prev_uptime;
+          heartbeat_info.prev_reset_info = hb_prev_reset_info;
+          hb_prev_uptime = last_heartbeat.uptime_s;
+          hb_prev_reset_info = last_heartbeat.reset_info;
+          hb_track_init = 1;
+        }
         heartbeat_pending = 1;
-        last_heartbeat_time = HAL_GetTick();
       } else {
         /* The callsign ("CALLSIGN-id CHn") has no type byte and a variable
          * length, so it matches none of the typed branches above. Route
@@ -664,20 +689,6 @@ uint8_t RF_Receiver_DataAvailable(void)
           }
         }
       }
-#else
-      /* ASCII packet format */
-      if (last_packet.length < RF_ASCII_BUFFER_SIZE) {
-        memcpy(rf_ascii_buffer, last_packet.data, last_packet.length);
-        rf_ascii_buffer[last_packet.length] = '\0';
-        
-        /* Parse ASCII packet */
-        if (RF_Parser_ParseAsciiPacket(rf_ascii_buffer) == RF_PARSER_OK) {
-          rf_packet_ready = 1;
-          rf_header_matches++;
-          last_packet_time = HAL_GetTick();
-        }
-      }
-#endif
     }
   }
   
@@ -793,59 +804,6 @@ static uint8_t RF_SPI_Init(void)
 
 
 /**
- * @brief Get diagnostic information about RF receiver
- * @param bytes_received Pointer to store total bytes received
- * @param header_matches Pointer to store header match count
- * @param last_bytes Pointer to store last received bytes (4 bytes)
- * @retval None
- */
-void RF_Receiver_GetDiagnostics(uint32_t *bytes_received, uint8_t *header_matches, uint8_t *last_bytes)
-{
-  if (bytes_received) {
-    *bytes_received = rf_bytes_received;
-  }
-  
-  if (header_matches) {
-    *header_matches = rf_header_matches;
-  }
-  
-  if (last_bytes) {
-    /* Copy last bytes */
-    for (uint8_t i = 0; i < 4; i++) {
-      last_bytes[i] = rf_last_bytes[i];
-    }
-  }
-}
-
-/**
- * @brief Get extended diagnostic information about RF receiver
- * @param checksum_errors Pointer to store checksum error count
- * @retval None
- */
-void RF_Receiver_GetExtendedDiagnostics(uint16_t *checksum_errors)
-{
-  if (checksum_errors) {
-    /* Get checksum errors from the parser */
-    RF_Parser_GetChecksumErrors(checksum_errors);
-  }
-}
-
-
-
-/**
- * @brief Get the last valid ASCII packet
- * @param buffer Buffer to copy the ASCII data into
- * @param size Size of the buffer
- */
-void RF_Receiver_GetAsciiBuffer(char *buffer, uint16_t size) {
-  if (buffer && size > 0) {
-    /* Forward the call to the parser module */
-    RF_Parser_GetLastValidPacket(buffer, size);
-    buffer[size - 1] = '\0'; /* Ensure null termination */
-  }
-}
-
-/**
  * @brief Get the last valid ASCII packet and return its length
  * @param buffer Buffer to copy the ASCII data into
  * @param max_len Maximum length of the buffer
@@ -895,27 +853,6 @@ void RF_Receiver_GetIRQDiagnostics(uint32_t *irq_checks, uint16_t *last_irq, uin
 }
 
 /**
- * @brief Set the UART baud rate fudge factor (deprecated for LoRa)
- * @param fudge_factor Fudge factor value (in thousandths, e.g. 1000 = 1.0)
- * @retval None
- */
-void RF_Receiver_SetBaudFudgeFactor(uint16_t fudge_factor)
-{
-  /* Not applicable for LoRa - function kept for compatibility */
-  (void)fudge_factor;
-}
-
-/**
- * @brief Get the current UART baud rate fudge factor (deprecated for LoRa)
- * @retval Current fudge factor value (in thousandths)
- */
-uint16_t RF_Receiver_GetBaudFudgeFactor(void)
-{
-  /* Not applicable for LoRa - return default value for compatibility */
-  return RF_BAUD_FUDGE_FACTOR_DEFAULT;
-}
-
-/**
  * @brief Get signal quality metrics from last packet
  * @param rssi Pointer to store RSSI in dBm
  * @param snr Pointer to store SNR in dB
@@ -928,48 +865,12 @@ void RF_Receiver_GetSignalQuality(int16_t *rssi, int8_t *snr)
 }
 
 /**
- * @brief Check if received data is stale
- * @param current_time_ms Current system time in milliseconds
- * @retval 1 if data is stale, 0 if fresh
- */
-uint8_t RF_Receiver_IsDataStale(uint32_t current_time_ms)
-{
-  /* No packet received yet */
-  if (last_packet_time == 0) {
-    return 1;
-  }
-  
-  /* Check if data is older than timeout threshold */
-  uint32_t age_ms = current_time_ms - last_packet_time;
-  return (age_ms > RF_DATA_STALE_TIMEOUT_MS) ? 1 : 0;
-}
-
-/**
  * @brief Get timestamp of last valid packet
  * @retval Timestamp in milliseconds
  */
 uint32_t RF_Receiver_GetLastPacketTime(void)
 {
   return last_packet_time;
-}
-
-/**
- * @brief Check if signal quality is good enough for reliable data
- * @retval 1 if signal quality is good, 0 if poor
- */
-uint8_t RF_Receiver_IsSignalQualityGood(void)
-{
-  /* Check RSSI threshold */
-  if (last_rssi < RF_MIN_RSSI_DBM) {
-    return 0;
-  }
-  
-  /* Check SNR threshold */
-  if (last_snr < RF_MIN_SNR_DB) {
-    return 0;
-  }
-  
-  return 1;
 }
 
 /**
@@ -993,7 +894,8 @@ static uint8_t RF_SetChannelCtx(uint8_t channel, uint8_t new_context)
   noise_sample_idx = 0;
   noise_alert_active = 0;
   heartbeat_pending = 0;
-  last_heartbeat_time = 0;
+  own_heartbeat_time = 0;
+  hb_track_init = 0;
   if (new_context) {
     bound_rocket_id = RF_ROCKET_UNBOUND;
     last_callsign_ms = 0;
@@ -1033,40 +935,43 @@ uint8_t RF_Receiver_NextChannel(void)
 }
 
 /**
- * @brief Get the last received heartbeat (one-shot)
- * @param hb Output buffer for the heartbeat packet
+ * @brief Get the last received heartbeat, any rocket (one-shot, for the log)
+ * @param hb   Output buffer for the heartbeat packet
+ * @param info Output: foreign flag and our beacon's reset event (may be NULL)
  * @retval 1 if a new heartbeat arrived since the last call, 0 otherwise
  */
-uint8_t RF_Receiver_GetHeartbeat(HeartbeatPacket_t *hb)
+uint8_t RF_Receiver_GetHeartbeat(HeartbeatPacket_t *hb, RF_HbInfo_t *info)
 {
   if (!heartbeat_pending || hb == NULL) {
     return 0;
   }
   memcpy(hb, &last_heartbeat, sizeof(*hb));
+  if (info) *info = heartbeat_info;
   heartbeat_pending = 0;
   return 1;
 }
 
 /**
- * @brief Get the last heartbeat without consuming it (for display)
+ * @brief Get OUR beacon's last heartbeat without consuming it (for display)
  * @param hb Output buffer for the heartbeat packet (may be NULL)
  * @param age_ms Output: milliseconds since it was received (may be NULL)
- * @retval 1 if a heartbeat has ever been received on this channel, 0 otherwise
+ * @retval 1 if our beacon has sent one on this channel, 0 otherwise
  */
 uint8_t RF_Receiver_GetLastHeartbeat(HeartbeatPacket_t *hb, uint32_t *age_ms)
 {
-  if (last_heartbeat_time == 0) {
+  if (own_heartbeat_time == 0) {
     return 0;
   }
-  if (hb) memcpy(hb, &last_heartbeat, sizeof(*hb));
-  if (age_ms) *age_ms = HAL_GetTick() - last_heartbeat_time;
+  if (hb) memcpy(hb, &own_heartbeat, sizeof(*hb));
+  if (age_ms) *age_ms = HAL_GetTick() - own_heartbeat_time;
   return 1;
 }
 
-uint8_t RF_Receiver_GetImuTrace(ImuTracePacket_t *imu)
+uint8_t RF_Receiver_GetImuTrace(ImuTracePacket_t *imu, uint8_t *fmt)
 {
   if (!imu_pending || imu == NULL) return 0;
   memcpy(imu, &last_imu_trace, sizeof(*imu));
+  if (fmt) *fmt = last_imu_fmt;
   imu_pending = 0;
   return 1;
 }
@@ -1103,36 +1008,106 @@ uint8_t RF_Receiver_GetHello(HelloPacket_t *hello)
   return 1;
 }
 
-/* Two-way scaffolding (v2 radios, benign on v1): hand one command frame to
- * the beacon on its next quiet window. PING is the probe; ACKs show up in
- * RF_Receiver_GetLastAck. Called from main when the operator pokes it. */
-uint8_t RF_Receiver_GetLastAck(AckPacket_t *ack, uint32_t *age_ms)
+/* Command scheduler: one command in flight at a time. */
+static uint8_t  cmd_active = 0;       /* a command is queued or in flight */
+static uint8_t  cmd_waiting = 0;      /* sent, waiting for its ACK        */
+static uint8_t  cmd_code_cur = 0;
+static uint8_t  cmd_param_cur = 0;
+static uint16_t cmd_seq = 0;
+static uint8_t  cmd_attempt = 0;
+static uint32_t cmd_sent_ms = 0;
+static RF_CmdResult_t cmd_result;
+static uint8_t  cmd_result_pending = 0;
+
+static void cmd_post(uint8_t event, uint8_t echo, int16_t rssi, int8_t snr)
 {
-  if (last_ack_time == 0) return 0;
-  if (ack) memcpy(ack, &last_ack, sizeof(*ack));
-  if (age_ms) *age_ms = HAL_GetTick() - last_ack_time;
-  return 1;
+  cmd_result.event = event;
+  cmd_result.cmd = cmd_code_cur;
+  cmd_result.seq = cmd_seq;
+  cmd_result.attempt = cmd_attempt;
+  cmd_result.echo = echo;
+  cmd_result.rssi = rssi;
+  cmd_result.snr = snr;
+  cmd_result_pending = 1;
 }
 
-uint8_t RF_Receiver_ConsumeAckFlag(void)
+void RF_Receiver_RequestPing(void)
 {
-  uint8_t v = ack_pending;
-  ack_pending = 0;
-  return v;
+  cmd_active = 1;
+  cmd_waiting = 0;
+  cmd_code_cur = CMD_PING;
+  cmd_param_cur = 0;
+  cmd_seq++;
+  cmd_attempt = 0;
+  ack_pending = 0;          /* only ACKs that arrive from here on count */
 }
 
-uint8_t RF_Receiver_SendCommand(uint8_t cmd_code, uint8_t param)
+void RF_Receiver_ServiceCommands(void)
 {
+  if (!cmd_active || cmd_result_pending) return;   /* one event per take */
+
+  /* Binding lost (operator scan, channel change): the command has no
+   * addressee, and each attempt would still deafen us for ~1.8 s. */
+  if (bound_rocket_id == RF_ROCKET_UNBOUND) {
+    cmd_active = 0;
+    cmd_waiting = 0;
+    cmd_post(RF_CMD_EV_CANCELLED, 0, 0, 0);
+    return;
+  }
+
+  /* Never transmit at a flying beacon (launch seen, landing not yet): it
+   * doesn't listen in flight, and every attempt would make this receiver
+   * deaf for ~1.8 s. */
+  if (flight_contact_latch && !beacon_landed_seen) {
+    cmd_active = 0;
+    cmd_waiting = 0;
+    cmd_post(RF_CMD_EV_SUPPRESSED, 0, 0, 0);
+    return;
+  }
+
+  if (cmd_waiting) {
+    if (ack_pending) {
+      ack_pending = 0;
+      uint16_t seq = (uint16_t)(((uint16_t)last_ack.seq_hi << 8) | last_ack.seq_lo);
+      if (last_ack.cmd_code == cmd_code_cur && seq == cmd_seq) {
+        cmd_active = 0;
+        cmd_waiting = 0;
+        cmd_post(RF_CMD_EV_ACK, last_ack.echo, ack_rssi, ack_snr);
+        return;
+      }
+      /* stale or unrelated ACK: keep waiting */
+    }
+    if (HAL_GetTick() - cmd_sent_ms < RF_CMD_ACK_WAIT_MS) return;
+    cmd_waiting = 0;
+    if (cmd_attempt >= RF_CMD_MAX_ATTEMPTS) {
+      cmd_active = 0;
+      cmd_post(RF_CMD_EV_NO_ACK, 0, 0, 0);
+      return;
+    }
+  }
+
+  /* Send the (next) attempt with the long command preamble. Blocking:
+   * ~1.8 s on air for a 6-byte command, bind-time only. */
   uint8_t buf[CMD_ACK_PACKET_SIZE];
   buf[0] = PACKET_TYPE_CMD;
   buf[1] = (uint8_t)RF_Receiver_GetBoundRocketId();
-  buf[2] = cmd_code;
-  static uint16_t seq = 0;
-  seq++;
-  buf[3] = (uint8_t)(seq >> 8);
-  buf[4] = (uint8_t)(seq & 0xFF);
-  buf[5] = param;
-  return LoRa_Transmit(buf, sizeof(buf)) == LORA_OK;
+  buf[2] = cmd_code_cur;
+  buf[3] = (uint8_t)(cmd_seq >> 8);
+  buf[4] = (uint8_t)(cmd_seq & 0xFF);
+  buf[5] = cmd_param_cur;
+  cmd_attempt++;
+  (void)LoRa_TransmitPreamble(buf, sizeof(buf), LORA_CMD_PREAMBLE_SYMBOLS);
+  cmd_sent_ms = HAL_GetTick();          /* the ACK wait starts at TX done */
+  cmd_waiting = 1;
+  cmd_post(RF_CMD_EV_SENT, 0, 0, 0);
+}
+
+uint8_t RF_Receiver_TakeCommandResult(RF_CmdResult_t *out)
+{
+  if (!cmd_result_pending || out == NULL) return 0;
+  *out = cmd_result;
+  cmd_result_pending = 0;
+  return 1;
 }
 
 /**
@@ -1249,13 +1224,6 @@ uint8_t RF_Receiver_FlightContactLatched(void)
 uint32_t RF_Receiver_GetRescanSuppressions(void)
 {
   return rescan_suppression_count;
-}
-
-/** Test/boot hook: clear the flight-contact latch (fresh session). */
-void RF_Receiver_ClearFlightContactLatch(void)
-{
-  flight_contact_latch = 0;
-  rescan_suppression_count = 0;
 }
 
 /**

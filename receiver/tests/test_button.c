@@ -77,9 +77,6 @@ TEST(test_init_centered_is_released)
     Button_Update();
 
     CHECK(stick_dir_engaged == STICK_CENTERED);
-    CHECK(Button_GetState() == BUTTON_RELEASED);
-    CHECK(Button_IsPressed() == 0);
-    CHECK(Button_IsReleased() == 1);
     CHECK(Button_WasPressed() == 0);
     CHECK(Button_WasLongPressed() == 0);
     CHECK(Button2_WasPressed() == 0);
@@ -89,8 +86,7 @@ TEST(test_flick_up_fires_once_on_edge)
 {
     reset_all();
     flick_up();
-    CHECK(stick_dir_engaged == STICK_UP);
-    CHECK(Button_GetState() == BUTTON_PRESSED);   /* still held */
+    CHECK(stick_dir_engaged == STICK_UP);         /* still held */
     CHECK(Button_WasPressed() == 1);              /* one-shot consumed */
     CHECK(Button_WasPressed() == 0);              /* not latched */
 
@@ -221,12 +217,12 @@ TEST(test_z_click_and_b_fire_context)
     CHECK(Button2_WasPressed() == 1);
     CHECK(Button2_WasPressed() == 0);
     CHECK(Button2_IsHeld() == 1);      /* still held -> held state */
-    CHECK(Button2_RawLevel() == 1);
+    CHECK(Button2_IsHeld() == 1);
 
     fake_held[JOGPAD_BTN_Z] = 0;
     Button_Update();
     CHECK(Button2_IsHeld() == 0);
-    CHECK(Button2_RawLevel() == 0);
+    CHECK(Button2_IsHeld() == 0);
 
     /* Button B aliases the same action */
     fake_held[JOGPAD_BTN_B] = 1;

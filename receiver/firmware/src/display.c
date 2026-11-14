@@ -14,8 +14,8 @@
  *    the drawing convention, so the bit is inverted at stream time
  *  - VCOM must toggle at ~1-10 Hz or the panel degrades: handled by flipping
  *    the M1 bit in every frame write, guaranteed by the 250 ms throttle
- *  - SHARP tops out at ~2 MHz: SPI1 is re-prescled to /16 (1.3 MHz at 21 MHz
- *    PCLK2) before every transfer, matching what sd_diskio does for the SD
+ *  - SHARP tops out at ~2 MHz: SPI1 is re-prescaled to /16 (656 kHz at the
+ *    10.5 MHz PCLK2) before every transfer, matching what sd_diskio does for the SD
  */
 
 #include "display.h"
@@ -42,7 +42,6 @@ extern SPI_HandleTypeDef hspi1;  /* shared SPI1 handle (main.c) */
 
 static uint8_t display_buffer[SHARP_BUFFER_SIZE];
 static uint8_t sharp_vcom = 0;       /* 0 or SHARP_CMD_VCOM - frame polarity */
-static uint32_t sharp_err_count = 0; /* observability only: SPI can't wedge */
 
 /** Reverse a byte (SHARP wants LSB-first; SPI1 peripheral is MSB-first). */
 static inline uint8_t sharp_rev8(uint8_t b)
@@ -61,7 +60,7 @@ static inline uint8_t sharp_rev8(uint8_t b)
 /** Drop SPI1 to a SHARP-safe clock before touching the panel. */
 static void sharp_set_bus_speed(void)
 {
-  /* APB2 = 21 MHz; /16 = 1.31 MHz - comfortably under the ~2 MHz limit. */
+  /* APB2 = 10.5 MHz; /16 = 656 kHz - well under the ~2 MHz limit. */
   hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   HAL_SPI_Init(&hspi1);
 }
@@ -78,10 +77,9 @@ static void sharp_deselect(void)
 
 static void sharp_write(const uint8_t *buf, uint16_t len)
 {
-  if (HAL_SPI_Transmit(&hspi1, (uint8_t *)buf, len, SHARP_SPI_TIMEOUT_MS)
-      != HAL_OK) {
-    sharp_err_count++;
-  }
+  /* A failed frame needs no handling: the panel is redrawn in full on the
+   * next 250 ms refresh, and SPI (unlike I2C) cannot wedge the bus. */
+  (void)HAL_SPI_Transmit(&hspi1, (uint8_t *)buf, len, SHARP_SPI_TIMEOUT_MS);
 }
 
 /**
@@ -218,41 +216,6 @@ void Display_DrawLine(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1, uint8_t co
     if (e2 <= dx) {
       err += dx;
       y0 += sy;
-    }
-  }
-}
-
-/**
- * @brief Draw a rectangle
- * @param x X coordinate of top-left corner
- * @param y Y coordinate of top-left corner
- * @param w Width of rectangle
- * @param h Height of rectangle
- * @param color Rectangle color (0 = off, 1 = on)
- * @retval None
- */
-void Display_DrawRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t color)
-{
-  Display_DrawLine(x, y, x + w - 1, y, color);
-  Display_DrawLine(x, y + h - 1, x + w - 1, y + h - 1, color);
-  Display_DrawLine(x, y, x, y + h - 1, color);
-  Display_DrawLine(x + w - 1, y, x + w - 1, y + h - 1, color);
-}
-
-/**
- * @brief Fill a rectangle
- * @param x X coordinate of top-left corner
- * @param y Y coordinate of top-left corner
- * @param w Width of rectangle
- * @param h Height of rectangle
- * @param color Rectangle color (0 = off, 1 = on)
- * @retval None
- */
-void Display_FillRect(uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint8_t color)
-{
-  for (uint8_t i = 0; i < w; i++) {
-    for (uint8_t j = 0; j < h; j++) {
-      Display_DrawPixel(x + i, y + j, color);
     }
   }
 }
@@ -411,26 +374,3 @@ void Display_DrawDirectionIndicator(uint8_t x, uint8_t y, float angle)
   Display_DrawPixel(x - radius + 1, y, 1);
 }
 
-/**
- * @brief Show boot screen with logo and version info
- * @retval None
- */
-void Display_ShowBootScreen(void)
-{
-  Display_Clear();
-
-  /* Draw border */
-  Display_DrawRect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, 1);
-
-  /* Draw title */
-  Display_DrawTextRowCol(1, 1, "GPS RADIO BEACON");
-  Display_DrawTextRowCol(2, 5, "RECEIVER");
-
-  /* Draw version info */
-  Display_DrawTextRowCol(5, 3, "FW v1.0.0");
-
-  Display_Update();
-}
-
-/** Error counter for bring-up visibility (counts HAL failures only). */
-uint32_t Display_GetErrorCount(void) { return sharp_err_count; }

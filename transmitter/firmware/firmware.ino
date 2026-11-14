@@ -8,6 +8,7 @@
 #include "include/uart.h"
 #include "include/launch_detect.h"
 #include "include/beacon.h"
+#include "include/fixed_point.h"
 #include "include/nav.h"
 #include "include/flight_cadence.h"
 #include "include/flight_events.h"
@@ -83,23 +84,24 @@
 // Beacon state machine variables
 #if BENCH_TEST_FORCE_LAUNCH
 // Bench test: boot straight into continuous-TX LAUNCH mode. See config.h.
-volatile beacon_state_t beacon_state = BEACON_STATE_LAUNCH;
-volatile uint8_t transmit_beacon_flag = 1;
-volatile uint8_t transmit_callsign_flag = 1;
-volatile uint8_t transmit_fast_flag = 1;
+beacon_state_t beacon_state = BEACON_STATE_LAUNCH;
+uint8_t transmit_beacon_flag = 1;
+uint8_t transmit_callsign_flag = 1;
+uint8_t transmit_fast_flag = 1;
 #else
-volatile beacon_state_t beacon_state = BEACON_STATE_TURN_ON;
-volatile uint8_t transmit_beacon_flag = 1;
-volatile uint8_t transmit_callsign_flag = 1;
-volatile uint8_t transmit_fast_flag = 0;
+beacon_state_t beacon_state = BEACON_STATE_TURN_ON;
+uint8_t transmit_beacon_flag = 1;
+uint8_t transmit_callsign_flag = 1;
+uint8_t transmit_fast_flag = 0;
 #endif
-volatile uint32_t system_time_seconds = 0;
-volatile uint32_t last_transmission_time = 0;
-volatile uint32_t time_since_last_callsign_tx = 0;
-volatile uint32_t post_launch_start_time = 0;
+uint32_t system_time_seconds = 0;
+uint32_t last_transmission_time = 0;
+uint32_t last_callsign_tx_s = 0;
+uint32_t post_launch_start_time = 0;
+uint32_t battery_save_start_time = 0;   /* heartbeat ramp (config.h) */
 
 // Counter for 1-second timer
-volatile uint16_t ms_counter = 0;
+uint16_t ms_counter = 0;
 
 // Timer interrupt handler - called every 1ms
 void timer_isr_handler(void) {
@@ -166,17 +168,10 @@ void watchdog_feed(void) {
     }
 }
 
-// Timer setup for 1ms interrupts
-void timer_init(void) {
-    // Use Arduino's built-in timer for 1ms interrupts
-    // We'll call timer_isr_handler() from loop() instead of using hardware timer
-    // This is simpler and sufficient for this application
-}
-
 /* Reset-cause forensics: captured before anything can disturb RSTC, sent
  * out with every heartbeat (V3 field). The receiver logs a row when a
  * cause other than plain POR kicks in mid-flight (brown-out or WD hung). */
-volatile uint8_t g_boot_rcause = 0;
+uint8_t g_boot_rcause = 0;
 
 void setup() {
     g_boot_rcause = RSTC->RCAUSE.reg;   /* survives the reset, capture first */
@@ -204,9 +199,6 @@ void setup() {
     // Initialize GPS
     gps_init(); 
 
-    // Initialize timer for beacon state machine
-    timer_init();
-    
     // Initialize launch detection system
     launch_detect_init();
 
@@ -243,7 +235,7 @@ void setup() {
             /* Reboot evidence lands first in the appended stream so the
              * NAND record reads "...last pre-reset record, BOOT(rcause),
              * first post-reset record". */
-            flight_log_event_ex(millis(), 8 /* boot reset cause */,
+            flight_log_event_ex(millis(), FLOG_KIND_BOOT,
                                 (uint8_t)(g_boot_rcause & 0xFF), 0);
         }
         Serial.println(F("[Boot] *** mid-flight reboot: resuming flight ***"));
@@ -261,7 +253,7 @@ void setup() {
      * the fast/LAUNCH phase. Passing the pending-TX flag here skipped
      * radio_enable() whenever a beacon TX happened to be queued. */
     beacon_transmit_callsign(transmit_fast_flag);
-    time_since_last_callsign_tx = system_time_seconds;
+    last_callsign_tx_s = system_time_seconds;
 
     /* Firmware identity on the air right behind the callsign: the ground
      * log's TXBOOT row names the exact build that flew (hash + dirty bit). */
@@ -295,7 +287,10 @@ void loop() {
     // Safe to call every loop iteration; dt is computed internally.
     nav_predict();
 
-    // Poll GPS for data every loop iteration
+    // Poll GPS for data every loop iteration. Airborne states tell the
+    // GPS watchdog not to reset the receiver (settings re-send only).
+    gps_set_in_flight(beacon_state == BEACON_STATE_LAUNCH ||
+                      beacon_state == BEACON_STATE_POST_LAUNCH);
     gps_poll_rx();
     
     /* GPS-altitude launch fallback: covers a dead IMU, which would otherwise
@@ -324,11 +319,12 @@ void loop() {
             if (landing_detect_update(gps_ok ? atof(c->altitude) : 0.0f,
                                       gps_ok, system_time_seconds)) {
                 beacon_state = BEACON_STATE_BATTERY_SAVE;
+                battery_save_start_time = system_time_seconds;
                 transmit_beacon_flag = 1;
                 transmit_fast_flag = 0;
                 radio_disable();
                 beacon_queue_flight_event(FLIGHT_EVENT_LANDED, 0, FLIGHT_EVENT_REPEATS);
-                flight_log_event(millis(), 4 /* landed */);
+                flight_log_event(millis(), FLOG_KIND_LANDED);
                 /* Flip the state row to LANDED so a power cycle during
                  * recovery boots as a pad power-on instead of resuming a
                  * finished flight. */
@@ -380,7 +376,7 @@ void loop() {
         uint8_t ev = flight_events_feed(&ev_in, now_evt_ms, &ev_value);
         if (ev != FLIGHT_EVENT_NONE) {
             beacon_queue_flight_event(ev, ev_value, FLIGHT_EVENT_REPEATS);
-            flight_log_event_ex(now_evt_ms, 5 /* flight event / anomaly */,
+            flight_log_event_ex(now_evt_ms, FLOG_KIND_FLIGHT_EVENT,
                                 ev, ev_value);
             if (FLIGHT_EVENT_IS_ANOMALY(ev)) {
                 last_anom_announce_ms = now_evt_ms;
@@ -393,7 +389,7 @@ void loop() {
             (now_evt_ms - last_anom_announce_ms) >= ANOM_EVENT_REPEAT_MS) {
             last_anom_announce_ms = now_evt_ms;
             beacon_queue_flight_event(flight_events_anomaly_code(),
-                                      (int16_t)lroundf(f.v_d * 100.0f), 1);
+                                      sat_i16(f.v_d * 100.0f), 1);
         }
     }
 
@@ -417,13 +413,13 @@ void loop() {
          * opening. */
         beacon_transmit_launch_t0(system_time_seconds, /*fast=*/1);
         flight_log_arm();
-        flight_log_event(millis(), 3 /* launch */);
+        flight_log_event(millis(), FLOG_KIND_LAUNCH);
         /* Reboot evidence at the top of the new flight's record: a brown-out
          * or watchdog reboot earlier this boot is otherwise invisible (the
          * flash was erased with this arm; the RF heartbeat may never be
          * heard). RCAUSE byte rides the event record's code slot. */
         if (g_boot_rcause) {
-            flight_log_event_ex(millis(), 8 /* boot reset cause */,
+            flight_log_event_ex(millis(), FLOG_KIND_BOOT,
                                 (uint8_t)(g_boot_rcause & 0xFF), 0);
         }
     }
@@ -444,7 +440,7 @@ void loop() {
             post_launch_start_time = system_time_seconds;
             transmit_beacon_flag = 1;
             transmit_fast_flag = 0;
-            flight_log_event(millis(), 6 /* post-launch transition */);
+            flight_log_event(millis(), FLOG_KIND_POST_LAUNCH);
 
             // Disable radio
             radio_disable(); 
@@ -456,11 +452,12 @@ void loop() {
         uint32_t time_in_post_launch = system_time_seconds - post_launch_start_time;
         if (flight_cadence_should_leave_post_launch(time_in_post_launch)) {
             beacon_state = BEACON_STATE_BATTERY_SAVE;
+            battery_save_start_time = system_time_seconds;
             transmit_beacon_flag = 1;
             transmit_fast_flag = 0;
             /* Cadence-timeout path only: the landing-detect path already
              * marks this transition with the kind-4 landed record. */
-            flight_log_event(millis(), 7 /* battery-save transition */);
+            flight_log_event(millis(), FLOG_KIND_BATTERY_SAVE);
         }
     }
     
@@ -481,20 +478,15 @@ void loop() {
 
             /* And the same trace goes to the crash-survivable chip flash —
              * even if nobody hears it over the air, a post-scavenger probe
-             * can read back WHAT the airframe was doing up to the cut. */
+             * can read back WHAT the airframe was doing up to the cut.
+             * Field-for-field the packet just transmitted. */
             {
-                float ax, ay, az, gx, gy, gz;
-                launch_detect_get_accel_xyz(&ax, &ay, &az);
-                launch_detect_get_gyro_rads(&gx, &gy, &gz);
-                /* Same peak as the RF packet just transmitted. */
+                ImuTracePacket_t im;
+                beacon_last_imu_trace(&im);
                 flight_log_imu(millis(),
-                               (int16_t)lroundf(ax * 100.0f),
-                               (int16_t)lroundf(ay * 100.0f),
-                               (int16_t)lroundf(az * 100.0f),
-                               (int16_t)lroundf(gx * 5729.58f),
-                               (int16_t)lroundf(gy * 5729.58f),
-                               (int16_t)lroundf(gz * 5729.58f),
-                               beacon_last_imu_peak_mg());
+                               im.accel_x_cg, im.accel_y_cg, im.accel_z_cg,
+                               im.gyro_x_dds, im.gyro_y_dds, im.gyro_z_dds,
+                               im.peak_accel_mg);
             }
 
             /* GPS-hole forensics: when the fix goes stale the fused EKF
@@ -505,23 +497,25 @@ void loop() {
                 NavFused_t fz;
                 nav_get_fused(&fz);
                 if (fz.valid && !fz.gps_fresh) {
+                    /* Saturating: a bare int16 cast wrapped above
+                     * 327 m/s (a Mach-0.99 flight read as climbing). */
                     flight_log_fused(millis(),
-                                     (int32_t)lroundf(fz.lat_deg * 10000000.0f),
-                                     (int32_t)lroundf(fz.lon_deg * 10000000.0f),
-                                     (int16_t)lroundf(fz.alt_m),
-                                     (int16_t)lroundf(fz.v_n * 100.0f),
-                                     (int16_t)lroundf(fz.v_e * 100.0f),
-                                     (int16_t)lroundf(fz.v_d * 100.0f),
-                                     (uint8_t)((fz.gps_fresh      ? 0x01 : 0) |
-                                               (fz.dead_reckoning ? 0x02 : 0) |
-                                               (fz.imu_healthy    ? 0x04 : 0)));
+                                     sat_i32((double)fz.lat_deg * 1e7),
+                                     sat_i32((double)fz.lon_deg * 1e7),
+                                     sat_i16(fz.alt_m),
+                                     sat_i16(fz.v_n * 100.0f),
+                                     sat_i16(fz.v_e * 100.0f),
+                                     sat_i16(fz.v_d * 100.0f),
+                                     (uint8_t)((fz.gps_fresh      ? FLOG_FUS_GPS_FRESH   : 0) |
+                                               (fz.dead_reckoning ? FLOG_FUS_DR          : 0) |
+                                               (fz.imu_healthy    ? FLOG_FUS_IMU_HEALTHY : 0)));
                 }
             }
 
             const GPSCoordinates_t* c = gps_get_current_coordinates();
             if (c->valid) {
-                float lat_d = gps_nmea_to_decimal(c->lat, c->lat_dir);
-                float lon_d = gps_nmea_to_decimal(c->lon, c->lon_dir);
+                double lat_d = gps_nmea_to_decimal(c->lat, c->lat_dir);
+                double lon_d = gps_nmea_to_decimal(c->lon, c->lon_dir);
                 float alt_f = atof(c->altitude);
                 /* Corrupt fields can parse as NaN/Inf; lroundf() on a
                  * non-finite value is UB - skip the record instead. */
@@ -543,17 +537,14 @@ void loop() {
             gps_poll_rx();
             beacon_transmit_heartbeat(gps_get_current_coordinates(),
                                       system_time_seconds,
-                                      flight_cadence_heartbeat_interval_s(beacon_state),
+                                      flight_cadence_heartbeat_interval_s(beacon_state,
+                                          system_time_seconds - battery_save_start_time),
                                       transmit_fast_flag);
             last_transmission_time = system_time_seconds;
         } else {
             gps_poll_rx();
 
-#if USE_BINARY_PACKETS
         uint8_t tx_result = beacon_transmit_gps_data_binary(gps_get_current_coordinates(), system_time_seconds, transmit_fast_flag);
-#else
-        uint8_t tx_result = beacon_transmit_gps_data(gps_get_current_coordinates(), system_time_seconds, transmit_fast_flag);
-#endif
 
         Serial.print(F("[Beacon] Transmission result: "));
         Serial.println(tx_result);
@@ -566,7 +557,8 @@ void loop() {
              * rate-limited heartbeat so the receiver still hears us. */
             beacon_transmit_heartbeat(gps_get_current_coordinates(),
                                       system_time_seconds,
-                                      flight_cadence_heartbeat_interval_s(beacon_state),
+                                      flight_cadence_heartbeat_interval_s(beacon_state,
+                                          system_time_seconds - battery_save_start_time),
                                       transmit_fast_flag);
         }
         }
@@ -578,14 +570,15 @@ void loop() {
 
     /* Pad GPS audit: one full position packet when the first good fix
      * lands (the logged pad coordinate the drift baseline argues from),
-     * then a sparse periodic copy while on the pad. Fix quality is
-     * pre-checked here so a no-fix pad doesn't spam rejection logs. */
+     * then a sparse periodic copy while on the pad. The sender's own fix
+     * gate is checked quietly first so a no-fix pad doesn't spam
+     * rejection logs. */
     if (beacon_state == BEACON_STATE_TURN_ON ||
         beacon_state == BEACON_STATE_PRE_LAUNCH) {
         static uint8_t pad_fix_announced = 0;
         static uint32_t last_pad_audit_s = 0;
         const GPSCoordinates_t* c = gps_get_current_coordinates();
-        bool fix_ok = c->valid && c->fix_quality >= 1 && atoi(c->satellites) >= 4;
+        bool fix_ok = beacon_validate_fix(c, 0);
         uint32_t audit_iv_s = flight_cadence_gps_audit_interval_s(beacon_state);
         if (fix_ok && (!pad_fix_announced ||
                        (audit_iv_s != 0 &&
@@ -599,9 +592,9 @@ void loop() {
         }
     }
 
-    if (system_time_seconds - time_since_last_callsign_tx >= flight_cadence_callsign_interval_s() && !transmit_fast_flag) {
+    if (system_time_seconds - last_callsign_tx_s >= flight_cadence_callsign_interval_s() && !transmit_fast_flag) {
         beacon_transmit_callsign(transmit_fast_flag);
-        time_since_last_callsign_tx = system_time_seconds;
+        last_callsign_tx_s = system_time_seconds;
     }
 
     /* One tick snapshot shared by every millisecond-paced block below

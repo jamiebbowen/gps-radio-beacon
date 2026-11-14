@@ -10,6 +10,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -122,6 +123,23 @@ TEST(test_coord_conversion_edge_cases) {
     CHECK_NEAR(nmea_coord_to_decimal("0000.100", 'N'), 0.1 / 60.0, 1e-6);
 }
 
+TEST(test_coord_conversion_rejects_malformed) {
+    /* atof() parses these literally; the old code cast the result straight
+     * to int (UB for NaN/Inf/huge) - now every one reports NaN, which all
+     * callers reject via isfinite(). */
+    CHECK(isnan(nmea_coord_to_decimal("nan", 'N')));
+    CHECK(isnan(nmea_coord_to_decimal("inf", 'E')));
+    CHECK(isnan(nmea_coord_to_decimal("1e30", 'N')));
+    CHECK(isnan(nmea_coord_to_decimal("999999999999", 'E')));  /* 12 digits */
+    CHECK(isnan(nmea_coord_to_decimal("18100.0", 'E')));       /* > 180 deg */
+    CHECK(isnan(nmea_coord_to_decimal("-3953.40284", 'N')));   /* sign is dir */
+    /* 60 minutes is not a carry into the next degree - corrupt field */
+    CHECK(isnan(nmea_coord_to_decimal("3960.0", 'N')));
+    /* Legal extremes still convert */
+    CHECK_NEAR(nmea_coord_to_decimal("18000.0", 'W'), -180.0, 1e-4);
+    CHECK_NEAR(nmea_coord_to_decimal("3959.99999", 'N'), 39.99999983, 1e-4);
+}
+
 TEST(test_coord_conversion_precision) {
     /* Full-precision NMEA coordinate: verify sub-meter accuracy survives.
      * 3953.40284 -> 39 + 53.40284/60 = 39.89004733... The internal math is
@@ -160,6 +178,19 @@ TEST(test_checksum_rejects_missing_or_malformed) {
     CHECK(nmea_checksum_ok("$GPGGA,123519*") == 0);
     CHECK(nmea_checksum_ok("$GPGGA,123519*G") == 0);
     CHECK(nmea_checksum_ok("$GPGGA,123519*ZZ") == 0);
+    /* first hex digit fine, second missing or not hex */
+    CHECK(nmea_checksum_ok("$GPGGA,123519*4") == 0);
+    CHECK(nmea_checksum_ok("$GPGGA,123519*4G") == 0);
+    /* '*' as the very last byte of an exact-size heap buffer: the checker
+     * must stop at the NUL instead of reading the second hex digit past
+     * it (`make sanitize` turns the old over-read into a hard failure). */
+    {
+        const char *src = "$GPGGA,123519*";
+        char *exact = (char *)malloc(strlen(src) + 1);
+        strcpy(exact, src);
+        CHECK(nmea_checksum_ok(exact) == 0);
+        free(exact);
+    }
     /* Not an NMEA sentence */
     CHECK(nmea_checksum_ok(NULL) == 0);
     CHECK(nmea_checksum_ok("") == 0);
@@ -195,7 +226,18 @@ TEST(test_u8_field_clamps_and_rejects) {
 
 /* ------------------------------------------------------------------ */
 
+TEST(test_coord_keeps_sub_metre_precision) {
+    /* float32 resolves latitude near 40 deg only to ~4e-6 deg (~0.4 m)
+     * and longitude near 105 deg to ~8e-6 deg (~0.7 m); the ~9 significant
+     * digits of an NMEA coordinate must survive to the nav anchor. */
+    double lat = nmea_coord_to_decimal("3953.402841", 'N');
+    double lon = nmea_coord_to_decimal("10453.110071", 'W');
+    CHECK(fabs(lat - (39.0 + 53.402841 / 60.0)) < 1e-9);
+    CHECK(fabs(lon + (104.0 + 53.110071 / 60.0)) < 1e-9);
+}
+
 int main(void) {
+    run_test_coord_keeps_sub_metre_precision();
     run_test_field_extraction_by_position();
     run_test_empty_fields_do_not_shift_positions();
     run_test_field_terminators();
@@ -203,6 +245,7 @@ int main(void) {
     run_test_field_truncation();
     run_test_coord_conversion();
     run_test_coord_conversion_edge_cases();
+    run_test_coord_conversion_rejects_malformed();
     run_test_coord_conversion_precision();
     run_test_checksum_valid_accepted();
     run_test_checksum_rejects_corruption();

@@ -74,6 +74,14 @@ class Session:
             self.nav_gaps[src].append(t - rows[-1][0])
         rows.append((t, rssi, snr, flags_hex))
 
+    @staticmethod
+    def is_watchdog_reset(msg):
+        # Current firmware: one "RESET src=IWDG|WWDG ... (firmware hang)"
+        # ERROR row; older builds logged "Boot after IWDG watchdog reset".
+        return ("IWDG watchdog reset" in msg
+                or msg.startswith("RESET src=IWDG")
+                or msg.startswith("RESET src=WWDG"))
+
     def add_event(self, t, msg):
         self.events.append((t, msg))
         if msg.startswith("RF wedge recovered"):
@@ -88,7 +96,7 @@ class Session:
             self.bindings.append((t, msg))
         elif msg.startswith("RF foreign"):
             self.foreign.append((t, msg))
-        elif "IWDG watchdog reset" in msg:
+        elif self.is_watchdog_reset(msg):
             self.iwdg.append(t)
         elif msg.startswith("CALLSIGN"):
             self.callsigns.append((t, msg))
@@ -134,6 +142,10 @@ def parse_file(path, sess):
                     sess.add_event(t, msg)
             elif kind == "ERROR":
                 sess.errors.append((t, msg))
+                # Watchdog resets are ERROR rows: before this check they
+                # never reached add_event and the summary said "OK".
+                if sess.is_watchdog_reset(msg):
+                    sess.iwdg.append(t)
             elif kind == "BASE":
                 sess.base_times.append(t)
             elif kind == "HEARTBEAT":
@@ -206,7 +218,7 @@ def report(sess, label):
         hist = "  ".join(f"{k}={v}" for k, v in sorted(sess.hb_states.items()))
         hb_lines.append(f"{total} heartbeats: {hist}")
         hb_lines.append(f"TX GPS watchdog resets: max rst={sess.hb_max_rst}"
-                        + ("  <-- TX had to cold-restart its GPS"
+                        + ("  <-- TX GPS watchdog had to recover it (reset ladder)"
                            if sess.hb_max_rst else ""))
     print_section("TX GPS health (heartbeats)", hb_lines,
                   empty="no heartbeats (beacon had a fix the whole time)")

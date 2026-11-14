@@ -59,7 +59,7 @@ static void reset_all(void)
     memread_calls = 0;
     reg_axes[0] = reg_axes[1] = 128;
     for (int i = 0; i < 5; i++) reg_btns[i] = 8;
-    pad_present = 0; pad_x = 128; pad_y = 128; last_poll_ms = 0;
+    pad_present = 0; pad_y = 128; last_poll_ms = 0;
     memset(btn_held, 0, sizeof(btn_held));
 }
 
@@ -70,7 +70,7 @@ TEST(init_absent_when_bus_offline)
     reset_all();
     bus_online = 0;
     CHECK(Jogpad_Init() == 0);
-    CHECK(Jogpad_IsPresent() == 0);
+    CHECK(pad_present == 0);
     CHECK(memread_calls == 0);          /* no probe attempted at all */
 }
 
@@ -79,19 +79,17 @@ TEST(init_absent_when_probe_fails)
     reset_all();
     read_status = HAL_ERROR;
     CHECK(Jogpad_Init() == 0);
-    CHECK(Jogpad_IsPresent() == 0);
+    CHECK(pad_present == 0);
     /* absent pad: Update() is a no-op, axes stay centered */
     Jogpad_Update();
-    CHECK(Jogpad_GetX() == 128 && Jogpad_GetY() == 128);
+    CHECK(Jogpad_GetY() == 128);
 }
 
-TEST(init_present_reads_first_axis_free)
+TEST(init_probe_detects_pad)
 {
     reset_all();
-    reg_axes[0] = 200;                  /* probe answer carries X too */
     CHECK(Jogpad_Init() == 1);
-    CHECK(Jogpad_IsPresent() == 1);
-    CHECK(Jogpad_GetX() == 200);        /* free first axis sample */
+    CHECK(pad_present == 1);
 }
 
 TEST(update_polls_axes_and_throttles_to_20ms)
@@ -103,21 +101,21 @@ TEST(update_polls_axes_and_throttles_to_20ms)
     Test_SetTick(1000);
     reg_axes[0] = 10; reg_axes[1] = 240;
     Jogpad_Update();
-    CHECK(Jogpad_GetX() == 10 && Jogpad_GetY() == 240);
+    CHECK(Jogpad_GetY() == 240);
     CHECK(memread_calls == 2);          /* axes + buttons block reads */
 
     /* 15 ms later: still inside the throttle window - no bus traffic */
     Test_SetTick(1015);
-    reg_axes[0] = 99;
+    reg_axes[1] = 99;
     Jogpad_Update();
     CHECK(memread_calls == 2);
-    CHECK(Jogpad_GetX() == 10);         /* stale, not repolled */
+    CHECK(Jogpad_GetY() == 240);   /* stale, not repolled */
 
     /* 20 ms boundary: fresh poll */
     Test_SetTick(1020);
     Jogpad_Update();
     CHECK(memread_calls == 4);
-    CHECK(Jogpad_GetX() == 99);
+    CHECK(Jogpad_GetY() == 99);
 }
 
 TEST(button_wire_order_remaps_to_enum)
@@ -155,18 +153,18 @@ TEST(failed_read_keeps_previous_button_state)
     Jogpad_Init();
     Test_SetTick(100);
     memset(reg_btns, 0, sizeof(reg_btns));      /* all held */
-    reg_axes[0] = 42;
+    reg_axes[1] = 42;
     Jogpad_Update();
     CHECK(Jogpad_ButtonHeld(JOGPAD_BTN_A) == 1);
-    CHECK(Jogpad_GetX() == 42);
+    CHECK(Jogpad_GetY() == 42);
 
     read_status = HAL_ERROR;
     memset(reg_btns, 8, sizeof(reg_btns));      /* wire would say NONE */
-    reg_axes[0] = 77;
+    reg_axes[1] = 77;
     Test_SetTick(200);
     Jogpad_Update();
     CHECK(Jogpad_ButtonHeld(JOGPAD_BTN_A) == 1);  /* kept, not released */
-    CHECK(Jogpad_GetX() == 42);                   /* axes kept too */
+    CHECK(Jogpad_GetY() == 42);           /* axes kept too */
 }
 
 TEST(none_and_bad_states_mean_released)
@@ -196,7 +194,7 @@ int main(void)
 {
     run_init_absent_when_bus_offline();
     run_init_absent_when_probe_fails();
-    run_init_present_reads_first_axis_free();
+    run_init_probe_detects_pad();
     run_update_polls_axes_and_throttles_to_20ms();
     run_button_wire_order_remaps_to_enum();
     run_failed_read_keeps_previous_button_state();

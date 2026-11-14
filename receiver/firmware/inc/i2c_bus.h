@@ -23,10 +23,7 @@ void I2CBus_Init(void);
  * probe every 10 s. Returns HAL status so callers can also log. */
 HAL_StatusTypeDef I2CBus_MemRead(uint16_t addr8, uint8_t reg,
                                  uint8_t *buf, uint16_t len);
-HAL_StatusTypeDef I2CBus_Transmit(uint16_t addr8, const uint8_t *buf,
-                                  uint16_t len);
 
 uint8_t  I2CBus_IsOnline(void);
-uint32_t I2CBus_ClockKHz(void);
 
 #endif /* I2C_BUS_H */

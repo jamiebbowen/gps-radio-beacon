@@ -19,13 +19,21 @@
 #define GPS_MAX_VALID_LONGITUDE     180.0f
 
 /* Diagnostic counters */
-uint32_t gps_checksum_errors = 0;
+static uint32_t gps_checksum_errors = 0;
 uint32_t gps_invalid_coordinate_errors = 0;
 
 /* Last known good coordinates */
 static float last_valid_latitude = 0.0f;
 static float last_valid_longitude = 0.0f;
 static uint8_t has_last_valid_position = 0;
+/* Relocation candidate: a fix too far from the anchor to be plausible.
+ * If the NEXT fix agrees with it (within ~1 km) the receiver really did
+ * move - e.g. powered up at a new site after travelling with the fix
+ * lost - and the anchor follows instead of rejecting forever. */
+static float jump_candidate_lat = 0.0f;
+static float jump_candidate_lon = 0.0f;
+static uint8_t jump_candidate_valid = 0;
+#define GPS_DEG2RAD 0.017453292519943295f
 
 /* Private function prototypes */
 static uint8_t GPS_ParseGPRMC(const char* nmea_sentence, GPS_Data *gps_data);
@@ -61,38 +69,6 @@ uint8_t GPS_ParseNMEA(const char* nmea_sentence, GPS_Data *gps_data)
 {
   uint8_t status = GPS_PARSER_ERROR;
   
-  /* Set debug strings that fit within 10-character display limit */
-  if (nmea_sentence != NULL) {
-    /* First debug field: NMEA sentence type (first 6 chars) */
-    memset(gps_data->debug_lat, 0, GPS_DEBUG_BUFFER_SIZE);
-    if (strlen(nmea_sentence) >= 6) {
-      strncpy(gps_data->debug_lat, nmea_sentence, 6);
-    } else {
-      strcpy(gps_data->debug_lat, "EMPTY");
-    }
-    
-    /* Second debug field: Length of NMEA sentence. Use the full debug
-     * buffer size so snprintf can always fit "LEN:" + any uint16 length
-     * (9 chars max) without tripping -Wformat-truncation. */
-    memset(gps_data->debug_lon, 0, GPS_DEBUG_BUFFER_SIZE);
-    if (nmea_sentence != NULL) {
-      snprintf(gps_data->debug_lon, GPS_DEBUG_BUFFER_SIZE, "LEN:%u",
-               (unsigned)strlen(nmea_sentence));
-    }
-    
-    /* Third debug field: First few chars after type */
-    memset(gps_data->debug_sats, 0, GPS_DEBUG_BUFFER_SIZE);
-    if (strlen(nmea_sentence) > 7) {
-      strncpy(gps_data->debug_sats, nmea_sentence + 7, 9);
-    } else {
-      strcpy(gps_data->debug_sats, "NO_DATA");
-    }
-  } else {
-    strcpy(gps_data->debug_lat, "NULL");
-    strcpy(gps_data->debug_lon, "NULL");
-    strcpy(gps_data->debug_sats, "NULL");
-  }
-  
   /* First perform basic structure validation of the NMEA sentence */
   if (nmea_sentence == NULL || strlen(nmea_sentence) < 10) {
     /* Sentence is too short to be valid */
@@ -123,9 +99,6 @@ uint8_t GPS_ParseNMEA(const char* nmea_sentence, GPS_Data *gps_data)
     if (!checksum_valid) {
       gps_checksum_errors++;
       
-      /* Add checksum error info to debug fields */
-      snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "CSUM ERR");
-      
       /* Return error for invalid checksum */
       return GPS_PARSER_ERROR;
     }
@@ -140,33 +113,45 @@ uint8_t GPS_ParseNMEA(const char* nmea_sentence, GPS_Data *gps_data)
    * GLONASS/Galileo enabled default to GN as the talker, so matching only
    * $GP* silently drops the date-bearing RMC sentence. Match on the type
    * suffix instead so every talker variant is accepted. */
+  /* Parse into a scratch copy: nothing reaches the caller's struct until
+   * the position has been validated. (Writing first and validating after
+   * let a rejected teleport overwrite the position and leave fix=1 behind
+   * for GPS_IsFixed() and main.c to use.) */
+  GPS_Data parsed = *gps_data;
+  uint8_t recognized = 1;
   if (nmea_sentence[0] == '$' &&
       strncmp(&nmea_sentence[3], "RMC,", 4) == 0) {
-    status = GPS_ParseGPRMC(nmea_sentence, gps_data);
+    status = GPS_ParseGPRMC(nmea_sentence, &parsed);
   }
   else if (nmea_sentence[0] == '$' &&
            strncmp(&nmea_sentence[3], "GGA,", 4) == 0) {
-    status = GPS_ParseGPGGA(nmea_sentence, gps_data);
+    status = GPS_ParseGPGGA(nmea_sentence, &parsed);
   }
-  
-  /* Update timestamp */
+  else {
+    recognized = 0;
+  }
+
   if (status == GPS_PARSER_OK) {
     /* fix is guaranteed non-zero here: both GPS_ParseGPRMC and
      * GPS_ParseGPGGA return GPS_PARSER_ERROR when the sentence carries
      * no fix (see their final "return (gps_data->fix) ? ..." lines). */
-    
-    /* Validate coordinates before accepting them */
-    if (!GPS_ValidateCoordinates(gps_data->latitude, gps_data->longitude)) {
-      /* Add invalid coordinate info to debug fields */
-      snprintf(gps_data->debug_sats, GPS_DEBUG_BUFFER_SIZE, "COORD ERR");
-      
-      /* Return error for invalid coordinates */
+    if (!GPS_ValidateCoordinates(parsed.latitude, parsed.longitude)) {
+      /* Keep the last good coordinates, but this is not a usable fix */
+      gps_data->fix = 0;
       return GPS_PARSER_ERROR;
     }
-    
-    gps_data->timestamp = HAL_GetTick();
+    parsed.timestamp = HAL_GetTick();
+    *gps_data = parsed;
+  } else if (recognized) {
+    /* A GGA/RMC without a usable fix: publish the fix state (never a
+     * fix) and the acquisition progress, never the coordinates. */
+    gps_data->fix = 0;
+    gps_data->satellites = parsed.satellites;
+    gps_data->hdop = parsed.hdop;
+    memcpy(gps_data->satellites_str, parsed.satellites_str,
+           sizeof(gps_data->satellites_str));
   }
-  
+
   return status;
 }
 
@@ -293,9 +278,6 @@ static uint8_t GPS_ParseGPGGA(const char* nmea_sentence, GPS_Data *gps_data)
         if (strlen(token) >= 4) {
           /* Use the more robust string-based conversion */
           gps_data->latitude = GPS_NMEAStringToDecimalDegrees(token);
-          /* Store raw latitude string for debugging */
-          strncpy(gps_data->debug_lat, token, GPS_DEBUG_BUFFER_SIZE - 1);
-          gps_data->debug_lat[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
         }
         break;
         
@@ -309,9 +291,6 @@ static uint8_t GPS_ParseGPGGA(const char* nmea_sentence, GPS_Data *gps_data)
         if (strlen(token) >= 4) {
           /* Use the more robust string-based conversion */
           gps_data->longitude = GPS_NMEAStringToDecimalDegrees(token);
-          /* Store raw longitude string for debugging */
-          strncpy(gps_data->debug_lon, token, GPS_DEBUG_BUFFER_SIZE - 1);
-          gps_data->debug_lon[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
         }
         break;
         
@@ -331,9 +310,6 @@ static uint8_t GPS_ParseGPGGA(const char* nmea_sentence, GPS_Data *gps_data)
         
       case 7: /* Number of satellites */
         gps_data->satellites = nmea_atoi_u8(token, 99);
-        /* Store raw satellites string for debugging */
-        strncpy(gps_data->debug_sats, token, GPS_DEBUG_BUFFER_SIZE - 1);
-        gps_data->debug_sats[GPS_DEBUG_BUFFER_SIZE - 1] = '\0';
         break;
 
       case 8: /* HDOP - geometry quality, separates "few sats" from "bad geometry" */
@@ -445,37 +421,49 @@ static uint8_t GPS_ValidateCoordinates(float latitude, float longitude)
     return 0;
   }
   
-  /* Additional validation for longitude - check for common error patterns */
-  /* Reject values that are suspiciously close to common error values */
-  if (fabs(longitude) > 180.0f || 
-      (fabs(longitude) > 0.0f && fabs(longitude) < 1.0f)) {
-    /* These are likely parsing errors - reject them */
+  /* GPS_NMEAStringToDecimalDegrees returns exactly 0.0 for a field it
+   * could not convert (minutes >= 60, garbage, no decimal point): an exact
+   * zero in either axis is a parse failure, not the equator or the prime
+   * meridian. (Nearby real positions - London's -0.12 deg - are fine.) */
+  if (latitude == 0.0f || longitude == 0.0f) {
     gps_invalid_coordinate_errors++;
     return 0;
   }
-  
+
   /* Check for unrealistic values (0,0 is in the ocean off Africa) */
   if (fabs(latitude) < 0.01f && fabs(longitude) < 0.01f) {
     gps_invalid_coordinate_errors++;
     return 0;
   }
   
-  /* If we have previous valid coordinates, check for impossible jumps */
+  /* If we have previous valid coordinates, check for impossible jumps.
+   * Flat-earth distance in degrees with the longitude scaled by cos(lat):
+   * crude, but plenty to catch a ~100 km teleport (0.8 deg^2). */
   if (has_last_valid_position) {
-    /* Calculate rough distance using squared differences (not exact but fast) */
-    /* This is a simplified distance check - not accurate but good enough to catch huge jumps */
     float lat_diff = latitude - last_valid_latitude;
-    float lon_diff = longitude - last_valid_longitude;
-    float squared_distance = lat_diff * lat_diff + lon_diff * lon_diff;
-    
-    /* Reject if movement is more than ~100km in one update (very approximate) */
-    /* 1 degree is roughly 111km, so squared distance of ~0.8 is about 100km */
-    if (squared_distance > 0.8f) {
-      gps_invalid_coordinate_errors++;
-      return 0;
+    float lon_diff = (longitude - last_valid_longitude) *
+                     cosf(last_valid_latitude * GPS_DEG2RAD);
+    if (lat_diff * lat_diff + lon_diff * lon_diff > 0.8f) {
+      /* A genuine relocation repeats: two consecutive far fixes within
+       * ~1 km (0.01 deg) of each other move the anchor. */
+      uint8_t confirmed = 0;
+      if (jump_candidate_valid) {
+        float c_lat = latitude - jump_candidate_lat;
+        float c_lon = (longitude - jump_candidate_lon) *
+                      cosf(jump_candidate_lat * GPS_DEG2RAD);
+        confirmed = (c_lat * c_lat + c_lon * c_lon) < 0.0001f;
+      }
+      if (!confirmed) {
+        jump_candidate_lat = latitude;
+        jump_candidate_lon = longitude;
+        jump_candidate_valid = 1;
+        gps_invalid_coordinate_errors++;
+        return 0;
+      }
     }
   }
-  
+  jump_candidate_valid = 0;
+
   /* Update last valid position */
   last_valid_latitude = latitude;
   last_valid_longitude = longitude;
@@ -523,4 +511,10 @@ static uint8_t GPS_ValidateChecksum(const char* nmea_sentence)
   
   /* Compare calculated and expected checksums */
   return (calculated_checksum == expected_checksum) ? 1 : 0;
+}
+
+/** Sentences dropped on a *XX checksum mismatch since boot. */
+uint32_t GPS_Parser_GetChecksumErrors(void)
+{
+  return gps_checksum_errors;
 }

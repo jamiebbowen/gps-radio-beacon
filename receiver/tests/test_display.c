@@ -247,10 +247,9 @@ TEST(test_pixel_polatiity_and_bit_reversal_on_wire)
     CHECK(txn_bytes(t)[1 + 2] == 0xFF);
 }
 
-TEST(test_spi_failures_are_counted_not_fatal)
+TEST(test_spi_failures_are_not_fatal)
 {
     CHECK(Display_Init() == DISPLAY_OK);
-    uint32_t before = Display_GetErrorCount();
 
     fake_spi_fail = 1;
     Display_Clear();
@@ -259,7 +258,6 @@ TEST(test_spi_failures_are_counted_not_fatal)
     Display_Clear();
     Display_Update();
 
-    CHECK(Display_GetErrorCount() > before);
     CHECK(sharp_cs_level == 0);   /* frame still terminates deselected */
 }
 
@@ -311,20 +309,8 @@ TEST(test_draw_line_all_octants)
     CHECK(count_lit_pixels() == 1);
 }
 
-TEST(test_draw_and_fill_rect_and_circle)
+TEST(test_draw_circle)
 {
-    Display_Clear();
-    Display_DrawRect(10, 10, 5, 4, 1);
-    CHECK(get_pixel(10, 10) == 1);
-    CHECK(get_pixel(14, 10) == 1);
-    CHECK(get_pixel(10, 13) == 1);
-    CHECK(get_pixel(14, 13) == 1);
-    CHECK(get_pixel(12, 11) == 0);
-
-    Display_Clear();
-    Display_FillRect(10, 10, 5, 4, 1);
-    CHECK(count_lit_pixels() == 5 * 4);
-
     Display_Clear();
     Display_DrawCircle(84, 72, 10, 1);
     CHECK(get_pixel(84, 82) == 1);
@@ -382,14 +368,6 @@ TEST(test_direction_indicator_draws_arrow)
     CHECK(count_lit_pixels() > 20);
 }
 
-TEST(test_boot_screen_pushes_frame)
-{
-    spi_log_reset();
-    Display_ShowBootScreen();
-    CHECK(count_lit_pixels() > 100);      /* border + title text */
-    CHECK(txn_count > 0);                 /* Update was pushed */
-}
-
 TEST(test_draw_line_sweeps_endpoints)
 {
     for (uint8_t dx = 0; dx <= 10; dx++) {
@@ -415,13 +393,12 @@ int main(void)
     run_test_update_frame_structure();
     run_test_vcom_toggles_every_frame();
     run_test_pixel_polatiity_and_bit_reversal_on_wire();
-    run_test_spi_failures_are_counted_not_fatal();
+    run_test_spi_failures_are_not_fatal();
     run_test_framebuffer_packing();
     run_test_draw_line_all_octants();
-    run_test_draw_and_fill_rect_and_circle();
+    run_test_draw_circle();
     run_test_draw_char_and_text();
     run_test_direction_indicator_draws_arrow();
-    run_test_boot_screen_pushes_frame();
     run_test_draw_line_sweeps_endpoints();
 
     return TEST_SUMMARY();

@@ -42,12 +42,6 @@ extern struct lfs_config lfs_sd_cfg;
 int lfs_sd_bd_init(void);
 
 /**
- * @brief Return true if the card passed its CMD0 / ACMD41 init sequence and
- *        sector I/O is known to work.
- */
-int lfs_sd_bd_is_ready(void);
-
-/**
  * @brief Return card capacity in MiB (for UI display). 0 if unknown.
  */
 uint32_t lfs_sd_bd_capacity_mb(void);

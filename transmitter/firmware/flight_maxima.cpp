@@ -1,4 +1,5 @@
 #include "include/flight_maxima.h"
+#include "include/fixed_point.h"
 #include <math.h>
 #include <string.h>
 
@@ -37,10 +38,10 @@ void flight_maxima_feed(const flight_maxima_input_t *in)
 
     /* Inertial channels stand on their own: at a dead-GPS boost they are
      * the only evidence there is. */
-    float accel_g = fabsf(in->accel_ms2) / 9.80665f;
+    float accel_g = fabsf(in->accel_ms2) / MS2_PER_G;
     if (accel_g > s_max_accel_g) s_max_accel_g = accel_g;
 
-    float gyro_dps = in->gyro_mag_rads * 57.29578f;
+    float gyro_dps = in->gyro_mag_rads * DEG_PER_RAD;
     if (gyro_dps > s_max_gyro_dps) s_max_gyro_dps = gyro_dps;
 }
 

@@ -24,23 +24,7 @@ void uart_tx_byte(uint8_t data);
 // Transmit a string via UART
 void uart_tx_string(const char* str);
 
-// RX buffer size - must be a power of 2 for efficient wrapping
-// ATtiny412 has limited RAM (256 bytes), so keep this small
-#define UART_RX_BUFFER_SIZE 32
-
-// Get UART diagnostic information
-void uart_get_diagnostics(uint16_t* isr_count, uint8_t* last_byte, uint8_t* active);
-
-// Get and clear error counter
-uint16_t uart_get_and_clear_error_count(void);
-
-// Get and clear framing error counter
-uint16_t uart_get_and_clear_framing_error_count(void);
-
-// Get and clear buffer overflow counter
-uint16_t uart_get_and_clear_buffer_overflow_count(void);
-
 // Flush the UART buffer
 void flush_uart_buffer(void);
 
-#endif /* UART_H_ */
+#endif /* GPS_UART_H */

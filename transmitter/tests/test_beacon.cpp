@@ -75,7 +75,7 @@ int  radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms)
 {
     rx_polls++;
     rx_last_window = timeout_ms;
-    if (fake_rx_len <= 0) return 0;
+    if (fake_rx_len <= 0) return fake_rx_len;   /* 0 = nothing, <0 = error */
     size_t n = (size_t)fake_rx_len;
     if (n > max_len) n = max_len;
     memcpy(out, fake_rx_pkt, n);
@@ -114,15 +114,18 @@ uint8_t gps_get_health(void) { return fake_gps_health; }
 static uint32_t fake_fix_age = 250;    /* plausible fix age for T0 test */
 uint32_t gps_get_fix_age_ms(void) { return fake_fix_age; }
 
-float gps_nmea_to_decimal(const char *nmea_coord, char direction)
+double gps_nmea_to_decimal(const char *nmea_coord, char direction)
 {
-    /* Reference conversion: ddmm.mmmm -> decimal degrees */
+    /* Reference conversion: ddmm.mmmm -> decimal degrees. (int) of a
+     * non-finite value is UB, so "nan"/"inf" fields report NaN, which
+     * every caller rejects - the same contract as the firmware converter. */
     double v = atof(nmea_coord);
+    if (!isfinite(v)) return NAN;
     int deg = (int)(v / 100.0);
     double min = v - deg * 100.0;
     double out = deg + min / 60.0;
     if (direction == 'S' || direction == 'W') out = -out;
-    return (float)out;
+    return out;
 }
 
 static launch_state_t fake_launch_state = LAUNCH_STATE_IDLE;
@@ -149,7 +152,7 @@ uint32_t nav_get_gps_rejects(void) { return fake_gps_rejects; }
 
 /* beacon.cpp's V3 heartbeat reports the boot's reset cause; on real
  * hardware firmware.ino captures RSTC->RCAUSE into this global. */
-volatile uint8_t g_boot_rcause = 0;
+uint8_t g_boot_rcause = 0;
 
 /* Include the module under test AFTER the fakes (it only needs their
  * declarations from the headers; definitions resolve at link within
@@ -202,77 +205,6 @@ static int32_t get_i32_le(const uint8_t *p)
 static int16_t get_i16_le(const uint8_t *p)
 {
     return (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
-}
-
-/* ------------------------------------------------------------------ */
-/* ASCII GPS packet tests                                              */
-/* ------------------------------------------------------------------ */
-
-TEST(test_ascii_full_packet)
-{
-    reset_tx();
-    GPSCoordinates_t c = valid_coords();
-
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 1);
-    CHECK(tx_count == 1);
-    /* West longitude gets a '-' sign; full packet carries sats */
-    CHECK(strcmp((const char *)tx_buf, "3953.40284,-10453.11007,1655.4,8") == 0);
-    /* Slow path power-cycles the radio around the TX */
-    CHECK(radio_enables == 1 && radio_disables == 1);
-}
-
-TEST(test_ascii_fast_packet_and_south)
-{
-    reset_tx();
-    GPSCoordinates_t c = valid_coords();
-    c.lat_dir = 'S';
-    c.lon_dir = 'E';
-
-    CHECK(beacon_transmit_gps_data(&c, 100, 1) == 1);
-    /* Fast packet: no sats field, radio stays enabled (LAUNCH phase) */
-    CHECK(strcmp((const char *)tx_buf, "-3953.40284,10453.11007,1655.4") == 0);
-    CHECK(radio_enables == 0 && radio_disables == 0);
-}
-
-TEST(test_ascii_rejection_paths)
-{
-    reset_tx();
-    GPSCoordinates_t c = valid_coords();
-
-    c.valid = 0;
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-
-    c = valid_coords();
-    strcpy(c.lat, "0");                       /* the "0" placeholder fix */
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-
-    c = valid_coords();
-    strcpy(c.satellites, "3");                /* < 4 sats */
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-
-    c = valid_coords();
-    c.fix_quality = 0;                        /* no fix */
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-
-    c = valid_coords();
-    strcpy(c.altitude, "60000");              /* > 50 km */
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-
-    c = valid_coords();
-    strcpy(c.altitude, "-600");               /* < -500 m */
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-
-    CHECK(tx_count == 0);                     /* nothing ever hit the air */
-}
-
-TEST(test_ascii_tx_failure_reported)
-{
-    reset_tx();
-    tx_result = -707;                         /* RadioLib error */
-    GPSCoordinates_t c = valid_coords();
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-    CHECK(strstr(Serial.log, "-707") != NULL);
-    tx_result = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -405,14 +337,6 @@ TEST(test_non_finite_and_range_coords_rejected)
     CHECK(beacon_transmit_gps_data_binary(&c, 100, 1) == 0);
     CHECK(tx_count == 0);
 
-    /* ASCII path: same garbage must not be put on the wire as text. */
-    c = valid_coords();
-    strcpy(c.lat, "nan");
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-    c = valid_coords();
-    strcpy(c.altitude, "inf");
-    CHECK(beacon_transmit_gps_data(&c, 100, 0) == 0);
-    CHECK(tx_count == 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -568,12 +492,12 @@ TEST(test_flight_event_tx_failure_backs_off)
 TEST(test_flight_event_queue_overflow_counted)
 {
     reset_tx();
-    uint32_t drops0 = beacon_flight_event_dropped();
+    Serial.clear();
     for (int i = 0; i < 8; i++) {
         beacon_queue_flight_event(FLIGHT_EVENT_MAIN, (int16_t)i, 3);
     }
     beacon_queue_flight_event(FLIGHT_EVENT_MAIN, 99, 3);   /* 9th: full */
-    CHECK(beacon_flight_event_dropped() == drops0 + 1);
+    CHECK(strstr(Serial.log, "queue full, dropped 0x3") != NULL);
 
     /* Everything queued still drains at the spacing cadence: 8 x 3 copies */
     uint32_t sent = 0;
@@ -636,9 +560,9 @@ TEST(test_maxima_packet_contents)
 TEST(test_imu_trace_packet_contents)
 {
     reset_tx();
-    fake_ax = 0.55f; fake_ay = -1.25f; fake_az = 0.0f;
-    fake_gx = 0.01f; fake_gy = -0.02f; fake_gz = 0.0f;
-    fake_total_accel = 1.35f;
+    fake_ax = 0.55f; fake_ay = -1.25f; fake_az = 0.0f;     /* m/s^2 */
+    fake_gx = 0.01f; fake_gy = -0.02f; fake_gz = 0.0f;     /* rad/s */
+    fake_total_accel = 1.35f;                              /* m/s^2 */
 
     CHECK(beacon_transmit_imu_trace(0) == 1);
     CHECK(tx_len == sizeof(ImuTracePacket_t));
@@ -646,23 +570,55 @@ TEST(test_imu_trace_packet_contents)
     const ImuTracePacket_t *im = (const ImuTracePacket_t *)tx_buf;
     CHECK(im->packet_type == PACKET_TYPE_IMU);
     CHECK(im->rocket_id   == ROCKET_ID);
-    CHECK(im->accel_x_cg  == 55);
-    CHECK(im->accel_y_cg  == -125);
+    /* V3 marker + ms-within-second carrier */
+    CHECK((im->ts_ms & IMU_TS_V3_FLAG) != 0);
+    CHECK((im->ts_ms & IMU_TS_MS_MASK) < 1000);
+    /* True centi-g: 0.55 m/s^2 = 0.0561 g (V2 sent 55, i.e. cm/s^2) */
+    CHECK(im->accel_x_cg  == 6);
+    CHECK(im->accel_y_cg  == -13);
     CHECK(im->accel_z_cg  == 0);
-    CHECK(im->gyro_x_cds  == 57);                     /* 0.01 rad/s */
-    CHECK(im->gyro_y_cds  == -115);                   /* -0.02 rad/s */
-    CHECK(im->peak_accel_mg == 1350);
-    /* The flash flight log reads the same peak via this getter right after
-     * transmit, both copies of the peak must agree. */
-    CHECK(beacon_last_imu_peak_mg() == im->peak_accel_mg);
+    /* deci-deg/s: 0.01 rad/s = 0.573 deg/s */
+    CHECK(im->gyro_x_dds  == 6);
+    CHECK(im->gyro_y_dds  == -11);
+    CHECK(im->peak_accel_mg == 138);                  /* 1.35 m/s^2 */
+    /* The flash flight log copies the packet just sent, field for field */
+    ImuTracePacket_t copy;
+    beacon_last_imu_trace(&copy);
+    CHECK(memcmp(&copy, im, sizeof(copy)) == 0);
+    beacon_last_imu_trace(NULL);                      /* null-safe */
 
     /* Peak resets after transmit; next one captures fresh only */
     fake_total_accel = 0.5f;
     now_ms += 1000;
     CHECK(beacon_transmit_imu_trace(0) == 1);
     im = (const ImuTracePacket_t *)tx_buf;
-    CHECK(im->peak_accel_mg == 500);
-    CHECK(beacon_last_imu_peak_mg() == 500);
+    CHECK(im->peak_accel_mg == 51);
+    beacon_last_imu_trace(&copy);
+    CHECK(copy.peak_accel_mg == 51);
+}
+
+TEST(test_imu_trace_saturates_never_wraps)
+{
+    /* V2 wrapped: a 6 rad/s spin read -31159 and a 10 g boost peak read
+     * as a negative number. V3 pins at the int16 limits instead. */
+    reset_tx();
+    fake_ax = 5000.0f; fake_ay = -5000.0f; fake_az = NAN;   /* > 327 g */
+    fake_gx = 60.0f;   fake_gy = -60.0f;   fake_gz = 6.0f;  /* rad/s */
+    fake_total_accel = 40.0f * 9.80665f;                    /* 40 g */
+
+    CHECK(beacon_transmit_imu_trace(1) == 1);
+    const ImuTracePacket_t *im = (const ImuTracePacket_t *)tx_buf;
+    CHECK(im->accel_x_cg == INT16_MAX);
+    CHECK(im->accel_y_cg == INT16_MIN);
+    CHECK(im->accel_z_cg == 0);                   /* NaN -> 0, no UB */
+    CHECK(im->gyro_x_dds == INT16_MAX);           /* 3438 deg/s */
+    CHECK(im->gyro_y_dds == INT16_MIN);
+    CHECK(im->gyro_z_dds == 3438);                /* 6 rad/s fits now */
+    CHECK(im->peak_accel_mg == INT16_MAX);        /* 40 g > 32.767 g */
+
+    fake_ax = fake_ay = fake_az = 0.0f;
+    fake_gx = fake_gy = fake_gz = 0.0f;
+    fake_total_accel = 0.0f;
 }
 
 /* ------------------------------------------------------------------ */
@@ -697,6 +653,29 @@ TEST(test_fused_not_anchored_no_tx)
     CHECK(tx_count == 0);
 }
 
+TEST(test_fused_non_finite_state_no_tx)
+{
+    /* A poisoned filter (NaN/Inf anywhere in position or velocity) must
+     * never reach the wire: ENCODE_COORD on NaN is undefined. */
+    for (int i = 0; i < 6; i++) {
+        reset_tx();
+        memset(&fake_fused, 0, sizeof(fake_fused));
+        fake_fused.valid = true;
+        fake_fused.lat_deg = 39.89; fake_fused.lon_deg = -105.11;
+        float bad = (i % 2) ? INFINITY : NAN;
+        switch (i) {
+            case 0: fake_fused.lat_deg = bad; break;
+            case 1: fake_fused.lon_deg = bad; break;
+            case 2: fake_fused.alt_m = bad;   break;
+            case 3: fake_fused.v_n = bad;     break;
+            case 4: fake_fused.v_e = bad;     break;
+            default: fake_fused.v_d = bad;    break;
+        }
+        CHECK(beacon_transmit_fused_data(100, 0) == 0);
+        CHECK(tx_count == 0);
+    }
+}
+
 TEST(test_fused_packet_fields)
 {
     reset_tx();
@@ -708,7 +687,6 @@ TEST(test_fused_packet_fields)
     fake_fused.v_n         = 12.34f;
     fake_fused.v_e         = -3.21f;
     fake_fused.v_d         = -55.0f;
-    fake_fused.age_ds      = 7;
     fake_fused.gps_fresh   = true;
     fake_fused.imu_healthy = true;
 
@@ -790,7 +768,6 @@ TEST(test_fused_wire_format_pin)
     CHECK(FUSED_FLAG_SENSOR_DEGRADED == 0x04);
     CHECK(FUSED_FLAG_GATE_REJECT     == 0x02);
     CHECK(FUSED_FLAG_V3              == 0x01);
-    CHECK(FUSED_FLAG_RESERVED_MASK   == 0x01);
 
     CHECK(FLAG_LOW_SATS              == 0x20);
 
@@ -954,6 +931,13 @@ TEST(test_airlink_golden_fused_encode)
     CHECK(beacon_transmit_fused_data(100, 1) == 1);
     CHECK(tx_len == sizeof(AIRLINK_FUSED_GOLDEN));
     CHECK(memcmp(tx_buf, AIRLINK_FUSED_GOLDEN, sizeof(AIRLINK_FUSED_GOLDEN)) == 0);
+    if (memcmp(tx_buf, AIRLINK_FUSED_GOLDEN, sizeof(AIRLINK_FUSED_GOLDEN)) != 0) {
+        printf("  sent:  ");
+        for (size_t i = 0; i < sizeof(AIRLINK_FUSED_GOLDEN); i++) printf("%02X ", tx_buf[i]);
+        printf("\n  golden:");
+        for (size_t i = 0; i < sizeof(AIRLINK_FUSED_GOLDEN); i++) printf(" %02X", AIRLINK_FUSED_GOLDEN[i]);
+        printf("\n");
+    }
 }
 
 TEST(test_fused_hexdump_cadence_and_tx_failure)
@@ -1051,6 +1035,11 @@ TEST(test_poll_commands_ignores_other_packets)
     beacon_poll_commands(0);
     CHECK(ack_calls == 0);
 
+    /* Radio error (negative return): never parsed as a frame */
+    fake_rx_len = -5;
+    beacon_poll_commands(0);
+    CHECK(ack_calls == 0);
+
     /* Runt frame shorter than a command packet: ignored */
     uint8_t runt[3] = { PACKET_TYPE_CMD, (uint8_t)ROCKET_ID, CMD_PING };
     memcpy(fake_rx_pkt, runt, 3); fake_rx_len = 3;
@@ -1078,10 +1067,6 @@ TEST(test_slow_path_powers_radio_up_and_down)
 
 int main(void)
 {
-    run_test_ascii_full_packet();
-    run_test_ascii_fast_packet_and_south();
-    run_test_ascii_rejection_paths();
-    run_test_ascii_tx_failure_reported();
     run_test_binary_packet_fields();
     run_test_binary_altitude_clamps();
     run_test_binary_launch_flag();
@@ -1099,7 +1084,9 @@ int main(void)
     run_test_hello_packet_contents();
     run_test_maxima_packet_contents();
     run_test_imu_trace_packet_contents();
+    run_test_imu_trace_saturates_never_wraps();
     run_test_fused_not_anchored_no_tx();
+    run_test_fused_non_finite_state_no_tx();
     run_test_fused_packet_fields();
     run_test_fused_velocity_clamps_and_flags();
     run_test_fused_sensor_degraded_flag();

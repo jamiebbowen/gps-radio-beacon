@@ -18,8 +18,6 @@ extern "C" {
 #include "display_modes/rf_mode.h"
 #include "display_modes/navigation_mode.h"
 #include "display_modes/test_pattern.h"
-#include "display_modes/i2c_devices.h"
-#include "display_modes/imu_test_mode.h"
 #include "display_modes/channel_mode.h"
 #include "display_modes/rf_stats_mode.h"
 #include "display_modes/preflight_mode.h"

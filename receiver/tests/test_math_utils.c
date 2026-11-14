@@ -182,7 +182,40 @@ TEST(test_bearing_across_antimeridian) {
 
 /* ------------------------------------------------------------------ */
 
+TEST(test_nav_compute_solution)
+{
+    Nav_Solution_t n;
+    /* ~70 m NW of the base, heading 45: bearing ~322, arrow ~277 */
+    Nav_Compute(39.8900f, -105.1150f, 1, 39.8905f, -105.1155f, 45.0f, &n);
+    CHECK(n.valid == 1 && n.base_stale == 0);
+    CHECK(n.distance_km > 0.06f && n.distance_km < 0.08f);
+    CHECK(n.bearing_deg > 300.0f && n.bearing_deg < 340.0f);
+    CHECK_NEAR(n.relative_deg, n.bearing_deg - 45.0f, 0.01);
+
+    /* Relative angle wraps into [0, 360) for headings past the bearing */
+    Nav_Compute(39.8900f, -105.1150f, 0, 39.8905f, -105.1155f, 350.0f, &n);
+    CHECK(n.valid == 1 && n.base_stale == 1);           /* passthrough */
+    CHECK(n.relative_deg >= 0.0f && n.relative_deg < 360.0f);
+    CHECK_NEAR(n.relative_deg, n.bearing_deg - 350.0f + 360.0f, 0.01);
+}
+
+TEST(test_nav_compute_rejects_unusable_points)
+{
+    Nav_Solution_t n;
+    Nav_Compute(0.0f, 0.0f, 1, 39.89f, -105.11f, 0.0f, &n);      /* no base */
+    CHECK(n.valid == 0);
+    Nav_Compute(39.89f, -105.11f, 1, 0.0f, -105.11f, 0.0f, &n);   /* lat 0 */
+    CHECK(n.valid == 0);
+    Nav_Compute(91.0f, -105.11f, 1, 39.89f, -105.11f, 0.0f, &n);  /* range */
+    CHECK(n.valid == 0);
+    Nav_Compute(39.89f, -181.0f, 1, 39.89f, -105.11f, 0.0f, &n);
+    CHECK(n.valid == 0);
+    Nav_Compute(39.89f, -105.11f, 1, 39.89f, -105.11f, 0.0f, NULL); /* null-safe */
+}
+
 int main(void) {
+    run_test_nav_compute_solution();
+    run_test_nav_compute_rejects_unusable_points();
     run_test_saved_beacon_field_distance_ok();
     run_test_saved_beacon_deployment_distance_ok();
     run_test_saved_beacon_cross_state_rejected();

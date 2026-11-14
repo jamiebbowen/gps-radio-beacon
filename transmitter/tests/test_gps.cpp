@@ -86,12 +86,26 @@ static int log_contains_bytes(const uint8_t *needle, size_t n)
     }
     return 0;
 }
+static int count_bytes(const uint8_t *needle, size_t n)
+{
+    int k = 0;
+    if (uart_tx_len < n) return 0;
+    for (size_t i = 0; i <= uart_tx_len - n; i++) {
+        if (memcmp((uint8_t*)uart_tx_log + i, needle, n) == 0) k++;
+    }
+    return k;
+}
+
+static int log_contains_str(const char *text)
+{
+    return log_contains_bytes((const uint8_t *)text, strlen(text));
+}
 
 /* nav layer capture */
 static int   nav_updates = 0;
 static float nav_last_lat = 0, nav_last_lon = 0, nav_last_alt = 0;
 static uint8_t nav_last_sats = 0, nav_last_fq = 0;
-extern "C" void nav_update_from_gps(float lat_deg, float lon_deg, float alt_m,
+extern "C" void nav_update_from_gps(double lat_deg, double lon_deg, float alt_m,
                                     uint8_t sats, uint8_t fix_quality)
 {
     nav_updates++;
@@ -131,6 +145,9 @@ static void feed_and_poll(const char *sentence)
 
 #define GGA_FIX \
     "$GPGGA,123519,3953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*66\r\n"
+/* 5 deg 12' N: a latitude whose text starts with '0' */
+#define GGA_EQUATORIAL \
+    "$GPGGA,123519,0512.34560,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*62\r\n"
 #define RMC_FIX \
     "$GNRMC,123519,A,3954.00000,N,10454.00000,W,022.4,084.4,230394,,*10\r\n"
 
@@ -142,14 +159,13 @@ TEST(test_init_sends_ublox_config)
 {
     reset_uart_capture();
     gps_init();
-    CHECK(gpsInitialized == 1);
 
     /* Baud self-heal dance: try 9600, command 115200 via PUBX,41, switch,
      * re-issue at the new baud (a factory-reset module must recover). */
     CHECK(baud_call_count == 2);
     CHECK(baud_calls[0] == 9600);
     CHECK(baud_calls[1] == 115200);
-    CHECK(strstr(uart_tx_log, "$PUBX,41,1,0007,0003,115200,0") != NULL);
+    CHECK(log_contains_str("$PUBX,41,1,0007,0003,115200,0"));
 
     /* M10 honors VALSET only (legacy PUBX,40 is silently ignored - 2026-09-07
      * field log showed default-config GLL still flowing). Check the VALSET
@@ -165,15 +181,26 @@ TEST(test_init_sends_ublox_config)
     CHECK(log_contains_bytes(rmc_on,   sizeof(rmc_on)));
     CHECK(log_contains_bytes(rate_1hz, sizeof(rate_1hz)));
 
-    /* gps_tx_string passthrough (and NULL safety) */
-    reset_uart_capture();
-    gps_tx_string("hello");
-    CHECK(strcmp(uart_tx_log, "hello") == 0);
-    gps_tx_string(NULL);
+    /* Baud self-heal through UBX-CFG-VALSET CFG-UART1-BAUDRATE = 115200
+     * (RAM layer) - the configuration interface u-blox documents for the
+     * M10 - sent at 9600 and again at 115200, alongside PUBX,41. */
+    static const uint8_t valset_baud[] = { 0xB5, 0x62, 0x06, 0x8A, 0x0C, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01, 0x00, 0x52, 0x40, 0x00, 0xC2, 0x01, 0x00, 0xF3, 0xA5 };
+    CHECK(count_bytes(valset_baud, sizeof(valset_baud)) == 2);
 
     /* No fix has ever landed: fix age reads as "never" (UINT32_MAX),
      * not as a bogus small number that would look fresh. */
     CHECK(gps_get_fix_age_ms() == UINT32_MAX);
+}
+
+TEST(test_equatorial_latitude_feeds_nav)
+{
+    /* The EKF feed skipped any latitude whose text starts with '0'
+     * (everything from 0 to 9.99 deg) - it meant to skip only the "0"
+     * placeholder that stands in before the first real fix. */
+    nav_updates = 0;
+    feed_and_poll(GGA_EQUATORIAL);
+    CHECK(nav_updates == 1);
+    CHECK(nav_last_lat > 5.205f && nav_last_lat < 5.207f);
 }
 
 TEST(test_gga_full_fix_parsed_and_fed_to_nav)
@@ -307,6 +334,13 @@ TEST(test_health_verdicts)
     CHECK(HB_GPS_STATE(gps_get_health()) == HB_GPS_ACQUIRING);
 }
 
+/* UBX-CFG-RST frames (class 0x06, id 0x04, resetMode 0x02 = controlled
+ * GNSS-only reset), checksums per the u-blox interface description. */
+static const uint8_t RST_HOT[]  = { 0xB5,0x62,0x06,0x04,0x04,0x00,0x00,0x00,0x02,0x00,0x10,0x68 };
+static const uint8_t RST_WARM[] = { 0xB5,0x62,0x06,0x04,0x04,0x00,0x01,0x00,0x02,0x00,0x11,0x6C };
+static const uint8_t RST_COLD[] = { 0xB5,0x62,0x06,0x04,0x04,0x00,0xFF,0xFF,0x02,0x00,0x0E,0x61 };
+static const uint8_t RST_HDR[]  = { 0xB5,0x62,0x06,0x04 };
+
 TEST(test_watchdog_silent_uart_recovery)
 {
     /* Re-baseline the watchdog with live data */
@@ -319,8 +353,11 @@ TEST(test_watchdog_silent_uart_recovery)
     (void)gps_poll_rx();
 
     CHECK(gps_recovery_attempts == 1);
-    CHECK(strstr(uart_tx_log, "$PUBX,00") != NULL);        /* poll request */
-    CHECK(strstr(uart_tx_log, "$PUBX,41,1,0007,0003,115200,0") != NULL); /* gps_init ran */
+    /* First rung: UBX-CFG-RST hot start. PUBX,04 - what this used to send
+     * - is u-blox's TIME message, so "recovery" never reset anything. */
+    CHECK(log_contains_bytes(RST_HOT, sizeof(RST_HOT)));
+    CHECK(!log_contains_str("$PUBX,04"));
+    CHECK(log_contains_str("$PUBX,41,1,0007,0003,115200,0")); /* gps_init ran */
     CHECK(HB_GPS_RESETS(gps_get_health()) == 1);
 
     /* Data resumes with a fix: attempt counter clears */
@@ -329,10 +366,10 @@ TEST(test_watchdog_silent_uart_recovery)
     CHECK(gps_recovery_attempts == 0);
 }
 
-TEST(test_watchdog_no_fix_cold_restart)
+TEST(test_watchdog_no_fix_reset_ladder)
 {
     /* Bytes flowing (garbage counts) but coordinates never valid for
-     * > 60 s: cold restart. Force the no-valid state directly. */
+     * > 60 s: reset. Force the no-valid state directly. */
     feed_and_poll(GGA_FIX);
     gps_recovery_attempts = 0;
     current_coords.valid = 0;
@@ -350,7 +387,58 @@ TEST(test_watchdog_no_fix_cold_restart)
 
     CHECK(fired_at >= 60);                    /* not before the 60 s gate */
     CHECK(gps_recovery_attempts == 1);
-    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,2,0,0") != NULL); /* cold start */
+    CHECK(log_contains_bytes(RST_HOT, sizeof(RST_HOT)));     /* rung 1 */
+    CHECK(!log_contains_bytes(RST_WARM, sizeof(RST_WARM)));
+
+    /* Each further 60 s without a fix escalates: warm, then cold */
+    const uint8_t *rung[2] = { RST_WARM, RST_COLD };
+    for (int k = 0; k < 2; k++) {
+        reset_uart_capture();
+        uint8_t before = gps_recovery_attempts;
+        for (int i = 0; i < 80 && gps_recovery_attempts == before; i++) {
+            now_ms += 1000;
+            feed_and_poll("$GPGSV,3,1,11,03,03,111,00*4A\r\n");
+        }
+        CHECK(gps_recovery_attempts == before + 1);
+        CHECK(log_contains_bytes(rung[k], sizeof(RST_HOT)));
+        CHECK(!log_contains_bytes(RST_HOT, sizeof(RST_HOT)));
+    }
+    CHECK(gps_recovery_attempts == 3);
+
+    /* Restore a live fix for the following tests */
+    feed_and_poll(GGA_FIX);
+    CHECK(gps_recovery_attempts == 0);
+    recovery_exhausted_ms = 0;
+}
+
+TEST(test_watchdog_no_reset_while_airborne)
+{
+    /* In flight (LAUNCH/POST_LAUNCH) a GNSS reset would throw the fix
+     * away exactly when the track matters most: the watchdog only
+     * re-sends settings, but the attempt still counts (same pacing). */
+    feed_and_poll(GGA_FIX);
+    gps_recovery_attempts = 0;
+    gps_set_in_flight(1);
+    reset_uart_capture();
+
+    now_ms += 31000;                          /* condition 1: UART silent */
+    (void)gps_poll_rx();
+    CHECK(gps_recovery_attempts == 1);
+    CHECK(!log_contains_bytes(RST_HDR, sizeof(RST_HDR)));     /* no reset */
+    CHECK(log_contains_str("$PUBX,41,1,0007,0003,115200,0"));
+
+    /* Flight over: the ladder starts fresh at a hot start */
+    gps_set_in_flight(0);
+    CHECK(gps_recovery_attempts == 0);
+    reset_uart_capture();
+    now_ms += 31000;
+    (void)gps_poll_rx();
+    CHECK(gps_recovery_attempts == 1);
+    CHECK(log_contains_bytes(RST_HOT, sizeof(RST_HOT)));
+
+    feed_and_poll(GGA_FIX);
+    (void)gps_poll_rx();
+    CHECK(gps_recovery_attempts == 0);
 }
 
 TEST(test_hotstart_stale_position_unlatches)
@@ -379,12 +467,12 @@ TEST(test_hotstart_stale_position_unlatches)
     CHECK(c->valid == 1);
 }
 
-TEST(test_watchdog_zero_sats_cold_restart)
+TEST(test_watchdog_zero_sats_reset)
 {
     /* Field failure, isolated: sentences flowing and the module even
      * CLAIMS fix quality 1, but ZERO satellites tracked - a wedged
      * acquisition engine. The good-fix gate requires sats > 0, so this
-     * stream must NOT disarm the watchdog: cold restart after 60 s. */
+     * stream must NOT disarm the watchdog: reset after 60 s. */
     feed_and_poll(GGA_FIX);
     gps_recovery_attempts = 0;
 
@@ -398,7 +486,7 @@ TEST(test_watchdog_zero_sats_cold_restart)
 
     CHECK(fired_at >= 60);                     /* no-good-fix gate */
     CHECK(gps_recovery_attempts == 1);         /* ...and it STAYS fired */
-    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,2,0,0") != NULL);  /* cold start */
+    CHECK(log_contains_bytes(RST_HOT, sizeof(RST_HOT)));     /* rung 1 */
     CHECK(HB_GPS_RESETS(gps_get_health()) == 1);
 
     /* Satellites tracked again: watchdog disarms */
@@ -408,9 +496,11 @@ TEST(test_watchdog_zero_sats_cold_restart)
 
 TEST(test_watchdog_never_factory_resets)
 {
-    /* The silent-UART recovery used to send $PUBX,04,0,0,0,0,0 (factory
-     * defaults), which reverts UART1 to 9600 baud - we talk at 115200, so
-     * 'recovery' would permanently deafen the link. It must cold-start. */
+    /* The silent-UART recovery once sent $PUBX,04,0,0,0,0,0 believing it
+     * was a factory reset (it is the TIME message). Recovery must never
+     * clear the saved configuration - that would revert UART1 to 9600 baud
+     * while we talk at 115200 - so the ladder only resets the GNSS engine
+     * (resetMode 0x02) and keeps the port config. */
     feed_and_poll(GGA_FIX);
     gps_recovery_attempts = 0;
     reset_uart_capture();
@@ -418,8 +508,8 @@ TEST(test_watchdog_never_factory_resets)
     now_ms += 31000;
     (void)gps_poll_rx();
     CHECK(gps_recovery_attempts == 1);
-    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,0,0,0*2B") == NULL);
-    CHECK(strstr(uart_tx_log, "$PUBX,04,0,0,2,0,0*29") != NULL);
+    CHECK(!log_contains_str("$PUBX,04"));
+    CHECK(log_contains_bytes(RST_HOT, sizeof(RST_HOT)));
 
     /* Restore live data for the cooldown test */
     feed_and_poll(GGA_FIX);
@@ -440,7 +530,8 @@ TEST(test_watchdog_three_strikes_then_cooldown_rearm)
     now_ms += 31000;
     (void)gps_poll_rx();
     CHECK(gps_recovery_attempts == 3);
-    CHECK(strstr(uart_tx_log, "$PUBX") == NULL);
+    CHECK(!log_contains_str("$PUBX"));
+    CHECK(!log_contains_bytes(RST_HDR, sizeof(RST_HDR)));
 
     /* Health caps the reset count at 15 (4-bit field) */
     gps_recovery_attempts = 20;
@@ -458,7 +549,7 @@ TEST(test_watchdog_three_strikes_then_cooldown_rearm)
     now_ms += 31000;
     (void)gps_poll_rx();
     CHECK(gps_recovery_attempts == 1);
-    CHECK(strstr(uart_tx_log, "$PUBX,00") != NULL);
+    CHECK(log_contains_bytes(RST_HOT, sizeof(RST_HOT)));   /* re-armed: hot */
 
     /* Clean up: restore live data (a real fix clears the attempt count) */
     feed_and_poll(GGA_FIX);
@@ -508,31 +599,31 @@ TEST(test_bad_checksum_drops_sentence)
      * the reported position hundreds of meters - worse than dropping the
      * 1 Hz update. NMEA requires the *XX checksum, so mismatches and
      * checksum-less sentences are both rejected and counted. */
-    uint32_t errs0 = gps_get_checksum_errors();
+    uint32_t errs0 = gps_checksum_errors;
 
     nav_updates = 0;
     /* Same body as GGA_FIX but a wrong checksum digit (*67 vs real *66) */
     feed_and_poll(
         "$GPGGA,123519,3953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*67\r\n");
     CHECK(nav_updates == 0);
-    CHECK(gps_get_checksum_errors() == errs0 + 1);
+    CHECK(gps_checksum_errors == errs0 + 1);
 
     /* No checksum field at all (truncated sentence): also rejected */
     feed_and_poll(
         "$GPGGA,123519,3953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,\r\n");
     CHECK(nav_updates == 0);
-    CHECK(gps_get_checksum_errors() == errs0 + 2);
+    CHECK(gps_checksum_errors == errs0 + 2);
 
     /* Corrupted body, correct-looking checksum: rejected */
     feed_and_poll(
         "$GPGGA,123519,4953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*66\r\n");
     CHECK(nav_updates == 0);
-    CHECK(gps_get_checksum_errors() == errs0 + 3);
+    CHECK(gps_checksum_errors == errs0 + 3);
 
     /* The very next good sentence still parses - no resync lost */
     feed_and_poll(GGA_FIX);
     CHECK(nav_updates == 1);
-    CHECK(gps_get_checksum_errors() == errs0 + 3);
+    CHECK(gps_checksum_errors == errs0 + 3);
 }
 
 TEST(test_out_of_spec_fix_quality_rejected)
@@ -580,6 +671,7 @@ int main(void)
 {
     run_test_init_sends_ublox_config();
     run_test_gga_full_fix_parsed_and_fed_to_nav();
+    run_test_equatorial_latitude_feeds_nav();
     run_test_burst_drains_all_sentences_in_one_poll();
     run_test_rmc_updates_position_only();
     run_test_framing_error_bytes_skipped_pre_and_mid_sentence();
@@ -588,9 +680,10 @@ int main(void)
     run_test_unknown_sentences_ignored();
     run_test_health_verdicts();
     run_test_watchdog_silent_uart_recovery();
-    run_test_watchdog_no_fix_cold_restart();
+    run_test_watchdog_no_fix_reset_ladder();
+    run_test_watchdog_no_reset_while_airborne();
     run_test_hotstart_stale_position_unlatches();
-    run_test_watchdog_zero_sats_cold_restart();
+    run_test_watchdog_zero_sats_reset();
     run_test_watchdog_never_factory_resets();
     run_test_watchdog_three_strikes_then_cooldown_rearm();
     run_test_oversize_sentence_does_not_overflow();

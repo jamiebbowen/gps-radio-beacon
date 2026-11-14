@@ -25,11 +25,15 @@ uint32_t flight_cadence_fused_interval_ms(beacon_state_t state)
     }
 }
 
-uint32_t flight_cadence_heartbeat_interval_s(beacon_state_t state)
+uint32_t flight_cadence_heartbeat_interval_s(beacon_state_t state, uint32_t s_in_state)
 {
     switch (state) {
         case BEACON_STATE_TURN_ON:      return TURN_ON_HEARTBEAT_INTERVAL_SEC;
         case BEACON_STATE_PRE_LAUNCH:   return PRELAUNCH_HEARTBEAT_INTERVAL_SEC;
+        case BEACON_STATE_BATTERY_SAVE:
+            return (s_in_state >= BATTERY_SAVE_HB_FAST_SEC)
+                       ? BATTERY_SAVE_HB_SLOW_INTERVAL_SEC
+                       : HEARTBEAT_INTERVAL_SEC;
         default:                        return HEARTBEAT_INTERVAL_SEC;
     }
 }

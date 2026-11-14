@@ -99,16 +99,35 @@ def load_nav_rows(path):
     return rows, base
 
 
+G0_MS2 = 9.80665          # standard gravity, m/s^2 per g
+IMU_TS_V3_FLAG = 0x8000   # ts_ms bit 15: the beacon sent V3 units
+
+
+def imu_scales(fmt):
+    """(accel, gyro, peak) multipliers to g, deg/s and g for an ImuFmt.
+
+    3 = V3 beacon units: accel centi-g, gyro 0.1 deg/s, peak milli-g.
+    1/2 = pre-V3 beacons, which sent accel in cm/s^2, gyro in 0.01 deg/s
+    and peak in mm/s^2 under the centi-g / milli-g labels (int16, so the
+    peak wrapped above ~3.3 g and gyro above ~327 deg/s).
+    """
+    if fmt == 3:
+        return 1 / 100.0, 1 / 10.0, 1 / 1000.0
+    return 1 / (100.0 * G0_MS2), 1 / 100.0, 1 / (1000.0 * G0_MS2)
+
+
 def load_imu_rows(path):
     """Parse IMU rows (beacon inertial-trace packets forwarded to the log).
 
     Schema (self-described in row, not the NAV header):
-        <ts>,IMU,ts_ms,ax_cg,ay_cg,az_cg,gx_cds,gy_cds,gz_cds,
-        peak_mg,temp_c10,rssi[,snr]
-    The SNR column was added later; both widths parse. IMU rows are
-    narrower than the NAV header, so DictReader right-pads with None -
-    take the leading non-None fields positionally. Empty list when the
-    flight predates the IMU wire format.
+        <ts>,IMU,ts_ms,ax,ay,az,gx,gy,gz,peak,temp_c10,rssi[,snr[,fmt]]
+    The SNR and ImuFmt columns were added later; every width parses.
+    Without an ImuFmt column the format comes from the V3 marker bit in
+    ts_ms (older receivers logged ts_ms raw). Values are returned in g
+    (ax/ay/az/peak) and deg/s (gx/gy/gz), with "fmt" kept per row. IMU
+    rows are narrower than the NAV header, so DictReader right-pads with
+    None - take the leading non-None fields positionally. Empty list when
+    the flight predates the IMU wire format.
     """
     out = []
     with open(path, newline="") as f:
@@ -117,13 +136,20 @@ def load_imu_rows(path):
                 continue
             try:
                 flds = [v for v in r.values() if v is not None]
+                ts_ms = int(flds[2])
+                if len(flds) > 13:
+                    fmt = int(flds[13])
+                else:
+                    fmt = 3 if ts_ms & IMU_TS_V3_FLAG else 2
+                a, g, pk = imu_scales(fmt)
                 row = {
                     "t":    float(flds[0]),
-                    "ax":   int(flds[3]),  "ay":   int(flds[4]),
-                    "az":   int(flds[5]),
-                    "gx":   int(flds[6]),  "gy":   int(flds[7]),
-                    "gz":   int(flds[8]),
-                    "peak": int(flds[9]),
+                    "fmt":  fmt,
+                    "ax":   int(flds[3]) * a,  "ay":   int(flds[4]) * a,
+                    "az":   int(flds[5]) * a,
+                    "gx":   int(flds[6]) * g,  "gy":   int(flds[7]) * g,
+                    "gz":   int(flds[8]) * g,
+                    "peak": int(flds[9]) * pk,
                     "rssi": int(flds[11]),
                     "snr":  int(flds[12]) if len(flds) > 12 else None,
                 }
@@ -696,10 +722,16 @@ def analyze(log_path, sensitivity_dbm=DEFAULT_SENSITIVITY_DBM,
                  key=lambda r: r["gx"] ** 2 + r["gy"] ** 2 + r["gz"] ** 2)
         print("--- INERTIAL TRACE  (beacon IMU @ flight cadence) ---")
         print(f"  Samples:            {len(imu_rows)}")
-        print(f"  Peak accel:         {pk['peak'] / 1000.0:7.2f} g  "
+        print(f"  Peak accel:         {pk['peak']:7.2f} g  "
               f"(peak per packet window) at log T+{pk['t']:.1f}s")
-        print(f"  Max gyro magnitude: {math.sqrt(gy['gx'] ** 2 + gy['gy'] ** 2 + gy['gz'] ** 2) / 100.0:7.0f} deg/s  "
+        print(f"  Max gyro magnitude: {math.sqrt(gy['gx'] ** 2 + gy['gy'] ** 2 + gy['gz'] ** 2):7.0f} deg/s  "
               f"at log T+{gy['t']:.1f}s")
+        legacy = sum(1 for r in imu_rows if r["fmt"] != 3)
+        if legacy:
+            print(f"  NOTE: {legacy} pre-V3 row{'s' if legacy != 1 else ''} "
+                  f"(beacon firmware before the IMU "
+                  f"unit fix): converted from m/s^2-based units; peaks above "
+                  f"~3.3 g and rates above ~327 deg/s wrapped on those rows")
         print(f"  RSSI range:         {min(r['rssi'] for r in imu_rows)} to "
               f"{max(r['rssi'] for r in imu_rows)} dBm")
         snrs = [r["snr"] for r in imu_rows if r["snr"] is not None]
