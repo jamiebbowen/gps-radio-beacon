@@ -41,6 +41,7 @@
 #include "preflight_eval.h"
 #include "beacon_track.h"
 #include "rx_channel.h"
+#include "eink_summary.h"
 #include "math_utils.h"
 #include "button.h"
 #include "sd_card.h"
@@ -254,53 +255,28 @@ static void Eink_MaybeRefreshSummary(uint32_t now_ms)
   if (Eink_IsBusy()) return;
   next_refresh_ms = now_ms + 60000;
 
-  char buf[48];
-
-  uint8_t ch = RF_Receiver_GetChannel();
+  /* What the page says lives in eink_summary.c (host-tested) */
   int16_t rssi = 0;
   int8_t snr = 0;
   RF_Receiver_GetSignalQuality(&rssi, &snr);
-  /* Link age from any packet of our beacon: on the pad its heartbeat comes
-   * once a minute and a position only every 10 minutes. */
-  uint32_t heard_ms = RF_Receiver_GetBeaconHeardTick();
-  uint32_t age_s = (heard_ms > 0) ? (now_ms - heard_ms) / 1000 : 0;
-  uint8_t link_lost = (heard_ms == 0) || (age_s > 180);
+  EinkSummary_In_t in = {
+    .channel     = RF_Receiver_GetChannel(),
+    .rssi        = rssi,
+    .now_ms      = now_ms,
+    .heard_tick  = RF_Receiver_GetBeaconHeardTick(),
+    .distance_km = distance_to_tx,
+    .vdd_mv      = sys_vdd_mv,
+    .beacon      = &beacon,
+  };
+  EinkSummary_Line_t lines[EINK_SUMMARY_MAX_LINES];
+  uint8_t n = EinkSummary_Compose(&in, lines);
 
   Eink_Clear();
-  Eink_DrawText(4, 2, 2, "GPS BEACON RX", EINK_BLACK);
-  Eink_FillRect(0, 30, EINK_WIDTH, 3, EINK_RED);
-
-  snprintf(buf, sizeof(buf), "CH%u %.2fMHz  rssi %ddBm",
-           (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)rssi);
-  Eink_DrawText(4, 38, 1, buf, EINK_BLACK);
-  snprintf(buf, sizeof(buf), "age %lus  pkts %lu",
-           (unsigned long)age_s, (unsigned long)beacon.packet_count);
-  Eink_DrawText(4, 50, 1, buf, EINK_BLACK);
-
-  if (beacon.has_valid || beacon.has_last_good) {
-    snprintf(buf, sizeof(buf), "lat %.5f",
-             (double)beacon.last_good.latitude);
-    Eink_DrawText(4, 62, 1, buf, EINK_BLACK);
-    snprintf(buf, sizeof(buf), "lon %.5f",
-             (double)beacon.last_good.longitude);
-    Eink_DrawText(4, 74, 1, buf, EINK_BLACK);
-    if (distance_to_tx >= 0.0f) {
-      snprintf(buf, sizeof(buf), "alt %.0fm  dist %.2fkm",
-               (double)beacon.last_good.altitude, (double)distance_to_tx);
-      Eink_DrawText(4, 86, 1, buf, EINK_BLACK);
-    }
-  } else {
-    Eink_DrawText(4, 66, 2, "NO BEACON YET", EINK_BLACK);
+  Eink_FillRect(0, 30, EINK_WIDTH, 3, EINK_RED);   /* rule under the title */
+  for (uint8_t i = 0; i < n; i++) {
+    Eink_DrawText(lines[i].x, lines[i].y, lines[i].size, lines[i].text,
+                  (Eink_Color)lines[i].color);
   }
-
-  if (link_lost) {
-    Eink_DrawText(4, 100, 2, "LINK LOST", EINK_RED);
-  } else {
-    snprintf(buf, sizeof(buf), "BAT %.2fV  up %lus",
-             sys_vdd_mv / 1000.0, (unsigned long)(now_ms / 1000));
-    Eink_DrawText(4, 104, 1, buf, EINK_BLACK);
-  }
-
   Eink_RequestRefresh();
 }
 

@@ -40,6 +40,7 @@ PROJECT_SOURCES = \
 	$(SRC_DIR)/preflight_eval.c \
 	$(SRC_DIR)/beacon_track.c \
 	$(SRC_DIR)/rx_channel.c \
+	$(SRC_DIR)/eink_summary.c \
 	$(SRC_DIR)/log_policy.c \
 	$(SRC_DIR)/lora.c \
 	$(SRC_DIR)/rf_receiver.c \
