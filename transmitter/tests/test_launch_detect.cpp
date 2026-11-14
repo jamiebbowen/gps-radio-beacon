@@ -348,6 +348,29 @@ TEST(test_report_queue_overflow_and_per_tick_budget)
     CHECK(bno_event_head == bno_event_tail);
 }
 
+TEST(test_peak_accel_tracks_every_report)
+{
+    /* The IMU trace's peak is the max |a| since the previous packet. It
+     * used to be sampled once, at packet time - the instantaneous value,
+     * never the boost peak in between. */
+    reset_all();
+    launch_detect_init();
+    push_accel(3, 4, 0);                  /* |a| 5  */
+    push_accel(30, 0, 0);                 /* |a| 30 */
+    push_accel(0, 6, 8);                  /* |a| 10 */
+    tick(10, 0);
+    CHECK(fabsf(launch_detect_take_peak_accel() - 30.0f) < 1e-4f);
+    /* each window starts at the current |a| */
+    CHECK(fabsf(launch_detect_take_peak_accel() - 10.0f) < 1e-4f);
+    push_accel(0, 3, 4);                  /* |a| 5  */
+    tick(10, 0);
+    CHECK(fabsf(launch_detect_take_peak_accel() - 10.0f) < 1e-4f);
+    CHECK(fabsf(launch_detect_take_peak_accel() - 5.0f) < 1e-4f);
+    /* a re-init starts from zero */
+    launch_detect_init();
+    CHECK(launch_detect_take_peak_accel() == 0.0f);
+}
+
 TEST(test_sensor_reset_reenables_reports)
 {
     reset_all();
@@ -689,6 +712,7 @@ int main(void)
     run_test_sensor_event_draining_and_accessors();
     run_test_batched_reports_all_reach_launch_detection();
     run_test_report_queue_overflow_and_per_tick_budget();
+    run_test_peak_accel_tracks_every_report();
     run_test_sensor_reset_reenables_reports();
     run_test_gps_fallback_confirms_on_sustained_climb();
     run_test_gps_fallback_cold_start_low_baseline_no_false_launch();

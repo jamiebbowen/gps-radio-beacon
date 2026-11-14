@@ -73,6 +73,7 @@ static float accel_x = 0.0f;
 static float accel_y = 0.0f;
 static float accel_z = 0.0f;
 static float total_accel = 0.0f;
+static float peak_accel = 0.0f;   /* max |linear accel| since the last take */
 
 /* Inertial-trace bookkeeping. During the flight window every degree of
  * rotation and burst of thrust matters for post-shred forensics; the radio
@@ -110,6 +111,8 @@ static float    land_window_max = 0.0f;
  */
 void launch_detect_init(void) {
     Serial.println("[Launch] Initializing BNO085 IMU...");
+    total_accel = 0.0f;
+    peak_accel = 0.0f;
     
     // Initialize I2C. Try 400 kHz first (BNO085 supports fast mode); the
     // long-wire risk is NAKs / corrupted reads, so probe with a chip-ID
@@ -252,6 +255,7 @@ void launch_detect_update(uint32_t system_time_seconds) {
         
         // Calculate total acceleration magnitude
         total_accel = sqrt(accel_x * accel_x + accel_y * accel_y + accel_z * accel_z);
+        if (total_accel > peak_accel) peak_accel = total_accel;
         
         // State machine for launch detection
         switch (current_state) {
@@ -510,6 +514,15 @@ uint32_t launch_detect_get_time_since_launch(uint32_t system_time_seconds) {
 /**
  * Get current total acceleration magnitude (m/s²)
  */
+/* Peak |linear accel| (m/s^2) since the previous call - every report
+ * counts, not just the one current when the IMU trace packet is built.
+ * The next window starts at the current magnitude. */
+float launch_detect_take_peak_accel(void) {
+    float p = (total_accel > peak_accel) ? total_accel : peak_accel;
+    peak_accel = total_accel;
+    return p;
+}
+
 float launch_detect_get_current_accel(void) {
     return total_accel;
 }

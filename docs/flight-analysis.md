@@ -87,6 +87,10 @@ The units depend on the beacon firmware that sent the packet:
 | 2 | pre-V3, 18-byte packet | cm/s^2 | 0.01 deg/s | mm/s^2 |
 | 1 | pre-V3, 20-byte packet | cm/s^2 | 0.01 deg/s | mm/s^2 |
 
+Before commit 5a861cc the beacon filled `peak` from one sample taken when
+the packet was built, so on older logs it is the instantaneous |a| at
+packet time, not the peak of the window.
+
 Pre-V3 values were int16 casts that wrapped: a peak above ~3.3 g or a rate
 above ~327 deg/s reads as garbage (often negative). V3 values saturate at
 the int16 limits instead, so a pinned value means "at least this much".

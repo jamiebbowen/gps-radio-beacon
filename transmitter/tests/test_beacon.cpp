@@ -146,6 +146,8 @@ void launch_detect_get_gyro_rads(float *x, float *y, float *z)
 { if (x) *x = fake_gx; if (y) *y = fake_gy; if (z) *z = fake_gz; }
 static float fake_total_accel = 1.25f;
 float launch_detect_get_current_accel(void) { return fake_total_accel; }
+static float fake_peak_accel = 1.25f;
+float launch_detect_take_peak_accel(void) { return fake_peak_accel; }
 
 static uint32_t fake_gps_rejects = 0;
 uint32_t nav_get_gps_rejects(void) { return fake_gps_rejects; }
@@ -562,7 +564,8 @@ TEST(test_imu_trace_packet_contents)
     reset_tx();
     fake_ax = 0.55f; fake_ay = -1.25f; fake_az = 0.0f;     /* m/s^2 */
     fake_gx = 0.01f; fake_gy = -0.02f; fake_gz = 0.0f;     /* rad/s */
-    fake_total_accel = 1.35f;                              /* m/s^2 */
+    fake_total_accel = 0.2f;                               /* m/s^2, now */
+    fake_peak_accel  = 1.35f;                              /* since last */
 
     CHECK(beacon_transmit_imu_trace(0) == 1);
     CHECK(tx_len == sizeof(ImuTracePacket_t));
@@ -580,15 +583,15 @@ TEST(test_imu_trace_packet_contents)
     /* deci-deg/s: 0.01 rad/s = 0.573 deg/s */
     CHECK(im->gyro_x_dds  == 6);
     CHECK(im->gyro_y_dds  == -11);
-    CHECK(im->peak_accel_mg == 138);                  /* 1.35 m/s^2 */
+    CHECK(im->peak_accel_mg == 138);       /* the window peak, not 0.2 now */
     /* The flash flight log copies the packet just sent, field for field */
     ImuTracePacket_t copy;
     beacon_last_imu_trace(&copy);
     CHECK(memcmp(&copy, im, sizeof(copy)) == 0);
     beacon_last_imu_trace(NULL);                      /* null-safe */
 
-    /* Peak resets after transmit; next one captures fresh only */
-    fake_total_accel = 0.5f;
+    /* the next packet reports the next window's peak */
+    fake_peak_accel = 0.5f;
     now_ms += 1000;
     CHECK(beacon_transmit_imu_trace(0) == 1);
     im = (const ImuTracePacket_t *)tx_buf;
@@ -604,7 +607,7 @@ TEST(test_imu_trace_saturates_never_wraps)
     reset_tx();
     fake_ax = 5000.0f; fake_ay = -5000.0f; fake_az = NAN;   /* > 327 g */
     fake_gx = 60.0f;   fake_gy = -60.0f;   fake_gz = 6.0f;  /* rad/s */
-    fake_total_accel = 40.0f * 9.80665f;                    /* 40 g */
+    fake_peak_accel = 40.0f * 9.80665f;                     /* 40 g */
 
     CHECK(beacon_transmit_imu_trace(1) == 1);
     const ImuTracePacket_t *im = (const ImuTracePacket_t *)tx_buf;
@@ -619,6 +622,7 @@ TEST(test_imu_trace_saturates_never_wraps)
     fake_ax = fake_ay = fake_az = 0.0f;
     fake_gx = fake_gy = fake_gz = 0.0f;
     fake_total_accel = 0.0f;
+    fake_peak_accel = 0.0f;
 }
 
 /* ------------------------------------------------------------------ */
