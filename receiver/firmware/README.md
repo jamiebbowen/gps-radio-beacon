@@ -14,7 +14,7 @@ This firmware is designed for an STM32F401 microcontroller-based receiver that t
 ## Build and flash
 
 ```sh
-make compile WERROR=1   # build only (what CI runs); top-level `make` does this too
+make compile WERROR=1   # build only, warnings as errors (what CI runs)
 make flash              # explicit flash; nothing else ever writes the board
 ```
 
