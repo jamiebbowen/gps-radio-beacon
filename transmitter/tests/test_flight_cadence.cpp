@@ -49,7 +49,7 @@ TEST(test_cadence_table_pins)
     CHECK(flight_cadence_beacon_interval_s(BEACON_STATE_TURN_ON)     == 5);
     CHECK(flight_cadence_beacon_interval_s(BEACON_STATE_PRE_LAUNCH)  == 60);
     CHECK(flight_cadence_beacon_interval_s(BEACON_STATE_LAUNCH)      == 0);
-    CHECK(flight_cadence_beacon_interval_s(BEACON_STATE_POST_LAUNCH) == 2);
+    CHECK(flight_cadence_beacon_interval_s(BEACON_STATE_POST_LAUNCH) == 6);
     CHECK(flight_cadence_beacon_interval_s(BEACON_STATE_BATTERY_SAVE)== 60);
 
     /* Milliseconds between fused packets (0 = stream off; pad states have
@@ -106,6 +106,19 @@ TEST(test_cadence_phase_exits)
     /* POST_LAUNCH -> BATTERY_SAVE after the 10-minute recovery window */
     CHECK(!flight_cadence_should_leave_post_launch(POST_LAUNCH_RECOVERY_DURATION_SEC - 1));
     CHECK(flight_cadence_should_leave_post_launch(POST_LAUNCH_RECOVERY_DURATION_SEC));
+}
+
+TEST(test_descent_airtime_budget)
+{
+    /* Every stream scheduled in POST_LAUNCH must fit the radio with room
+     * to spare: fused + inertial trace + maxima recap. At 2 s / 5 s the
+     * trace and recap scheduled ~130% of the airtime and the positions
+     * slipped; the quiet remainder is when GPS and IMU get serviced. */
+    double duty = lora_airtime_ms(FUSED_PACKET_SIZE) / (double)FUSED_TX_INTERVAL_MS
+                + lora_airtime_ms(IMU_TRACE_PACKET_SIZE) / (POST_LAUNCH_PACKET_INTERVAL_SEC * 1000.0)
+                + lora_airtime_ms(MAXIMA_PACKET_SIZE) / (double)MAXIMA_TX_INTERVAL_MS;
+    printf("  descent airtime budget: %.0f%%\n", duty * 100.0);
+    CHECK(duty < 0.90);
 }
 
 TEST(test_cadence_pa_airtime_margin)
@@ -211,8 +224,8 @@ TEST(test_scripted_flight_timeline)
      * phases are where exact counts matter. */
     CHECK(launch_raws == 1);
 
-    /* Recovery window: 600 s / 2 s pacing = 300 IMU-trace beacons */
-    CHECK(post_raws == 300 || post_raws == 301);
+    /* Recovery window: 600 s / 6 s pacing = 100 IMU-trace beacons */
+    CHECK(post_raws == 100 || post_raws == 101);
 
     /* Battery-save tail (722..840 s): entry TX plus one at the 60 s mark */
     CHECK(save_raws == 2);
@@ -234,6 +247,7 @@ int main(void)
     run_test_cadence_table_pins();
     run_test_cadence_phase_exits();
     run_test_cadence_pa_airtime_margin();
+    run_test_descent_airtime_budget();
     run_test_scripted_flight_timeline();
     return TEST_SUMMARY();
 }

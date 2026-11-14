@@ -115,8 +115,9 @@ integrated path length, not straight-line displacement.
 
 Pre-launch cadence is 5 s across packet types while range-testing (dense);
 the flight-prep regime paces them at 30 s so the pad's full-power bursts
-leave GPS front ends alone. Post-launch is paced (raw every 2 s, fused
-every 1.2 s). The "TX rate boost" column shows the in-flight rate delta.
+leave GPS front ends alone. Post-launch is paced: fused every 1.5 s, the
+inertial trace every 6 s (every 2 s before the descent airtime budget
+fix). The "TX rate boost" column shows the in-flight rate delta.
 
 ### Predicted range
 

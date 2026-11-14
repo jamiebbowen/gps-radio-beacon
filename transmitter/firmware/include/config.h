@@ -90,7 +90,7 @@
 #define ANOM_CLEAR_MS                 5000U  /* all-clear hysteresis             */
 
 /* While an anomaly is active the beacon bleeds everything: the inertial
- * trace tightens to ANOM_BEACON_INTERVAL_S (from the 2 s recovery pacing)
+ * trace tightens to ANOM_BEACON_INTERVAL_S (from the 6 s recovery pacing)
  * and the anomaly event re-announces at ANOM_EVENT_REPEAT_MS. 1 s spacing
  * with 1.12 s packet airtimes keys the PA near 100% until the anomaly
  * clears - accepted deliberately: ballistic anomalies last seconds, and
@@ -109,7 +109,7 @@
  * recurring stream makes EVERY heard packet a cumulative flight record -
  * the "how high did it go" answer survives a shred at apogee, when no
  * APOGEE event would ever fire. */
-#define MAXIMA_TX_INTERVAL_MS         5000U
+#define MAXIMA_TX_INTERVAL_MS         15000U  /* see the airtime budget below */
 
 /**
  * Bench-test switch: when 1, the beacon boots directly into BEACON_STATE_LAUNCH
@@ -200,7 +200,12 @@
  * copy. Free-running BOTH streams at SF10 would key the M33S PA at ~100%
  * duty for the entire POST_LAUNCH recovery window: thermal stress the
  * module class isn't rated for, plus needless current. */
-#define POST_LAUNCH_PACKET_INTERVAL_SEC 2
+/* Airtime budget in descent: the fused stream alone keys the PA ~66% of
+ * the time (0.99 s per 1.5 s). The inertial trace (0.99 s) at 2 s and the
+ * maxima recap (0.73 s) at 5 s scheduled ~130% of the radio, so positions
+ * slipped to ~2.1 s. At 6 s / 15 s the total is ~87%, leaving a quiet gap
+ * for GPS and IMU servicing (test_flight_cadence pins the budget). */
+#define POST_LAUNCH_PACKET_INTERVAL_SEC 6
 
 /* Fused-packet transmit cadence in LAUNCH state. Must exceed the fused
  * packet's air time. SF10/BW62.5k/CR4-8/8-sym-preamble with LDRO: the V3
