@@ -900,6 +900,11 @@ static uint8_t RF_SetChannelCtx(uint8_t channel, uint8_t new_context)
     bound_rocket_id = RF_ROCKET_UNBOUND;
     last_callsign_ms = 0;
     testing_build_suspect = 0;
+    /* The silence clock and the livelock count belonged to the previous
+     * channel's beacon: a manual pick must not be overridden by an auto
+     * re-acquire on their behalf. Contact on this channel re-arms both. */
+    last_identified_ms = 0;
+    foreign_lock_streak = 0;
   }
   return RF_OK;
 }

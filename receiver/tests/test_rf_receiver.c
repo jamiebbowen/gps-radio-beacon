@@ -1717,6 +1717,43 @@ TEST(test_auto_rescan_after_prolonged_silence)
     fake_cad_available = 0;   /* restore test-suite default */
 }
 
+TEST(test_manual_pick_holds_after_prolonged_silence)
+{
+    /* Our beacon went quiet 6 min ago (switched off, or another airframe
+     * is up next); the operator steps the channel by hand. That pick is a
+     * deliberate choice: the silence belonged to the previous channel's
+     * beacon, so the auto re-acquire must not fire and hop away from it. */
+    fake_mode = 5;
+    RF_Receiver_StopScan();
+    flight_contact_latch = 0;
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    GPS_Data gps;
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetGPSData(&gps) == RF_OK);
+    run_for(360000, 250);
+
+    RF_Receiver_StopScan();                       /* main.c's manual pick */
+    uint8_t picked = RF_Receiver_NextChannel();
+    for (int i = 0; i < 280; i++) {               /* 70 s */
+        run_for(250, 250);
+        (void)RF_Receiver_ScanUpdate();
+    }
+    CHECK(RF_Receiver_IsScanning() == 0);
+    CHECK(RF_Receiver_GetChannel() == picked);
+
+    /* A beacon heard on the picked channel re-arms the usual rule: five
+     * minutes of silence after that contact starts the re-acquire. */
+    inject_heartbeat(OUR_ROCKET_ID, picked, 7, 40);
+    run_for(250, 250);
+    run_for(301000, 250);
+    (void)RF_Receiver_ScanUpdate();
+    CHECK(RF_Receiver_IsScanning() == 1);
+
+    RF_Receiver_StopScan();                       /* restore default posture */
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+}
+
 /* ------------------------------------------------------------------ */
 /* Launch-day scenario battery                                          */
 /* ------------------------------------------------------------------ */
@@ -2532,6 +2569,7 @@ int main(void)
     run_test_diagnostics_getters();
     run_test_live_noise_floor_min_samples_and_min_pick();
     run_test_auto_rescan_after_prolonged_silence();
+    run_test_manual_pick_holds_after_prolonged_silence();
     run_test_foreign_beacon_filter();
     run_test_foreign_chatter_does_not_suppress_auto_rescan();
     run_test_sequential_rocket_livelock_breaker();
