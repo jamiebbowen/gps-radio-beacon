@@ -48,6 +48,9 @@ explicit `make -C receiver/firmware flash` or `make -C transmitter/firmware uplo
   resume (`flight_log_resume`), not re-arm.
 - **The TX sketch must end below `0x00040000`**, where the 256 KiB flight-log
   region (`FLOG_BASE`) starts.
+- **SAMD51 NVMCTRL takes byte addresses** (`NVMCTRL->ADDR = addr`; the SAMD21
+  `addr >> 1` convention silently writes elsewhere). The test fake models the
+  page buffer and byte ADDR; keep it that way.
 - Encode wire/flash integers with the saturating helpers in
   `transmitter/firmware/include/fixed_point.h`, never a bare cast.
 
