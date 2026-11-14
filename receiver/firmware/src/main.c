@@ -40,6 +40,7 @@
 #include "display_modes.h"
 #include "preflight_eval.h"
 #include "beacon_track.h"
+#include "rx_channel.h"
 #include "math_utils.h"
 #include "button.h"
 #include "sd_card.h"
@@ -699,12 +700,7 @@ int main(void)
     /* Start on the channel the receiver last locked: a beacon already in
      * its quiet pad sends one packet a minute, which the 62 s first dwell
      * there outwaits (a 6.5 s-per-channel lap catches it ~1 time in 8). */
-    uint8_t last_ch = 0;
-    if (sd_card_ok && SD_Card_LoadLastChannel(&last_ch) == SD_CARD_OK) {
-      RF_Receiver_StartScanFrom(last_ch);
-    } else {
-      RF_Receiver_StartScan();
-    }
+    RxChannel_StartScan(sd_card_ok);
   }
 
   /* The IWDG was armed at the top of boot; the loop just feeds it. */
@@ -810,21 +806,7 @@ int main(void)
       }
     }
     if (cycle_channel) {
-      /* A manual pick overrides the boot scan */
-      RF_Receiver_StopScan();
-      uint8_t before = RF_Receiver_GetChannel();
-      uint8_t after = RF_Receiver_NextChannel();
-      if (after != before) {
-        /* Everything received so far belongs to the previous rocket */
-        BeaconTrack_NewContext(&beacon);
-        if (sd_card_ok) {
-          char ch_msg[48];
-          snprintf(ch_msg, sizeof(ch_msg), "RF manual CH%u %.2fMHz",
-                   (unsigned)after, LORA_CHANNEL_FREQ_MHZ(after));
-          SD_Card_LogEvent(ch_msg);
-          (void)SD_Card_SaveLastChannel(after);   /* next boot scans here first */
-        }
-      }
+      (void)RxChannel_ManualStep(&beacon, sd_card_ok);
       mode_change_time = HAL_GetTick();
       force_display_update = 1;
     }
@@ -841,7 +823,7 @@ int main(void)
           /* With flight contact latched, stay parked on the rocket's
            * channel after the re-init instead of sweeping for it. */
           if (!RF_Receiver_FlightContactLatched()) {
-            RF_Receiver_StartScan();
+            RxChannel_StartScan(sd_card_ok);
           }
           if (sd_card_ok) {
             SD_Card_EnsureLogFile();
@@ -930,18 +912,7 @@ int main(void)
     }
 
     /* Drive the boot channel scan; returns 1 the moment a packet locks it */
-    if (rf_initialized && RF_Receiver_ScanUpdate()) {
-      if (sd_card_ok) {
-        char ch_msg[48];
-        uint8_t locked_ch = RF_Receiver_GetChannel();
-        snprintf(ch_msg, sizeof(ch_msg), "RF scan locked CH%u %.2fMHz",
-                 (unsigned)locked_ch, LORA_CHANNEL_FREQ_MHZ(locked_ch));
-        /* A lock proves a beacon is on the air; the lazily-created log file
-         * may not exist yet (no NAV row before the first position packet) */
-        SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(ch_msg);
-        (void)SD_Card_SaveLastChannel(locked_ch);   /* next boot scans here first */
-      }
+    if (rf_initialized && RxChannel_ServiceScan(sd_card_ok)) {
       force_display_update = 1;
     }
 
