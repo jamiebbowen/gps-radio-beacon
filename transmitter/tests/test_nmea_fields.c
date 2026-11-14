@@ -10,6 +10,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
@@ -160,6 +161,16 @@ TEST(test_checksum_rejects_missing_or_malformed) {
     CHECK(nmea_checksum_ok("$GPGGA,123519*") == 0);
     CHECK(nmea_checksum_ok("$GPGGA,123519*G") == 0);
     CHECK(nmea_checksum_ok("$GPGGA,123519*ZZ") == 0);
+    /* '*' as the very last byte of an exact-size heap buffer: the checker
+     * must stop at the NUL instead of reading the second hex digit past
+     * it (`make sanitize` turns the old over-read into a hard failure). */
+    {
+        const char *src = "$GPGGA,123519*";
+        char *exact = (char *)malloc(strlen(src) + 1);
+        strcpy(exact, src);
+        CHECK(nmea_checksum_ok(exact) == 0);
+        free(exact);
+    }
     /* Not an NMEA sentence */
     CHECK(nmea_checksum_ok(NULL) == 0);
     CHECK(nmea_checksum_ok("") == 0);

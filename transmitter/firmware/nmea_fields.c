@@ -84,9 +84,14 @@ int nmea_checksum_ok(const char *sentence) {
         return 0;  /* no checksum field: truncated or corrupt */
     }
 
+    /* Short-circuit: when '*' is the last character p[1] is the NUL
+     * terminator, and reading p[2] would run past the end of the string. */
     int hi = hex_val(p[1]);
+    if (hi < 0) {
+        return 0;
+    }
     int lo = hex_val(p[2]);
-    if (hi < 0 || lo < 0) {
+    if (lo < 0) {
         return 0;
     }
     return (uint8_t)((hi << 4) | lo) == cksum;

@@ -4,6 +4,7 @@
 #   make          - build and run all tests
 #   make coverage - re-run with gcov instrumentation and print line, branch
 #                   and call coverage for every firmware module
+#   make sanitize - re-run every test under ASan + UBSan + float-cast-overflow
 #   make clean    - remove build artifacts
 #
 # Firmware modules compile unmodified on the host: pure-logic modules link
@@ -30,7 +31,7 @@ BINS     := $(BUILD)/test_ekf $(BUILD)/test_nmea_fields $(BUILD)/test_beacon \
             $(BUILD)/test_airlink_roundtrip $(BUILD)/test_mainloop \
             $(BUILD)/test_flight_log $(BUILD)/test_fuzz_nmea
 
-.PHONY: all test coverage clean
+.PHONY: all test coverage sanitize clean
 
 all: test
 
@@ -184,6 +185,13 @@ coverage: clean $(BINS)
 	        | grep -A4 "File '../firmware/$$f'" | grep -v '^--$$'; \
 	done
 	@mv -f *.gcov $(BUILD)/ 2>/dev/null || true
+
+# Sanitizer run: every unit test rebuilt under ASan + UBSan, including
+# float-cast-overflow (NOT part of -fsanitize=undefined in GCC). Separate
+# build dir so it never mixes with plain/coverage objects.
+SAN_FLAGS := -fsanitize=address,undefined,float-cast-overflow -fno-sanitize-recover=all
+sanitize:
+	@$(MAKE) --no-print-directory BUILD=build-san COVFLAGS="$(SAN_FLAGS)" test
 
 clean:
 	rm -rf $(BUILD) build-san *.gcov *.gcda *.gcno

@@ -116,8 +116,11 @@ uint32_t gps_get_fix_age_ms(void) { return fake_fix_age; }
 
 float gps_nmea_to_decimal(const char *nmea_coord, char direction)
 {
-    /* Reference conversion: ddmm.mmmm -> decimal degrees */
+    /* Reference conversion: ddmm.mmmm -> decimal degrees. (int) of a
+     * non-finite value is UB, so "nan"/"inf" fields report NaN, which
+     * every caller rejects - the same contract as the firmware converter. */
     double v = atof(nmea_coord);
+    if (!isfinite(v)) return NAN;
     int deg = (int)(v / 100.0);
     double min = v - deg * 100.0;
     double out = deg + min / 60.0;

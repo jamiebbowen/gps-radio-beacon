@@ -5,6 +5,7 @@
 #   make transmitter       - build transmitter firmware
 #   make tools             - build host-side lfs_extract + lfs_format
 #   make test              - run host-side unit tests (receiver + transmitter)
+#   make sanitize          - same tests under ASan + UBSan + float-cast checks
 #   make extract DEV=/dev/sdX [OUT=./flight_data/<timestamp>]
 #                          - copy every file off a LittleFS-formatted SD card
 #                            into OUT/. Defaults to a fresh timestamped
@@ -30,7 +31,7 @@ TOOLS_DIR        := tools/lfs_extract
 # new bench session can never overwrite logs from a previous one.
 OUT ?= ./flight_data/$(shell date +%Y-%m-%d_%H%M%S)
 
-.PHONY: all receiver transmitter tools test tools-test tools-test-logs extract format-card clean help
+.PHONY: all receiver transmitter tools test sanitize tools-test tools-test-logs extract format-card clean help
 
 all: receiver tools
 
@@ -51,6 +52,11 @@ tools:
 test: tools-test
 	$(MAKE) -C receiver/tests test
 	$(MAKE) -C transmitter/tests test
+
+# Every host unit test again under ASan + UBSan + float-cast-overflow.
+sanitize:
+	$(MAKE) -C receiver/tests sanitize
+	$(MAKE) -C transmitter/tests sanitize
 
 # Unit tests for the host-side analysis tools run on synthetic logs and
 # work on any clone. The log-format regression smoke test below them

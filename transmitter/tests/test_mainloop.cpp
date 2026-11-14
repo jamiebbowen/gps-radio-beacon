@@ -200,6 +200,9 @@ int  radio_transmit_ack(uint8_t rocket_id, uint8_t cmd_code,
 float   gps_nmea_to_decimal(const char *n, char d)
 {
     double v = atof(n);
+    /* (int) of a non-finite value is UB: report it as NaN, which every
+     * caller rejects - the same contract as the firmware converter. */
+    if (!isfinite(v)) return NAN;
     int deg = (int)(v / 100.0);
     double out = deg + (v - deg * 100.0) / 60.0;
     if (d == 'S' || d == 'W') out = -out;
