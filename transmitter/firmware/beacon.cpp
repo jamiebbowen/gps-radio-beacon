@@ -1,4 +1,5 @@
 #include "include/beacon.h"
+#include "include/fixed_point.h"
 #include "include/config.h"
 #include "include/mpu_config.h"
 #include "include/radio.h"
@@ -283,11 +284,11 @@ uint8_t beacon_transmit_launch_t0(uint32_t system_time_seconds, uint8_t transmit
  * Transmit an inertial trace packet. Called at ~1 Hz during the flight
  * window. Feeds from the launch-detect layer's cached linear-accel + gyro.
  * peak/reset kept here so every packet reports peak-since-previous-packet.
- * The same value is handed to the on-chip flight log via
- * beacon_last_imu_peak_mg() right after this call in the main loop.
+ * The encoded packet is kept so the on-chip flight log stores exactly what
+ * went on the air (beacon_last_imu_trace(), right after this call).
  */
-static int16_t s_last_imu_peak_mg = 0;
-int16_t beacon_last_imu_peak_mg(void) { return s_last_imu_peak_mg; }
+static ImuTracePacket_t s_last_imu;
+void beacon_last_imu_trace(ImuTracePacket_t *out) { if (out) *out = s_last_imu; }
 
 uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast) {
     ImuTracePacket_t p;
@@ -295,32 +296,33 @@ uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast) {
     p.packet_type = PACKET_TYPE_IMU;
     p.rocket_id   = (uint8_t)ROCKET_ID;
     /* Millisecond-carrier timestamp (0..999) fused with the SD log's
-     * seconds-level Timestamp column on the receiver side. */
-    p.ts_ms       = (uint16_t)(millis() % 1000UL);
+     * seconds-level Timestamp column on the receiver side; bit 15 tells
+     * the receiver these are V3 units. */
+    p.ts_ms       = (uint16_t)((millis() % 1000UL) | IMU_TS_V3_FLAG);
 
     float ax, ay, az;
     launch_detect_get_accel_xyz(&ax, &ay, &az);
     float gx, gy, gz;
     launch_detect_get_gyro_rads(&gx, &gy, &gz);
 
-    p.accel_x_cg = (int16_t)lroundf(ax * 100.0f);
-    p.accel_y_cg = (int16_t)lroundf(ay * 100.0f);
-    p.accel_z_cg = (int16_t)lroundf(az * 100.0f);
-    /* Gyro from BNO085 calibrated report: radians/second. Convert to
-     * centi-deg/s: rad * 57.2958 * 100 = _deg * 5729.58 - under int16 when
-     * we're below 5.7 rad/s; clamps above (flutter past 327 deg/s stays
-     *  saturated - the story lies in the burst, not the absolute rate). */
-    p.gyro_x_cds = (int16_t)lroundf(gx * 5729.58f);
-    p.gyro_y_cds = (int16_t)lroundf(gy * 5729.58f);
-    p.gyro_z_cds = (int16_t)lroundf(gz * 5729.58f);
+    /* BNO085 linear accel (m/s^2) -> centi-g */
+    p.accel_x_cg = sat_i16(ax / MS2_PER_G * 100.0f);
+    p.accel_y_cg = sat_i16(ay / MS2_PER_G * 100.0f);
+    p.accel_z_cg = sat_i16(az / MS2_PER_G * 100.0f);
+    /* Calibrated gyro (rad/s) -> deci-deg/s. +-3276.7 deg/s covers the
+     * BNO085's +-2000 deg/s range (and the 1000 deg/s tumble alarm);
+     * anything beyond saturates instead of wrapping. */
+    p.gyro_x_dds = sat_i16(gx * DEG_PER_RAD * 10.0f);
+    p.gyro_y_dds = sat_i16(gy * DEG_PER_RAD * 10.0f);
+    p.gyro_z_dds = sat_i16(gz * DEG_PER_RAD * 10.0f);
 
-    /* Peak linear accel since last IMU packet */
-    static float peak_g = 0.0f;
-    float curr_g = launch_detect_get_current_accel();
-    if (curr_g > peak_g) peak_g = curr_g;
-    p.peak_accel_mg = (int16_t)lroundf(peak_g * 1000.0f);
-    s_last_imu_peak_mg = p.peak_accel_mg;
-    peak_g = 0.0f;
+    /* Peak linear accel (m/s^2) since the last IMU packet -> milli-g */
+    static float peak_ms2 = 0.0f;
+    float curr_ms2 = launch_detect_get_current_accel();
+    if (curr_ms2 > peak_ms2) peak_ms2 = curr_ms2;
+    p.peak_accel_mg = sat_i16(peak_ms2 / MS2_PER_G * 1000.0f);
+    peak_ms2 = 0.0f;
+    s_last_imu = p;
 
     if (!transmit_fast) {
         radio_enable();

@@ -149,21 +149,29 @@ typedef struct __attribute__((packed)) {
  * nothing else; peak accel + rotation rates are the only measurable
  * evidence of what came apart. V2 dropped temp_c10 (the BNO085 temp path
  * was never wired - a hardwired sentinel): 18 B crosses back under the
- * 987 ms airtime step vs. 1118 ms at 20 B. */
+ * 987 ms airtime step vs. 1118 ms at 20 B.
+ * V3 (bit 15 of ts_ms = IMU_TS_V3_FLAG) fixed the units: V2 firmware sent
+ * accel in cm/s^2 and peak in mm/s^2 under the centi-g / milli-g labels
+ * (9.8x too large; the peak wrapped above ~3.3 g) and gyro in centi-deg/s,
+ * wrapping above 327 deg/s. V3 values saturate instead of wrapping.
+ */
 typedef struct __attribute__((packed)) {
     uint8_t  packet_type;    // PACKET_TYPE_IMU
     uint8_t  rocket_id;
-    uint16_t ts_ms;          // ms within the last second (timestamp mod 1000)
+    uint16_t ts_ms;          // bits 9..0: ms within the second (0..999);
+                             // bit 15: IMU_TS_V3_FLAG
     int16_t  accel_x_cg;     // centi-g (1/100 g); BNO085 linear accel
     int16_t  accel_y_cg;
     int16_t  accel_z_cg;
-    int16_t  gyro_x_cds;     // centi-deg/s (1/100 deg/s)
-    int16_t  gyro_y_cds;
-    int16_t  gyro_z_cds;
+    int16_t  gyro_x_dds;     // deci-deg/s (0.1 deg/s, +-3276.7 deg/s)
+    int16_t  gyro_y_dds;
+    int16_t  gyro_z_dds;
     int16_t  peak_accel_mg;  // milli-g: highest |a| since previous IMU packet
 } ImuTracePacket_t;
-#define IMU_TRACE_PACKET_SIZE    18   /* V2                            */
+#define IMU_TRACE_PACKET_SIZE    18   /* V2/V3                         */
 #define IMU_TRACE_PACKET_SIZE_V1 20   /* legacy layout with temp_c10   */
+#define IMU_TS_V3_FLAG  0x8000u  /* ts_ms bit 15: V3 units (see above) */
+#define IMU_TS_MS_MASK  0x03FFu  /* ts_ms bits 9..0: ms within second  */
 
 /* FLIGHT_EVENT: 8 bytes. One packet type carries the certified one-shot
  * life-cycle events (apogee, drogue, main, landed) AND the flight-anomaly

@@ -65,10 +65,14 @@ uint8_t flight_log_resume(void);
  *  boot reads it as a power-on, not a mid-flight reset. */
 void flight_log_mark_landed(void);
 
-/** Raw IMU sample: centi-g and centi-deg/s, same units as the IMU packet. */
+/** IMU record format byte (rsv[0]): V3 units - centi-g, 0.1 deg/s,
+ *  milli-g, the same as the IMU trace packet. Pre-V3 records read 0. */
+#define FLOG_IMU_FMT_V3  3
+
+/** Raw IMU sample in V3 packet units (the encoded packet's own fields). */
 void flight_log_imu(uint32_t ms,
                     int16_t ax_cg, int16_t ay_cg, int16_t az_cg,
-                    int16_t gx_cds, int16_t gy_cds, int16_t gz_cds,
+                    int16_t gx_dds, int16_t gy_dds, int16_t gz_dds,
                     int16_t peak_mg);
 void flight_log_gps(uint32_t ms,
                     int32_t lat_e7, int32_t lon_e7, int16_t alt_m,

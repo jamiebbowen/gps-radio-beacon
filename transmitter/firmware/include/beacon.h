@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "gps.h"
+#include "packet_format.h"
 
 // Beacon transmission functions
 uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast_flag);
@@ -26,7 +27,8 @@ uint8_t beacon_transmit_imu_trace(uint8_t transmit_fast_flag);
  * log records its IMU sample immediately after beacon_transmit_imu_trace,
  * so this getter puts the SAME peak on the crash-survivable copy as went
  * over the air (previously the flash record's peak was hardwired to 0). */
-int16_t beacon_last_imu_peak_mg(void);
+/** Copy of the last IMU trace packet transmitted (for the flash log). */
+void    beacon_last_imu_trace(ImuTracePacket_t *out);
 void beacon_poll_commands(uint8_t in_flight);
 
 /* Certified flight events (PACKET_TYPE_FLIGHT_EVENT). Queue an edge with

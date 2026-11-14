@@ -174,6 +174,21 @@ TEST(test_ballistic_after_grace_and_clear_hysteresis)
     CHECK(!flight_events_anomaly_active());
 }
 
+TEST(test_anomaly_value_saturates_not_wraps)
+{
+    /* A supersonic ballistic descent (400 m/s = 40000 cm/s) must pin the
+     * int16 value at +32767; a bare cast wrapped it to -25536, which reads
+     * as a fast CLIMB in the debris-track context. */
+    reset();
+    scenario_airborne(1);
+    in.v_d_ms = 3.0f;
+    run_ms(2000, 100);              /* apogee */
+    in.v_d_ms = 400.0f;
+    CHECK(run_ms(ANOM_BALLISTIC_GRACE_S * 1000U + 2000, 100)
+          == FLIGHT_EVENT_ANOM_BALLISTIC);
+    CHECK(ev_value == INT16_MAX);
+}
+
 TEST(test_ballistic_grace_recovers_if_drogue_opens_late)
 {
     reset();
@@ -265,6 +280,7 @@ int main(void)
     run_test_drogue_then_main_step_down();
     run_test_main_needs_a_real_prior_descent();
     run_test_ballistic_after_grace_and_clear_hysteresis();
+    run_test_anomaly_value_saturates_not_wraps();
     run_test_ballistic_grace_recovers_if_drogue_opens_late();
     run_test_tumble_and_sensor_and_gps_outage();
     run_test_anomaly_priority_is_worst_first();

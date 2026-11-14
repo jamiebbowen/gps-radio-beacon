@@ -8,6 +8,7 @@
 #include "include/uart.h"
 #include "include/launch_detect.h"
 #include "include/beacon.h"
+#include "include/fixed_point.h"
 #include "include/nav.h"
 #include "include/flight_cadence.h"
 #include "include/flight_events.h"
@@ -383,7 +384,7 @@ void loop() {
             (now_evt_ms - last_anom_announce_ms) >= ANOM_EVENT_REPEAT_MS) {
             last_anom_announce_ms = now_evt_ms;
             beacon_queue_flight_event(flight_events_anomaly_code(),
-                                      (int16_t)lroundf(f.v_d * 100.0f), 1);
+                                      sat_i16(f.v_d * 100.0f), 1);
         }
     }
 
@@ -471,20 +472,15 @@ void loop() {
 
             /* And the same trace goes to the crash-survivable chip flash —
              * even if nobody hears it over the air, a post-scavenger probe
-             * can read back WHAT the airframe was doing up to the cut. */
+             * can read back WHAT the airframe was doing up to the cut.
+             * Field-for-field the packet just transmitted. */
             {
-                float ax, ay, az, gx, gy, gz;
-                launch_detect_get_accel_xyz(&ax, &ay, &az);
-                launch_detect_get_gyro_rads(&gx, &gy, &gz);
-                /* Same peak as the RF packet just transmitted. */
+                ImuTracePacket_t im;
+                beacon_last_imu_trace(&im);
                 flight_log_imu(millis(),
-                               (int16_t)lroundf(ax * 100.0f),
-                               (int16_t)lroundf(ay * 100.0f),
-                               (int16_t)lroundf(az * 100.0f),
-                               (int16_t)lroundf(gx * 5729.58f),
-                               (int16_t)lroundf(gy * 5729.58f),
-                               (int16_t)lroundf(gz * 5729.58f),
-                               beacon_last_imu_peak_mg());
+                               im.accel_x_cg, im.accel_y_cg, im.accel_z_cg,
+                               im.gyro_x_dds, im.gyro_y_dds, im.gyro_z_dds,
+                               im.peak_accel_mg);
             }
 
             /* GPS-hole forensics: when the fix goes stale the fused EKF
@@ -495,13 +491,15 @@ void loop() {
                 NavFused_t fz;
                 nav_get_fused(&fz);
                 if (fz.valid && !fz.gps_fresh) {
+                    /* Saturating: a bare int16 cast wrapped above
+                     * 327 m/s (a Mach-0.99 flight read as climbing). */
                     flight_log_fused(millis(),
-                                     (int32_t)lroundf(fz.lat_deg * 10000000.0f),
-                                     (int32_t)lroundf(fz.lon_deg * 10000000.0f),
-                                     (int16_t)lroundf(fz.alt_m),
-                                     (int16_t)lroundf(fz.v_n * 100.0f),
-                                     (int16_t)lroundf(fz.v_e * 100.0f),
-                                     (int16_t)lroundf(fz.v_d * 100.0f),
+                                     sat_i32((double)fz.lat_deg * 1e7),
+                                     sat_i32((double)fz.lon_deg * 1e7),
+                                     sat_i16(fz.alt_m),
+                                     sat_i16(fz.v_n * 100.0f),
+                                     sat_i16(fz.v_e * 100.0f),
+                                     sat_i16(fz.v_d * 100.0f),
                                      (uint8_t)((fz.gps_fresh      ? 0x01 : 0) |
                                                (fz.dead_reckoning ? 0x02 : 0) |
                                                (fz.imu_healthy    ? 0x04 : 0)));

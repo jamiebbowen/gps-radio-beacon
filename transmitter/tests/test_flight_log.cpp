@@ -298,10 +298,11 @@ TEST(page_boundary_commit_is_byte_exact)
     CHECK(r0->f.p.imu.a_x_cg == 100);
     CHECK(r0->f.p.imu.a_y_cg == -200);
     CHECK(r0->f.p.imu.a_z_cg == 300);
-    CHECK(r0->f.p.imu.g_x_cds == 4000);
-    CHECK(r0->f.p.imu.g_y_cds == -5000);
-    CHECK(r0->f.p.imu.g_z_cds == 6000);
+    CHECK(r0->f.p.imu.g_x_dds == 4000);
+    CHECK(r0->f.p.imu.g_y_dds == -5000);
+    CHECK(r0->f.p.imu.g_z_dds == 6000);
     CHECK(r0->f.p.imu.peak_mg == 5000);
+    CHECK(r0->f.rsv[0] == FLOG_IMU_FMT_V3);       /* units format byte */
     const flog_rec_t *rl = flash_rec(RECS_PER_PAGE - 1);
     CHECK(rl->f.ms == 2000 + RECS_PER_PAGE - 1);
     CHECK(rl->f.p.imu.peak_mg == 5000 + (int16_t)(RECS_PER_PAGE - 1));
@@ -449,8 +450,9 @@ TEST(dump_emits_csv_for_flushed_records_only)
     flight_log_dump_serial();
 
     CHECK(strstr(Serial.log, "ms,kind,ax,ay,az,gx,gy,gz,peak") != nullptr);
-    CHECK(strstr(Serial.log, "1234,1,100,-200,300,4000,-5000,6000,5000")
-          != nullptr);                                      /* IMU row  */
+    CHECK(strstr(Serial.log, "# kind 1 (IMU)") != nullptr);  /* units note */
+    CHECK(strstr(Serial.log, "1234,1,100,-200,300,4000,-5000,6000,5000,3")
+          != nullptr);                                      /* IMU row + fmt */
     CHECK(strstr(Serial.log, "1235,2,398900000,-1048851712,1655,8,1")
           != nullptr);                                      /* GPS row  */
     CHECK(strstr(Serial.log, "1236,3") != nullptr);          /* marker row */
@@ -460,11 +462,12 @@ TEST(dump_emits_csv_for_flushed_records_only)
           != nullptr);                                        /* fused row */
     CHECK(strstr(Serial.log, "7777") == nullptr);            /* unflushed */
     CHECK(strstr(Serial.log, "0x") == nullptr);
-    /* exactly header + the 16 flushed records + the FLYING marker row:
-     * erased space is skipped, the marker is a real record */
+    /* exactly the 3-line units note + header + the 16 flushed records +
+     * the FLYING marker row: erased space is skipped, the marker is a
+     * real record */
     int lines = 0;
     for (const char *p = Serial.log; *p; p++) if (*p == '\n') lines++;
-    CHECK(lines == 1 + (int)RECS_PER_PAGE + 1);
+    CHECK(lines == 3 + 1 + (int)RECS_PER_PAGE + 1);
     CHECK(strstr(Serial.log, "0,10,1,0") != nullptr);      /* state row */
 
     /* The dump feeds the WDT once per record slot - without that the

@@ -535,9 +535,9 @@ static void inject_imu_trace(uint8_t rocket_id, uint16_t ts_ms,
         .accel_x_cg  = ax_cg,
         .accel_y_cg  = -50,       /* moved off 0 so we can check fields */
         .accel_z_cg  = az_cg,
-        .gyro_x_cds  = 12,
-        .gyro_y_cds  = 34,
-        .gyro_z_cds  = -56,
+        .gyro_x_dds  = 12,
+        .gyro_y_dds  = 34,
+        .gyro_z_dds  = -56,
         .peak_accel_mg = 31000,
         .temp_c10    = 250,
     };
@@ -809,7 +809,7 @@ TEST(test_imu_trace_and_launch_t0)
     CHECK(out.rocket_id == OUR_ROCKET_ID);
     CHECK(out.ts_ms == 500);
     CHECK(out.accel_x_cg == 6234 && out.accel_z_cg == -9800);
-    CHECK(out.gyro_y_cds == 34);
+    CHECK(out.gyro_y_dds == 34);
     CHECK(out.peak_accel_mg == 31000);
     CHECK(out.temp_c10 == 0);    /* V2 wire has no temp field (zero-filled) */
     CHECK(RF_Receiver_GetImuTrace(&out) == 0);    /* one-shot */

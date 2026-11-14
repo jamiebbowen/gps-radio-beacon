@@ -89,7 +89,7 @@ typedef union {
         union {
             struct {
                 int16_t  a_x_cg, a_y_cg, a_z_cg;
-                int16_t  g_x_cds, g_y_cds, g_z_cds;   /* IMU */
+                int16_t  g_x_dds, g_y_dds, g_z_dds;   /* IMU */
                 int16_t  peak_mg;
             } imu;                                    /* 14 B */
             struct {
@@ -255,7 +255,7 @@ static void flog_append_record(const flog_rec_t *rec)
 
 void flight_log_imu(uint32_t ms,
                     int16_t ax_cg, int16_t ay_cg, int16_t az_cg,
-                    int16_t gx_cds, int16_t gy_cds, int16_t gz_cds,
+                    int16_t gx_dds, int16_t gy_dds, int16_t gz_dds,
                     int16_t peak_mg)
 {
     flog_rec_t r;
@@ -263,8 +263,9 @@ void flight_log_imu(uint32_t ms,
     r.f.magic = FLOG_MAGIC;
     r.f.ms = ms;
     r.f.kind = FLOG_KIND_IMU;
+    r.f.rsv[0] = FLOG_IMU_FMT_V3;   /* 0 on records from pre-V3 firmware */
     r.f.p.imu.a_x_cg = ax_cg; r.f.p.imu.a_y_cg = ay_cg; r.f.p.imu.a_z_cg = az_cg;
-    r.f.p.imu.g_x_cds = gx_cds; r.f.p.imu.g_y_cds = gy_cds; r.f.p.imu.g_z_cds = gz_cds;
+    r.f.p.imu.g_x_dds = gx_dds; r.f.p.imu.g_y_dds = gy_dds; r.f.p.imu.g_z_dds = gz_dds;
     r.f.p.imu.peak_mg = peak_mg;
     flog_append_record(&r);
 }
@@ -327,6 +328,9 @@ void flight_log_dump_serial(void)
     /* Parse records linearly over the whole region; skip magic-only padding.
      * 8192 records at 115200 baud is a ~40 s printout - the 16 s WDT would
      * reboot mid-dump, so feed it on every record (a 2-op register poke). */
+    Serial.println(F("# kind 1 (IMU): ax,ay,az centi-g; gx,gy,gz 0.1 deg/s; peak milli-g;"));
+    Serial.println(F("#   last column fmt: 3 = these units, 0 = pre-V3 firmware (cm/s^2,"));
+    Serial.println(F("#   0.01 deg/s, mm/s^2 - may have wrapped)"));
     Serial.println(F("ms,kind,ax,ay,az,gx,gy,gz,peak,stat_everything"));
     for (uint32_t off = 0; off < FLOG_BYTES; off += FLOG_RECORD) {
         watchdog_feed();
@@ -338,10 +342,11 @@ void flight_log_dump_serial(void)
             Serial.print(r->f.p.imu.a_x_cg); Serial.print(',');
             Serial.print(r->f.p.imu.a_y_cg); Serial.print(',');
             Serial.print(r->f.p.imu.a_z_cg); Serial.print(',');
-            Serial.print(r->f.p.imu.g_x_cds);Serial.print(',');
-            Serial.print(r->f.p.imu.g_y_cds);Serial.print(',');
-            Serial.print(r->f.p.imu.g_z_cds);Serial.print(',');
-            Serial.print(r->f.p.imu.peak_mg);
+            Serial.print(r->f.p.imu.g_x_dds);Serial.print(',');
+            Serial.print(r->f.p.imu.g_y_dds);Serial.print(',');
+            Serial.print(r->f.p.imu.g_z_dds);Serial.print(',');
+            Serial.print(r->f.p.imu.peak_mg);Serial.print(',');
+            Serial.print(r->f.rsv[0]);
         } else if (r->f.kind == FLOG_KIND_GPS) {
             Serial.print(r->f.p.gps.lat_e7); Serial.print(',');
             Serial.print(r->f.p.gps.lon_e7); Serial.print(',');

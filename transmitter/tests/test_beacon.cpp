@@ -560,9 +560,9 @@ TEST(test_maxima_packet_contents)
 TEST(test_imu_trace_packet_contents)
 {
     reset_tx();
-    fake_ax = 0.55f; fake_ay = -1.25f; fake_az = 0.0f;
-    fake_gx = 0.01f; fake_gy = -0.02f; fake_gz = 0.0f;
-    fake_total_accel = 1.35f;
+    fake_ax = 0.55f; fake_ay = -1.25f; fake_az = 0.0f;     /* m/s^2 */
+    fake_gx = 0.01f; fake_gy = -0.02f; fake_gz = 0.0f;     /* rad/s */
+    fake_total_accel = 1.35f;                              /* m/s^2 */
 
     CHECK(beacon_transmit_imu_trace(0) == 1);
     CHECK(tx_len == sizeof(ImuTracePacket_t));
@@ -570,23 +570,55 @@ TEST(test_imu_trace_packet_contents)
     const ImuTracePacket_t *im = (const ImuTracePacket_t *)tx_buf;
     CHECK(im->packet_type == PACKET_TYPE_IMU);
     CHECK(im->rocket_id   == ROCKET_ID);
-    CHECK(im->accel_x_cg  == 55);
-    CHECK(im->accel_y_cg  == -125);
+    /* V3 marker + ms-within-second carrier */
+    CHECK((im->ts_ms & IMU_TS_V3_FLAG) != 0);
+    CHECK((im->ts_ms & IMU_TS_MS_MASK) < 1000);
+    /* True centi-g: 0.55 m/s^2 = 0.0561 g (V2 sent 55, i.e. cm/s^2) */
+    CHECK(im->accel_x_cg  == 6);
+    CHECK(im->accel_y_cg  == -13);
     CHECK(im->accel_z_cg  == 0);
-    CHECK(im->gyro_x_cds  == 57);                     /* 0.01 rad/s */
-    CHECK(im->gyro_y_cds  == -115);                   /* -0.02 rad/s */
-    CHECK(im->peak_accel_mg == 1350);
-    /* The flash flight log reads the same peak via this getter right after
-     * transmit, both copies of the peak must agree. */
-    CHECK(beacon_last_imu_peak_mg() == im->peak_accel_mg);
+    /* deci-deg/s: 0.01 rad/s = 0.573 deg/s */
+    CHECK(im->gyro_x_dds  == 6);
+    CHECK(im->gyro_y_dds  == -11);
+    CHECK(im->peak_accel_mg == 138);                  /* 1.35 m/s^2 */
+    /* The flash flight log copies the packet just sent, field for field */
+    ImuTracePacket_t copy;
+    beacon_last_imu_trace(&copy);
+    CHECK(memcmp(&copy, im, sizeof(copy)) == 0);
+    beacon_last_imu_trace(NULL);                      /* null-safe */
 
     /* Peak resets after transmit; next one captures fresh only */
     fake_total_accel = 0.5f;
     now_ms += 1000;
     CHECK(beacon_transmit_imu_trace(0) == 1);
     im = (const ImuTracePacket_t *)tx_buf;
-    CHECK(im->peak_accel_mg == 500);
-    CHECK(beacon_last_imu_peak_mg() == 500);
+    CHECK(im->peak_accel_mg == 51);
+    beacon_last_imu_trace(&copy);
+    CHECK(copy.peak_accel_mg == 51);
+}
+
+TEST(test_imu_trace_saturates_never_wraps)
+{
+    /* V2 wrapped: a 6 rad/s spin read -31159 and a 10 g boost peak read
+     * as a negative number. V3 pins at the int16 limits instead. */
+    reset_tx();
+    fake_ax = 5000.0f; fake_ay = -5000.0f; fake_az = NAN;   /* > 327 g */
+    fake_gx = 60.0f;   fake_gy = -60.0f;   fake_gz = 6.0f;  /* rad/s */
+    fake_total_accel = 40.0f * 9.80665f;                    /* 40 g */
+
+    CHECK(beacon_transmit_imu_trace(1) == 1);
+    const ImuTracePacket_t *im = (const ImuTracePacket_t *)tx_buf;
+    CHECK(im->accel_x_cg == INT16_MAX);
+    CHECK(im->accel_y_cg == INT16_MIN);
+    CHECK(im->accel_z_cg == 0);                   /* NaN -> 0, no UB */
+    CHECK(im->gyro_x_dds == INT16_MAX);           /* 3438 deg/s */
+    CHECK(im->gyro_y_dds == INT16_MIN);
+    CHECK(im->gyro_z_dds == 3438);                /* 6 rad/s fits now */
+    CHECK(im->peak_accel_mg == INT16_MAX);        /* 40 g > 32.767 g */
+
+    fake_ax = fake_ay = fake_az = 0.0f;
+    fake_gx = fake_gy = fake_gz = 0.0f;
+    fake_total_accel = 0.0f;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1017,6 +1049,7 @@ int main(void)
     run_test_hello_packet_contents();
     run_test_maxima_packet_contents();
     run_test_imu_trace_packet_contents();
+    run_test_imu_trace_saturates_never_wraps();
     run_test_fused_not_anchored_no_tx();
     run_test_fused_packet_fields();
     run_test_fused_velocity_clamps_and_flags();

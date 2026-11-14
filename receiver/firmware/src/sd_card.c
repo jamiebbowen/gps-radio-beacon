@@ -631,7 +631,7 @@ SD_Card_Status SD_Card_LogImuTrace(const ImuTracePacket_t *imu, int16_t rssi,
              "%s,IMU,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
              ts, (unsigned)imu->ts_ms,
              (int)imu->accel_x_cg, (int)imu->accel_y_cg, (int)imu->accel_z_cg,
-             (int)imu->gyro_x_cds, (int)imu->gyro_y_cds, (int)imu->gyro_z_cds,
+             (int)imu->gyro_x_dds, (int)imu->gyro_y_dds, (int)imu->gyro_z_dds,
              (int)imu->peak_accel_mg, (int)imu->temp_c10, (int)rssi, (int)snr);
     return SD_Card_WriteLogEntry(log_buffer);
 }

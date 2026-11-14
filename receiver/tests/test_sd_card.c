@@ -352,7 +352,7 @@ TEST(test_all_log_row_formats)
     ImuTracePacket_t imu; memset(&imu, 0, sizeof(imu));
     imu.ts_ms = 512;
     imu.accel_x_cg = 55;  imu.accel_y_cg = -125; imu.accel_z_cg = 980;
-    imu.gyro_x_cds = 57;  imu.gyro_y_cds = -114; imu.gyro_z_cds = 12;
+    imu.gyro_x_dds = 57;  imu.gyro_y_dds = -114; imu.gyro_z_dds = 12;
     imu.peak_accel_mg = 1350; imu.temp_c10 = 231;
     CHECK(SD_Card_LogImuTrace(&imu, -95, -12) == SD_CARD_OK);
     CHECK(SD_Card_LogImuTrace(NULL, 0, 0) == SD_CARD_ERROR);

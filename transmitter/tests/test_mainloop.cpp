@@ -76,6 +76,8 @@ static uint32_t tx_other = 0;
 static uint32_t radio_enables = 0, radio_disables = 0;
 static uint8_t  radio_enabled_flag = 0;
 static int      tx_result = 0;
+static uint8_t  last_imu_pkt[IMU_TRACE_PACKET_SIZE];  /* newest IMU on air */
+static uint8_t  have_last_imu = 0;
 
 void radio_enable(void)  { radio_enables++; radio_enabled_flag = 1; }
 void radio_disable(void) { radio_disables++; radio_enabled_flag = 0; }
@@ -89,6 +91,10 @@ int transmit_packet(const uint8_t *data, size_t length)
         tx_by_type[t]++;
         if (t == PACKET_TYPE_FLIGHT_EVENT && length >= 3)
             fev_code_count[data[2]]++;      /* code field, offset 2 */
+        if (t == PACKET_TYPE_IMU && length == sizeof(last_imu_pkt)) {
+            memcpy(last_imu_pkt, data, sizeof(last_imu_pkt));
+            have_last_imu = 1;
+        }
     } else if (t >= 0x20 && t <= 0x7E) {
         tx_callsigns++;              /* printable = callsign text */
     } else {
@@ -161,8 +167,14 @@ static uint32_t flog_gps_calls = 0;
 static uint32_t flog_event_calls = 0;
 void     flight_log_init(void) {}
 void     flight_log_arm(void) { flog_armed_count++; }
-void     flight_log_imu(uint32_t ms, int16_t, int16_t, int16_t, int16_t, int16_t, int16_t, int16_t)
-         { (void)ms; flog_imu_calls++; }
+static int16_t  flog_imu_last[7];   /* ax, ay, az, gx, gy, gz, peak */
+void     flight_log_imu(uint32_t ms, int16_t ax, int16_t ay, int16_t az,
+                        int16_t gx, int16_t gy, int16_t gz, int16_t pk)
+{
+    (void)ms; flog_imu_calls++;
+    int16_t v[7] = { ax, ay, az, gx, gy, gz, pk };
+    memcpy(flog_imu_last, v, sizeof(v));
+}
 void     flight_log_gps(uint32_t ms, int32_t, int32_t, int16_t, uint8_t, uint8_t)
          { (void)ms; flog_gps_calls++; }
 void     flight_log_event(uint32_t ms, uint8_t kind)
@@ -377,6 +389,21 @@ int main(void)
     uint32_t mxs = type_count(PACKET_TYPE_MAXIMA) - mx0;
     CHECK(fus == 20);                             /* 1500 ms cadence exactly */
     CHECK((imu == 15 || imu == 16));              /* 2 s paced inertial stream */
+    /* The flash copy is the packet that went on the air, field for field
+     * (it used to be re-derived with different, wrapping conversions). */
+    CHECK(have_last_imu == 1);
+    {
+        ImuTracePacket_t onair;
+        memcpy(&onair, last_imu_pkt, sizeof(onair));
+        CHECK((onair.ts_ms & IMU_TS_V3_FLAG) != 0);
+        CHECK(flog_imu_last[0] == onair.accel_x_cg &&
+              flog_imu_last[1] == onair.accel_y_cg &&
+              flog_imu_last[2] == onair.accel_z_cg &&
+              flog_imu_last[3] == onair.gyro_x_dds &&
+              flog_imu_last[4] == onair.gyro_y_dds &&
+              flog_imu_last[5] == onair.gyro_z_dds &&
+              flog_imu_last[6] == onair.peak_accel_mg);
+    }
     CHECK(mxs >= 5 && mxs <= 7);                  /* 5 s maxima recap cadence */
     CHECK(flog_gps_calls_value() >= 14);          /* GPS rows landing in the flash log */
     /* Raw GPS position packets stop on air - fused+IMU carry the invade */

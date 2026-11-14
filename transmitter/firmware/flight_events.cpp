@@ -1,4 +1,5 @@
 #include "include/flight_events.h"
+#include "include/fixed_point.h"
 #include <math.h>
 #include <string.h>
 
@@ -40,7 +41,7 @@ static int held(uint32_t *timer, int cond, uint32_t now_ms, uint32_t hold_ms)
     return (uint32_t)(now_ms - *timer) >= hold_ms;
 }
 
-static int16_t cms(float v) { return (int16_t)lroundf(v * 100.0f); }
+static int16_t cms(float v) { return sat_i16(v * 100.0f); }   /* never wraps */
 
 static uint8_t current_anomaly_code(void)
 {
@@ -114,7 +115,7 @@ uint8_t flight_events_feed(const flight_events_input_t *in,
             float alt = in->alt_m;
             if (alt > 32767.0f) alt = 32767.0f;
             if (alt < -32768.0f) alt = -32768.0f;
-            s.pend_apogee_val = (int16_t)lroundf(alt);
+            s.pend_apogee_val = sat_i16(alt);
             s.max_vd_since_apogee = in->v_d_ms;
         }
 
