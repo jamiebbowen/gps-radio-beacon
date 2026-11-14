@@ -491,14 +491,6 @@ int main(void)
     Display_Update();
     HAL_Delay(3000);
 
-    /* A watchdog-forced reboot must never pass for a normal boot: it means
-     * the firmware hung for 32 s. Leave durable evidence, then clear the
-     * reset flags so the next boot reads clean. */
-    if (sd_card_ok && (RCC->CSR & RCC_CSR_IWDGRSTF)) {
-      SD_Card_EnsureLogFile();
-      SD_Card_LogError("Boot after IWDG watchdog reset (firmware hang)");
-    }
-
     /* Log file is created lazily on the first RF packet (see
      * SD_Card_LogNavigation in sd_card.c) - with one current exception:
      * the boot noise sweep below ensures the file when the scan is still
@@ -624,11 +616,16 @@ int main(void)
       (csr & RCC_CSR_BORRSTF)  ? "BOR"   :
       (csr & RCC_CSR_PINRSTF)  ? "PIN"   : "UNK";
     SD_Card_EnsureLogFile();
-    char rst_msg[48];
+    char rst_msg[64];
     Sys_MeasureVdd();   /* boot rail check: pairs with src=BOR events */
-    snprintf(rst_msg, sizeof(rst_msg), "RESET src=%s vdd=%umV", src,
-             (unsigned)sys_vdd_mv);
-    SD_Card_LogEvent(rst_msg);
+    /* A watchdog-forced reboot must never pass for a normal boot: it means
+     * the firmware hung for 32 s, so it is logged as an ERROR row. (This
+     * used to be a second, separate IWDG row.) */
+    uint8_t wd_reset = (csr & (RCC_CSR_IWDGRSTF | RCC_CSR_WWDGRSTF)) ? 1 : 0;
+    snprintf(rst_msg, sizeof(rst_msg), "RESET src=%s vdd=%umV%s", src,
+             (unsigned)sys_vdd_mv, wd_reset ? " (firmware hang)" : "");
+    if (wd_reset) SD_Card_LogError(rst_msg);
+    else          SD_Card_LogEvent(rst_msg);
     /* Note: idle-level diagnostics live in the main loop (500 ms delay)
      * so the weak internal pull-up has settled past ADC-credible. */
   }
@@ -1375,13 +1372,6 @@ int main(void)
       }
     }
     
-    /* If we don't have valid current GPS data but have last known good data,
-       use that for navigation calculations */
-    if (!has_valid_local_gps && has_last_good_local_gps) {
-      /* Use last known good GPS data for navigation, but keep current data for display */
-      /* This allows navigation to continue while showing the current GPS status */
-    }
-    
     /* One-shot SD breadcrumbs for "why was the handheld's fix slow?" The
      * first-fix event records the time; the 120 s no-fix snapshot records
      * the sat count, which distinguishes a silent module/UART (sats 0)
@@ -1845,8 +1835,9 @@ int main(void)
     }
       
     default:
-      /* Unknown mode, reset to GPS */
-      display_mode = DISPLAY_MODE_GPS;
+      /* Unknown mode, reset to GPS (the real state - display_mode is
+       * only this pass's local copy) */
+      current_display_mode = DISPLAY_MODE_GPS;
       break;
   }
   
