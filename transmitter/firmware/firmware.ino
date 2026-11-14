@@ -84,23 +84,23 @@
 // Beacon state machine variables
 #if BENCH_TEST_FORCE_LAUNCH
 // Bench test: boot straight into continuous-TX LAUNCH mode. See config.h.
-volatile beacon_state_t beacon_state = BEACON_STATE_LAUNCH;
-volatile uint8_t transmit_beacon_flag = 1;
-volatile uint8_t transmit_callsign_flag = 1;
-volatile uint8_t transmit_fast_flag = 1;
+beacon_state_t beacon_state = BEACON_STATE_LAUNCH;
+uint8_t transmit_beacon_flag = 1;
+uint8_t transmit_callsign_flag = 1;
+uint8_t transmit_fast_flag = 1;
 #else
-volatile beacon_state_t beacon_state = BEACON_STATE_TURN_ON;
-volatile uint8_t transmit_beacon_flag = 1;
-volatile uint8_t transmit_callsign_flag = 1;
-volatile uint8_t transmit_fast_flag = 0;
+beacon_state_t beacon_state = BEACON_STATE_TURN_ON;
+uint8_t transmit_beacon_flag = 1;
+uint8_t transmit_callsign_flag = 1;
+uint8_t transmit_fast_flag = 0;
 #endif
-volatile uint32_t system_time_seconds = 0;
-volatile uint32_t last_transmission_time = 0;
-volatile uint32_t time_since_last_callsign_tx = 0;
-volatile uint32_t post_launch_start_time = 0;
+uint32_t system_time_seconds = 0;
+uint32_t last_transmission_time = 0;
+uint32_t last_callsign_tx_s = 0;
+uint32_t post_launch_start_time = 0;
 
 // Counter for 1-second timer
-volatile uint16_t ms_counter = 0;
+uint16_t ms_counter = 0;
 
 // Timer interrupt handler - called every 1ms
 void timer_isr_handler(void) {
@@ -170,7 +170,7 @@ void watchdog_feed(void) {
 /* Reset-cause forensics: captured before anything can disturb RSTC, sent
  * out with every heartbeat (V3 field). The receiver logs a row when a
  * cause other than plain POR kicks in mid-flight (brown-out or WD hung). */
-volatile uint8_t g_boot_rcause = 0;
+uint8_t g_boot_rcause = 0;
 
 void setup() {
     g_boot_rcause = RSTC->RCAUSE.reg;   /* survives the reset, capture first */
@@ -234,7 +234,7 @@ void setup() {
             /* Reboot evidence lands first in the appended stream so the
              * NAND record reads "...last pre-reset record, BOOT(rcause),
              * first post-reset record". */
-            flight_log_event_ex(millis(), 8 /* boot reset cause */,
+            flight_log_event_ex(millis(), FLOG_KIND_BOOT,
                                 (uint8_t)(g_boot_rcause & 0xFF), 0);
         }
         Serial.println(F("[Boot] *** mid-flight reboot: resuming flight ***"));
@@ -252,7 +252,7 @@ void setup() {
      * the fast/LAUNCH phase. Passing the pending-TX flag here skipped
      * radio_enable() whenever a beacon TX happened to be queued. */
     beacon_transmit_callsign(transmit_fast_flag);
-    time_since_last_callsign_tx = system_time_seconds;
+    last_callsign_tx_s = system_time_seconds;
 
     /* Firmware identity on the air right behind the callsign: the ground
      * log's TXBOOT row names the exact build that flew (hash + dirty bit). */
@@ -322,7 +322,7 @@ void loop() {
                 transmit_fast_flag = 0;
                 radio_disable();
                 beacon_queue_flight_event(FLIGHT_EVENT_LANDED, 0, FLIGHT_EVENT_REPEATS);
-                flight_log_event(millis(), 4 /* landed */);
+                flight_log_event(millis(), FLOG_KIND_LANDED);
                 /* Flip the state row to LANDED so a power cycle during
                  * recovery boots as a pad power-on instead of resuming a
                  * finished flight. */
@@ -374,7 +374,7 @@ void loop() {
         uint8_t ev = flight_events_feed(&ev_in, now_evt_ms, &ev_value);
         if (ev != FLIGHT_EVENT_NONE) {
             beacon_queue_flight_event(ev, ev_value, FLIGHT_EVENT_REPEATS);
-            flight_log_event_ex(now_evt_ms, 5 /* flight event / anomaly */,
+            flight_log_event_ex(now_evt_ms, FLOG_KIND_FLIGHT_EVENT,
                                 ev, ev_value);
             if (FLIGHT_EVENT_IS_ANOMALY(ev)) {
                 last_anom_announce_ms = now_evt_ms;
@@ -411,13 +411,13 @@ void loop() {
          * opening. */
         beacon_transmit_launch_t0(system_time_seconds, /*fast=*/1);
         flight_log_arm();
-        flight_log_event(millis(), 3 /* launch */);
+        flight_log_event(millis(), FLOG_KIND_LAUNCH);
         /* Reboot evidence at the top of the new flight's record: a brown-out
          * or watchdog reboot earlier this boot is otherwise invisible (the
          * flash was erased with this arm; the RF heartbeat may never be
          * heard). RCAUSE byte rides the event record's code slot. */
         if (g_boot_rcause) {
-            flight_log_event_ex(millis(), 8 /* boot reset cause */,
+            flight_log_event_ex(millis(), FLOG_KIND_BOOT,
                                 (uint8_t)(g_boot_rcause & 0xFF), 0);
         }
     }
@@ -438,7 +438,7 @@ void loop() {
             post_launch_start_time = system_time_seconds;
             transmit_beacon_flag = 1;
             transmit_fast_flag = 0;
-            flight_log_event(millis(), 6 /* post-launch transition */);
+            flight_log_event(millis(), FLOG_KIND_POST_LAUNCH);
 
             // Disable radio
             radio_disable(); 
@@ -454,7 +454,7 @@ void loop() {
             transmit_fast_flag = 0;
             /* Cadence-timeout path only: the landing-detect path already
              * marks this transition with the kind-4 landed record. */
-            flight_log_event(millis(), 7 /* battery-save transition */);
+            flight_log_event(millis(), FLOG_KIND_BATTERY_SAVE);
         }
     }
     
@@ -503,9 +503,9 @@ void loop() {
                                      sat_i16(fz.v_n * 100.0f),
                                      sat_i16(fz.v_e * 100.0f),
                                      sat_i16(fz.v_d * 100.0f),
-                                     (uint8_t)((fz.gps_fresh      ? 0x01 : 0) |
-                                               (fz.dead_reckoning ? 0x02 : 0) |
-                                               (fz.imu_healthy    ? 0x04 : 0)));
+                                     (uint8_t)((fz.gps_fresh      ? FLOG_FUS_GPS_FRESH   : 0) |
+                                               (fz.dead_reckoning ? FLOG_FUS_DR          : 0) |
+                                               (fz.imu_healthy    ? FLOG_FUS_IMU_HEALTHY : 0)));
                 }
             }
 
@@ -586,9 +586,9 @@ void loop() {
         }
     }
 
-    if (system_time_seconds - time_since_last_callsign_tx >= flight_cadence_callsign_interval_s() && !transmit_fast_flag) {
+    if (system_time_seconds - last_callsign_tx_s >= flight_cadence_callsign_interval_s() && !transmit_fast_flag) {
         beacon_transmit_callsign(transmit_fast_flag);
-        time_since_last_callsign_tx = system_time_seconds;
+        last_callsign_tx_s = system_time_seconds;
     }
 
     /* One tick snapshot shared by every millisecond-paced block below

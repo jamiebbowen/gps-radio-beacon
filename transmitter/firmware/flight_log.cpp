@@ -19,7 +19,6 @@
 
 #include "include/flight_log.h"
 #include "include/config.h"
-#include "include/radio.h"      /* nothing; same build-tree include chain */
 #include "include/watchdog.h"  /* dump keeps the WDT fed mid-printout */
 #include <Arduino.h>
 #include <string.h>
@@ -47,16 +46,6 @@
 #define FLOG_RECORD      32u
 #define FLOG_MAGIC       0x464C4647u /* 'GFLF' - little-endian scalar   */
 
-#define FLOG_KIND_IMU           1
-#define FLOG_KIND_GPS           2
-#define FLOG_KIND_LAUNCH        3
-#define FLOG_KIND_LANDED        4
-#define FLOG_KIND_FLIGHT_EVENT  5
-#define FLOG_KIND_POST_LAUNCH   6
-#define FLOG_KIND_BATTERY_SAVE  7
-#define FLOG_KIND_BOOT          8
-#define FLOG_KIND_FUSED         9
-#define FLOG_KIND_STATE        10   /* persistent flight-state marker    */
 
 /* Flight-state marker codes (kind 10 evt.code). Lives on the reserved
  * last row, OUTSIDE the append area, so a wrap-to-full data region can
@@ -75,9 +64,6 @@
 /* Fused-record health flags (kind 9 payload). Same meaning as the fused
  * wire packet's flags, kept separate so the crash copy can't drift with
  * future wire-format versions. */
-#define FLOG_FUS_GPS_FRESH   0x01
-#define FLOG_FUS_DR          0x02
-#define FLOG_FUS_IMU_HEALTHY 0x04
 
 typedef union {
     uint8_t  raw[FLOG_RECORD];

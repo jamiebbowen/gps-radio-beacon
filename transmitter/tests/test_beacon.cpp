@@ -152,7 +152,7 @@ uint32_t nav_get_gps_rejects(void) { return fake_gps_rejects; }
 
 /* beacon.cpp's V3 heartbeat reports the boot's reset cause; on real
  * hardware firmware.ino captures RSTC->RCAUSE into this global. */
-volatile uint8_t g_boot_rcause = 0;
+uint8_t g_boot_rcause = 0;
 
 /* Include the module under test AFTER the fakes (it only needs their
  * declarations from the headers; definitions resolve at link within

@@ -387,7 +387,7 @@ int radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms) {
 int radio_transmit_ack(uint8_t rocket_id, uint8_t cmd_code,
                        uint8_t seq_hi, uint8_t seq_lo, uint8_t echo) {
     uint8_t buf[6];
-    buf[0] = 0x09; /* PACKET_TYPE_ACK */
+    buf[0] = PACKET_TYPE_ACK;
     buf[1] = rocket_id;
     buf[2] = cmd_code;
     buf[3] = seq_hi;

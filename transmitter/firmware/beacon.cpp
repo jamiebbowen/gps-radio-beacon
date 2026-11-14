@@ -199,7 +199,7 @@ uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t syste
     /* V3 heartbeat: carries the boot's SAMD51 reset-cause register, so a
      * in-flight brown-out (supply sag) or watchdog hang shows up as an
      * identity in the receiver log instead of hiding in an uptime gap. */
-    extern volatile uint8_t g_boot_rcause;
+    extern uint8_t g_boot_rcause;
     hb.reset_info  = (uint8_t)g_boot_rcause;
     
     if (!transmit_fast) {

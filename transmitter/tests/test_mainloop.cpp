@@ -470,7 +470,7 @@ int main(void)
     system_time_seconds = 0;
     ms_counter = 0;
     last_transmission_time = 0;
-    time_since_last_callsign_tx = 0;
+    last_callsign_tx_s = 0;
     post_launch_start_time = 0;
     setup();                                     /* <- the reboot itself   */
     CHECK(beacon_state == BEACON_STATE_LAUNCH);  /* airborne cadence now */
@@ -520,7 +520,7 @@ int main(void)
     system_time_seconds = 0;
     ms_counter = 0;
     last_transmission_time = 0;
-    time_since_last_callsign_tx = 0;
+    last_callsign_tx_s = 0;
     post_launch_start_time = 0;
     Serial.clear();
     setup();
@@ -592,7 +592,7 @@ int main(void)
     system_time_seconds = 0;
     ms_counter = 0;
     last_transmission_time = 0;
-    time_since_last_callsign_tx = 0;
+    last_callsign_tx_s = 0;
     post_launch_start_time = 0;
     setup();
     CHECK(beacon_state == BEACON_STATE_LAUNCH);

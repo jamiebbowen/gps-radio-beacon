@@ -3,6 +3,23 @@
 
 #include <stdint.h>
 
+/* Record kinds (the DUMP 'kind' column) */
+#define FLOG_KIND_IMU           1
+#define FLOG_KIND_GPS           2
+#define FLOG_KIND_LAUNCH        3
+#define FLOG_KIND_LANDED        4
+#define FLOG_KIND_FLIGHT_EVENT  5
+#define FLOG_KIND_POST_LAUNCH   6
+#define FLOG_KIND_BATTERY_SAVE  7
+#define FLOG_KIND_BOOT          8
+#define FLOG_KIND_FUSED         9
+#define FLOG_KIND_STATE        10   /* persistent flight-state marker    */
+
+/* Fused-record flags byte */
+#define FLOG_FUS_GPS_FRESH   0x01
+#define FLOG_FUS_DR          0x02
+#define FLOG_FUS_IMU_HEALTHY 0x04
+
 /**
  * On-beacon flight log in the SAMD51's own internal flash.
  *
