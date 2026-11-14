@@ -115,14 +115,11 @@ typedef union {
 
 /* State */
 static volatile uint8_t armed = 0;       /* reset-region armed           */
-static volatile uint8_t busy_erase = 0;  /* currently running erase      */
 static uint32_t wptr = 0;                /* bytes written so far         */
 
 /* ------------------------------------------------------------------ */
 /* NVMCTRL helpers (SAMD51 Hardware Asynchronous Access pattern)       */
 /* ------------------------------------------------------------------ */
-
-#define NVMCTRL_NVM_REG  NVMCTRL
 
 static void nvm_wait_ready(void)
 {
@@ -163,7 +160,6 @@ static bool nvm_write_page(uint32_t addr, const uint8_t *buf)
 void flight_log_init(void)
 {
     armed = 0;
-    busy_erase = 0;
     wptr = 0;
 
     /* If a previous flight left data (magic at 0), print it over USB at
@@ -200,19 +196,14 @@ static void flog_write_state(uint8_t code)
 
 void flight_log_arm(void)
 {
-    if (armed || busy_erase) return;
-    busy_erase = 1;
+    if (armed) return;
     for (uint32_t row = FLOG_BASE; row < FLOG_BASE + FLOG_BYTES; row += FLOG_ROW) {
         (void)nvm_erase_block(row);
     }
-    busy_erase = 0;
     armed = 1;
     wptr = 0;
     flog_write_state(FLOG_STATE_FLYING);
 }
-
-uint8_t flight_log_armed(void) { return armed; }
-uint8_t flight_log_busy(void)  { return busy_erase; }
 
 uint8_t flight_log_prev_flying(void)
 {

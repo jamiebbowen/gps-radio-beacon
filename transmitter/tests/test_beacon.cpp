@@ -492,12 +492,12 @@ TEST(test_flight_event_tx_failure_backs_off)
 TEST(test_flight_event_queue_overflow_counted)
 {
     reset_tx();
-    uint32_t drops0 = beacon_flight_event_dropped();
+    Serial.clear();
     for (int i = 0; i < 8; i++) {
         beacon_queue_flight_event(FLIGHT_EVENT_MAIN, (int16_t)i, 3);
     }
     beacon_queue_flight_event(FLIGHT_EVENT_MAIN, 99, 3);   /* 9th: full */
-    CHECK(beacon_flight_event_dropped() == drops0 + 1);
+    CHECK(strstr(Serial.log, "queue full, dropped 0x3") != NULL);
 
     /* Everything queued still drains at the spacing cadence: 8 x 3 copies */
     uint32_t sent = 0;
@@ -632,7 +632,6 @@ TEST(test_fused_packet_fields)
     fake_fused.v_n         = 12.34f;
     fake_fused.v_e         = -3.21f;
     fake_fused.v_d         = -55.0f;
-    fake_fused.age_ds      = 7;
     fake_fused.gps_fresh   = true;
     fake_fused.imu_healthy = true;
 

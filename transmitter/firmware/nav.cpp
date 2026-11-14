@@ -333,8 +333,6 @@ void nav_get_fused(NavFused_t *out) {
 
     uint32_t now       = millis();
     uint32_t age_ms    = (s_last_gps_ms > 0) ? (now - s_last_gps_ms) : 0xFFFFFFFFu;
-    uint32_t age_ds    = age_ms / 100u;
-    out->age_ds        = (age_ds > 255u) ? 255u : (uint8_t)age_ds;
     out->gps_fresh     = (s_last_gps_ms > 0) && (age_ms < 1500u);
     out->dead_reckoning= (age_ms > (uint32_t)(NAV_DR_TIMEOUT_S * 1000.0f));
 

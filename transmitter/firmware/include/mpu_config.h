@@ -30,9 +30,6 @@
 #define BNO08X_RESET        10  // IMU reset pin (optional, can be -1 if not used)
 // I2C pins: SDA and SCL are hardware I2C on ItsyBitsy M4
 
-#define PIN_GPS_RX          0   // Hardware Serial1 RX (not needed, defined for reference)
-#define PIN_GPS_TX          1   // Hardware Serial1 TX (not needed, defined for reference)
-
 // GPS UART uses Hardware Serial1
 #define GPS_SERIAL Serial1
 
@@ -130,9 +127,6 @@
 #define CHANNEL_JUMPER_PIN  A1                          // Free GPIO on ItsyBitsy M4
 #define LORA_CHANNEL_BACKUP ((LORA_CHANNEL + 4) % LORA_CHANNEL_COUNT)
 
-// Primary-channel frequency, for reference only: radio.cpp resolves the
-// active channel (primary vs backup jumper) at boot.
-#define LORA_FREQUENCY      LORA_CHANNEL_FREQ(LORA_CHANNEL)
 #define LORA_BANDWIDTH      62.5        // 62.5 kHz: half BW = +3 dB sensitivity, 2x airtime.
                                         // Both ends are TCXO so frequency offset stays tiny
                                         // vs the narrower channel. RX RadioLib-independent

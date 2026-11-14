@@ -27,7 +27,6 @@ typedef struct {
     float    v_n;          /* velocity north  (m/s)          */
     float    v_e;          /* velocity east   (m/s)          */
     float    v_d;          /* velocity down   (m/s)          */
-    uint8_t  age_ds;       /* deciseconds since last GPS fix, saturating */
     bool     gps_fresh;    /* true if GPS updated within NAV_DR_TIMEOUT_S */
     bool     dead_reckoning;
     bool     imu_healthy;

@@ -32,11 +32,9 @@ void beacon_poll_commands(uint8_t in_flight);
 /* Certified flight events (PACKET_TYPE_FLIGHT_EVENT). Queue an edge with
  * redundancy; the loop calls beacon_service_flight_events() every pass and
  * copies go out FLIGHT_EVENT_SPACING_MS apart until `repeats` are sent.
- * beacon_queue_flight_event returns 0 if the queue was full (counted via
- * beacon_flight_event_dropped()). */
+ * A full queue drops the new edge (logged on USB serial). */
 void    beacon_queue_flight_event(uint8_t code, int16_t value, uint8_t repeats);
 uint8_t beacon_service_flight_events(uint32_t now_ms, uint32_t now_s, uint8_t transmit_fast_flag);
-uint32_t beacon_flight_event_dropped(void);
 /* Single immediate TX; used by the queue service. Blocks ~0.7 s (8 B at
  * SF10/BW62.5k) like every packet here. */
 uint8_t beacon_transmit_flight_event(uint8_t code, int16_t value,

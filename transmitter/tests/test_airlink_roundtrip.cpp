@@ -165,7 +165,6 @@ static void check_fused_row(double lat, double lon, float alt, float vn,
     fake_fused.lat_deg = (float)lat;  fake_fused.lon_deg = (float)lon;
     fake_fused.alt_m = alt;
     fake_fused.v_n = vn; fake_fused.v_e = ve; fake_fused.v_d = vd;
-    fake_fused.age_ds = age_ds;
     fake_fused.dead_reckoning = dr;
     fake_fused.gps_fresh = fresh;
     fake_fused.imu_healthy = healthy;

@@ -11,9 +11,6 @@
 #include "include/beacon.h"
 #include "include/nav.h"
 
-// Global variables
-volatile uint8_t gpsInitialized = 0;
-
 // Global coordinates storage
 static GPSCoordinates_t current_coords = {
     "0",    // lat
@@ -53,19 +50,6 @@ static uint32_t gps_checksum_errors = 0;   // sentences dropped on *XX mismatch
  * Nothing is lost by returning: there is no flush, bytes stay queued. */
 #define GPS_POLL_BYTE_BUDGET    1200u
 
-// Define states for NMEA parsing state machine
-typedef enum {
-    NMEA_WAIT_FOR_START,    // Waiting for $ character
-    NMEA_READ_TYPE,         // Reading sentence type (GNGGA, GNRMC)
-    NMEA_SKIP_TO_LAT,       // Skip to latitude field
-    NMEA_READ_LAT,          // Reading latitude value
-    NMEA_READ_LAT_DIR,      // Reading N/S indicator
-    NMEA_SKIP_TO_LON,       // Skip to longitude field
-    NMEA_READ_LON,          // Reading longitude value
-    NMEA_READ_LON_DIR,      // Reading E/W indicator
-    NMEA_WAIT_FOR_END       // Wait for end of sentence
-} NMEAParseState;
-
 /* Send a raw UBX protocol frame. uart_tx_string cannot be used: UBX
  * payloads contain 0x00. The checksum is the 8-bit Fletcher sum over
  * class|id|length|payload, per the u-blox interface description. */
@@ -101,9 +85,6 @@ static void gps_send_pubx(const char *body) {
 
 // Initialize GPS for u-blox MAX-M10S
 void gps_init(void) {
-    // Basic initialization
-    gpsInitialized = 1;
-    
     /* Baud self-heal. Nothing in this boot path sets the module's baud,
      * and the ONLY reason it currently speaks 115200 is saved config from
      * some earlier setup. If that is ever lost (module swap, config
@@ -195,10 +176,6 @@ uint8_t gps_get_health(void) {
 uint32_t gps_get_fix_age_ms(void) {
     if (!gps_last_fix_ms) return UINT32_MAX;
     return millis() - gps_last_fix_ms;
-}
-
-uint32_t gps_get_checksum_errors(void) {
-    return gps_checksum_errors;
 }
 
 // Poll for GPS data and extract lat/lon using buffer-based approach
@@ -342,7 +319,10 @@ uint16_t gps_poll_rx(void) {
         Serial.print(F("[GPS] Bytes rcvd: "));
         Serial.print(byte_count);
         Serial.print(F(" | Valid: "));
-        Serial.println(current_coords.valid);
+        Serial.print(current_coords.valid);
+        /* Rising count on the bench = UART noise corrupting sentences */
+        Serial.print(F(" | Csum errs: "));
+        Serial.println(gps_checksum_errors);
         last_debug = millis();
     }
       
@@ -632,11 +612,3 @@ float gps_nmea_to_decimal(const char* nmea_coord, char direction) {
     return nmea_coord_to_decimal(nmea_coord, direction);
 }
 
-void gps_tx_string(const char* str) {
-    // Send commands to GPS module
-    if (str) {
-        while (*str) {
-            uart_tx_byte(*str++);
-        }
-    }
-}

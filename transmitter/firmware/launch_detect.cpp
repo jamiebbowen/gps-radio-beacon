@@ -36,7 +36,6 @@ static volatile float rot_y = 0.0f;
 static volatile float rot_z = 0.0f;
 static volatile bool  rot_valid = false;
 static volatile uint32_t last_accel_ms = 0;
-static volatile uint32_t last_rotvec_ms = 0;
 
 /* GPS-altitude launch fallback state (see launch_detect_gps_fallback_update) */
 static bool     gf_baseline_set = false;
@@ -177,7 +176,6 @@ void launch_detect_update(uint32_t system_time_seconds) {
         rot_y = sensorValue.un.rotationVector.j;
         rot_z = sensorValue.un.rotationVector.k;
         rot_valid = true;
-        last_rotvec_ms = millis();
     }
 
     if (sensorValue.sensorId == SH2_GYROSCOPE_CALIBRATED) {
@@ -262,7 +260,6 @@ bool imu_has_quaternion(void) {
 }
 
 uint32_t imu_last_accel_ms(void)  { return last_accel_ms; }
-uint32_t imu_last_rotvec_ms(void) { return last_rotvec_ms; }
 
 /* ---------- GPS-altitude launch fallback (IMU-independent) --------------- */
 
@@ -472,9 +469,6 @@ void launch_detect_get_gyro_rads(float* x, float* y, float* z) {
     if (z) *z = gyro_z;
 }
 
-uint32_t launch_detect_imu_staleness_ms(void) {
-    return last_accel_ms ? millis() - last_accel_ms : UINT32_MAX;
-}
 
 void launch_detect_get_accel_xyz(float* x, float* y, float* z) {
     if (x) *x = accel_x;

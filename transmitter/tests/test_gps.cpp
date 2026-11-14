@@ -142,7 +142,6 @@ TEST(test_init_sends_ublox_config)
 {
     reset_uart_capture();
     gps_init();
-    CHECK(gpsInitialized == 1);
 
     /* Baud self-heal dance: try 9600, command 115200 via PUBX,41, switch,
      * re-issue at the new baud (a factory-reset module must recover). */
@@ -164,12 +163,6 @@ TEST(test_init_sends_ublox_config)
     CHECK(log_contains_bytes(gll_off,  sizeof(gll_off)));
     CHECK(log_contains_bytes(rmc_on,   sizeof(rmc_on)));
     CHECK(log_contains_bytes(rate_1hz, sizeof(rate_1hz)));
-
-    /* gps_tx_string passthrough (and NULL safety) */
-    reset_uart_capture();
-    gps_tx_string("hello");
-    CHECK(strcmp(uart_tx_log, "hello") == 0);
-    gps_tx_string(NULL);
 
     /* No fix has ever landed: fix age reads as "never" (UINT32_MAX),
      * not as a bogus small number that would look fresh. */
@@ -508,31 +501,31 @@ TEST(test_bad_checksum_drops_sentence)
      * the reported position hundreds of meters - worse than dropping the
      * 1 Hz update. NMEA requires the *XX checksum, so mismatches and
      * checksum-less sentences are both rejected and counted. */
-    uint32_t errs0 = gps_get_checksum_errors();
+    uint32_t errs0 = gps_checksum_errors;
 
     nav_updates = 0;
     /* Same body as GGA_FIX but a wrong checksum digit (*67 vs real *66) */
     feed_and_poll(
         "$GPGGA,123519,3953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*67\r\n");
     CHECK(nav_updates == 0);
-    CHECK(gps_get_checksum_errors() == errs0 + 1);
+    CHECK(gps_checksum_errors == errs0 + 1);
 
     /* No checksum field at all (truncated sentence): also rejected */
     feed_and_poll(
         "$GPGGA,123519,3953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,\r\n");
     CHECK(nav_updates == 0);
-    CHECK(gps_get_checksum_errors() == errs0 + 2);
+    CHECK(gps_checksum_errors == errs0 + 2);
 
     /* Corrupted body, correct-looking checksum: rejected */
     feed_and_poll(
         "$GPGGA,123519,4953.40284,N,10453.11007,W,1,08,0.9,1655.4,M,46.9,M,,*66\r\n");
     CHECK(nav_updates == 0);
-    CHECK(gps_get_checksum_errors() == errs0 + 3);
+    CHECK(gps_checksum_errors == errs0 + 3);
 
     /* The very next good sentence still parses - no resync lost */
     feed_and_poll(GGA_FIX);
     CHECK(nav_updates == 1);
-    CHECK(gps_get_checksum_errors() == errs0 + 3);
+    CHECK(gps_checksum_errors == errs0 + 3);
 }
 
 TEST(test_out_of_spec_fix_quality_rejected)

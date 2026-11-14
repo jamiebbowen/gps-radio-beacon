@@ -9,8 +9,6 @@
  * Toggle TESTING_MODE to switch between production and testing configurations.
  */
 
-#define LAUNCH_DEBOUNCE_TIME_MS         200   // 200ms debounce time for launch detection
-
 // Set to 1 for testing mode, 0 for production mode
 #ifndef TESTING_MODE
 #define TESTING_MODE 0
@@ -214,7 +212,6 @@
 
 #if TESTING_MODE
     // Testing Configuration - Fast intervals for development/testing
-    #define PRE_LAUNCH_INTERVAL_SEC         30    // 30 seconds between transmissions in pre-launch
     #define POST_LAUNCH_DURATION_SEC        10    // 10 seconds in LAUNCH state before POST_LAUNCH
     #define POST_LAUNCH_RECOVERY_DURATION_SEC 1200  // 20 minutes duration in post-launch state
     #define BATTERY_SAVE_INTERVAL_SEC       30    // 30 seconds between transmissions in battery save
@@ -222,9 +219,6 @@
     
 #else
     // Production Configuration - Conservative intervals for flight
-    #define PRE_LAUNCH_INTERVAL_SEC         5     // 5 s between raw GPS packets on the pad
-                                                  // (dense for range testing; bench-quiet flight
-                                                  //  prep variant: 30 s, see git history)
     #define POST_LAUNCH_DURATION_SEC        1     // 1 second in LAUNCH state before POST_LAUNCH
     #define POST_LAUNCH_RECOVERY_DURATION_SEC 600 // 10 minutes duration in post-launch state
     #define BATTERY_SAVE_INTERVAL_SEC       60    // 60 seconds between transmissions in battery save

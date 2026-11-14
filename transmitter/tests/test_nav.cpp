@@ -604,21 +604,18 @@ TEST(test_freshness_flags_age_out)
     NavFused_t f;
     nav_get_fused(&f);
     CHECK(f.gps_fresh == true && f.dead_reckoning == false);
-    CHECK(f.age_ds == 0);
 
     /* 2 s: not fresh, but not dead-reckoning yet (DR at 3 s) */
     now_ms += 2000;
     nav_get_fused(&f);
     CHECK(f.gps_fresh == false);
     CHECK(f.dead_reckoning == false);
-    CHECK(f.age_ds == 20);
     CHECK(f.imu_healthy == false);          /* accel is 2 s stale too */
 
-    /* 30 s: dead reckoning; age saturates at 255 ds */
+    /* 30 s: dead reckoning */
     now_ms += 28000;
     nav_get_fused(&f);
     CHECK(f.dead_reckoning == true);
-    CHECK(f.age_ds == 255);
 }
 
 TEST(test_sensor_degraded_silence_window)

@@ -166,13 +166,6 @@ void watchdog_feed(void) {
     }
 }
 
-// Timer setup for 1ms interrupts
-void timer_init(void) {
-    // Use Arduino's built-in timer for 1ms interrupts
-    // We'll call timer_isr_handler() from loop() instead of using hardware timer
-    // This is simpler and sufficient for this application
-}
-
 /* Reset-cause forensics: captured before anything can disturb RSTC, sent
  * out with every heartbeat (V3 field). The receiver logs a row when a
  * cause other than plain POR kicks in mid-flight (brown-out or WD hung). */
@@ -204,9 +197,6 @@ void setup() {
     // Initialize GPS
     gps_init(); 
 
-    // Initialize timer for beacon state machine
-    timer_init();
-    
     // Initialize launch detection system
     launch_detect_init();
 

@@ -49,12 +49,10 @@
  */
 
 void flight_log_init(void);
-/** Called when launch_detect confirms; erases the region (~250 ms) and
- *  arms the recorder. Pre-launched again before erase completes -> caller
- *  must wait for flight_log_armed(). */
+/** Called when launch_detect confirms: synchronously erases the whole
+ *  region (32 block erases) and arms the recorder. A second call while
+ *  armed is a no-op. */
 void flight_log_arm(void);
-uint8_t flight_log_armed(void);
-uint8_t flight_log_busy(void);          /* erase in progress */
 
 /** Nonzero when the state row still says FLYING - i.e. the previous run
  *  was airborne when the chip reset. Checked at boot before arming. */

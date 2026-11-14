@@ -161,8 +161,6 @@ static uint32_t flog_gps_calls = 0;
 static uint32_t flog_event_calls = 0;
 void     flight_log_init(void) {}
 void     flight_log_arm(void) { flog_armed_count++; }
-uint8_t  flight_log_armed(void) { return flog_armed_count > 0; }
-uint8_t  flight_log_busy(void) { return 0; }
 void     flight_log_imu(uint32_t ms, int16_t, int16_t, int16_t, int16_t, int16_t, int16_t, int16_t)
          { (void)ms; flog_imu_calls++; }
 void     flight_log_gps(uint32_t ms, int32_t, int32_t, int16_t, uint8_t, uint8_t)

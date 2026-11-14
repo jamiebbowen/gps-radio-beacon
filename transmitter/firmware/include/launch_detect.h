@@ -61,9 +61,6 @@ bool launch_detect_get_imu_status(void);          // Check if IMU is working
 void launch_detect_get_accel_xyz(float* x, float* y, float* z);  // Get 3-axis acceleration
 void launch_detect_get_gyro_rads(float* x, float* y, float* z);  // Get 3-axis gyro (rad/s, calibrated)
 
-/* Where launch detection publishes body-frame IMU samples (handy for the
- * inertial trace packet / flight recorder) */
-uint32_t launch_detect_imu_staleness_ms(void);   // ms since the newest linear-accl sample
 
 /* ---------- IMU accessors (populated by launch_detect_update) ------------ */
 /* Body-frame linear acceleration (gravity removed by BNO085 fusion), m/s^2 */
@@ -72,6 +69,5 @@ void     imu_get_linear_accel_body(float *x, float *y, float *z);
 void     imu_get_quaternion(float *w, float *x, float *y, float *z);
 bool     imu_has_quaternion(void);
 uint32_t imu_last_accel_ms(void);
-uint32_t imu_last_rotvec_ms(void);
 
 #endif // LAUNCH_DETECT_H

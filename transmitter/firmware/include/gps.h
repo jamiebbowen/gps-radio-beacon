@@ -5,30 +5,12 @@
 #include "uart.h"         // Include the hardware UART header
 #include "mpu_config.h" // Include hardware configuration
 
-// Pin definitions for GPS are now in mpu_config.h
-// USART0_RX_PIN and USART0_TX_PIN
-
-// Maximum size of a raw GNRMC sentence buffer
-// This is intentionally small to fit in limited RAM
-// We'll use incremental parsing to handle larger sentences
-#define MAX_GNRMC_SIZE 32
-
 // Field indices in RMC sentence
-#define RMC_FIELD_TIME      1
 #define RMC_FIELD_STATUS    2
 #define RMC_FIELD_LAT       3
 #define RMC_FIELD_LAT_DIR   4
 #define RMC_FIELD_LON       5
 #define RMC_FIELD_LON_DIR   6
-
-// Parser state machine values
-#define NMEA_PARSER_IDLE        0
-#define NMEA_PARSER_IN_SENTENCE 1
-#define NMEA_PARSER_IN_RMC      2 
-#define NMEA_PARSER_IN_CHECKSUM 3
-
-// GPS data - now we'll store direct fields instead of the full sentence
-extern volatile uint8_t gpsInitialized;
 
 // GPS coordinate structure (raw string storage to save flash)
 typedef struct {
@@ -54,15 +36,8 @@ uint8_t gps_get_health(void);
 // Milliseconds since the last accepted fix; UINT32_MAX if never had one.
 uint32_t gps_get_fix_age_ms(void);
 
-// Sentences dropped on missing/mismatched *XX checksum. A rising count on
-// the bench means UART noise (wiring, baud drift, PA bleed) corrupting
-// positions before the parser ever sees them.
-uint32_t gps_get_checksum_errors(void);
-
 // Convert NMEA coordinate to decimal degrees
 float gps_nmea_to_decimal(const char* nmea_coord, char direction);
 
-// Send data to GPS
-void gps_tx_string(const char* str);
 
 #endif // GPS_H

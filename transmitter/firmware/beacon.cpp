@@ -346,7 +346,6 @@ static struct {
     uint8_t  left;          /* transmissions remaining (0 = free slot)  */
     uint32_t due_ms;        /* next allowed TX time                     */
 } event_q[FLIGHT_EVENT_Q_DEPTH];
-static uint32_t event_q_dropped = 0;
 
 void beacon_queue_flight_event(uint8_t code, int16_t value, uint8_t repeats)
 {
@@ -359,12 +358,10 @@ void beacon_queue_flight_event(uint8_t code, int16_t value, uint8_t repeats)
             return;
         }
     }
-    event_q_dropped++;
-}
-
-uint32_t beacon_flight_event_dropped(void)
-{
-    return event_q_dropped;
+    /* All slots busy: the edge is lost. Loud on USB so a bench run can
+     * see it; on the air the anomaly re-announce covers level events. */
+    Serial.print(F("[Beacon] Flight event queue full, dropped 0x"));
+    Serial.println(code, HEX);
 }
 
 uint8_t beacon_transmit_flight_event(uint8_t code, int16_t value,

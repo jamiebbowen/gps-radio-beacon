@@ -207,7 +207,7 @@ TEST(unarmed_appends_are_dropped)
     reset_all();
     flight_log_imu(100, 1, 2, 3, 4, 5, 6, 7);
     CHECK(wptr == 0);
-    CHECK(flight_log_armed() == 0);
+    CHECK(armed == 0);
     CHECK(nvm_wp_count == 0);
 }
 
@@ -230,8 +230,7 @@ TEST(arm_erases_full_region_then_arms)
     uint32_t magic = FLOG_MAGIC;
     memcpy(G_FLASH, &magic, sizeof(magic));   /* stale data to erase */
     flight_log_arm();
-    CHECK(flight_log_armed() == 1);
-    CHECK(flight_log_busy() == 0);
+    CHECK(armed == 1);
     /* one EB per row, plus the state row's own rewrite erase */
     CHECK(nvm_eb_count == HOST_FLOG_BYTES / 8192u + 1);
     /* erase addresses sweep the whole region in 8 KB steps */
@@ -256,7 +255,7 @@ TEST(rearm_while_armed_is_noop)
     uint32_t eb = nvm_eb_count;
     flight_log_arm();
     CHECK(nvm_eb_count == eb);
-    CHECK(flight_log_armed() == 1);
+    CHECK(armed == 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -489,7 +488,7 @@ TEST(arm_commit_reboot_notice_rearm)
     /* "power loss" and reboot: statics stay but hardware boot re-inits */
     Serial.clear();
     flight_log_init();
-    CHECK(flight_log_armed() == 0);
+    CHECK(armed == 0);
     CHECK(strstr(Serial.log, "[FLOG] previous flight data present") != nullptr);
 
     /* next flight arm wipes the record for the new flight (second full
@@ -534,7 +533,7 @@ TEST(resume_restores_append_point_without_erase)
     page_fill = 0;
     CHECK(flight_log_prev_flying() == 1);
     CHECK(flight_log_resume() == 1);
-    CHECK(flight_log_armed() == 1);
+    CHECK(armed == 1);
     CHECK(wptr == 3 * FLOG_PAGE);                  /* first blank page    */
     CHECK(nvm_eb_count == eb_before);              /* NO erase happened   */
     CHECK(nvm_wp_count == wp_before);              /* nothing rewritten   */
@@ -558,13 +557,13 @@ TEST(resume_requires_the_flying_marker)
 {
     reset_all();
     CHECK(flight_log_resume() == 0);               /* blank flash: boot   */
-    CHECK(flight_log_armed() == 0);
+    CHECK(armed == 0);
 
     flight_log_arm();
     flight_log_mark_landed();
     flight_log_init();
     CHECK(flight_log_resume() == 0);               /* landed flight: boot */
-    CHECK(flight_log_armed() == 0);
+    CHECK(armed == 0);
 }
 
 /* ------------------------------------------------------------------ */
