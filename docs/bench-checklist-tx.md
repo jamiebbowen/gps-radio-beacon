@@ -44,6 +44,8 @@ runbook is `launch-day.md`.
 
 - [ ] DUMP output starts with the IMU units note; IMU rows written by this
       firmware end with `,3` (V3 units).
+- [ ] Save a DUMP capture and run `python3 tools/flight_log_dump.py` on it:
+      the last known position, boot cause and record counts come out.
 - [ ] **Flight-log write path (first bench run on this firmware - do this
       before flying it):** the NVM driver addressed SAMD51 flash with the
       SAMD21 halfword convention until commit f0426c5, so the log had never

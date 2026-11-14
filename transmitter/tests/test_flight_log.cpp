@@ -592,6 +592,20 @@ TEST(dump_emits_csv_for_flushed_records_only)
           != nullptr);                                        /* fused row */
     CHECK(strstr(Serial.log, "7777,1,9,9,9,9,9,9,9,3") != nullptr); /* mid-page */
     CHECK(strstr(Serial.log, "0x") == nullptr);
+    /* LOG_CONTRACT dump-header: tools/test_flight_log_dump.py parses these rows */
+    CHECK(strstr(Serial.log, "ms,kind,ax,ay,az,gx,gy,gz,peak,stat_everything\n") != nullptr);
+    /* LOG_CONTRACT dump-imu */
+    CHECK(strstr(Serial.log, "1234,1,100,-200,300,4000,-5000,6000,5000,3\n") != nullptr);
+    /* LOG_CONTRACT dump-gps */
+    CHECK(strstr(Serial.log, "1235,2,398900000,-1048851712,1655,8,1\n") != nullptr);
+    /* LOG_CONTRACT dump-launch */
+    CHECK(strstr(Serial.log, "1236,3,\n") != nullptr);
+    /* LOG_CONTRACT dump-event */
+    CHECK(strstr(Serial.log, "1237,5,9,-550\n") != nullptr);
+    /* LOG_CONTRACT dump-fused */
+    CHECK(strstr(Serial.log, "1238,9,398812345,-1048987654,1655,123,-45,-2200,7\n") != nullptr);
+    /* LOG_CONTRACT dump-state */
+    CHECK(strstr(Serial.log, "0,10,1,0\n") != nullptr);
     /* exactly the 3-line units note + header + the 17 records + the
      * FLYING marker row: erased space is skipped, the marker is a real
      * record */
