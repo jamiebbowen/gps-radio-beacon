@@ -653,6 +653,23 @@ TEST(test_fused_not_anchored_no_tx)
     CHECK(tx_count == 0);
 }
 
+TEST(test_fused_non_finite_state_no_tx)
+{
+    /* A poisoned filter (NaN/Inf anywhere in position or velocity) must
+     * never reach the wire: ENCODE_COORD on NaN is undefined. */
+    float *fields[6] = { &fake_fused.lat_deg, &fake_fused.lon_deg, &fake_fused.alt_m,
+                         &fake_fused.v_n, &fake_fused.v_e, &fake_fused.v_d };
+    for (int i = 0; i < 6; i++) {
+        reset_tx();
+        memset(&fake_fused, 0, sizeof(fake_fused));
+        fake_fused.valid = true;
+        fake_fused.lat_deg = 39.89f; fake_fused.lon_deg = -105.11f;
+        *fields[i] = (i % 2) ? INFINITY : NAN;
+        CHECK(beacon_transmit_fused_data(100, 0) == 0);
+        CHECK(tx_count == 0);
+    }
+}
+
 TEST(test_fused_packet_fields)
 {
     reset_tx();
@@ -1056,6 +1073,7 @@ int main(void)
     run_test_imu_trace_packet_contents();
     run_test_imu_trace_saturates_never_wraps();
     run_test_fused_not_anchored_no_tx();
+    run_test_fused_non_finite_state_no_tx();
     run_test_fused_packet_fields();
     run_test_fused_velocity_clamps_and_flags();
     run_test_fused_sensor_degraded_flag();

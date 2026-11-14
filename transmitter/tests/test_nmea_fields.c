@@ -178,6 +178,9 @@ TEST(test_checksum_rejects_missing_or_malformed) {
     CHECK(nmea_checksum_ok("$GPGGA,123519*") == 0);
     CHECK(nmea_checksum_ok("$GPGGA,123519*G") == 0);
     CHECK(nmea_checksum_ok("$GPGGA,123519*ZZ") == 0);
+    /* first hex digit fine, second missing or not hex */
+    CHECK(nmea_checksum_ok("$GPGGA,123519*4") == 0);
+    CHECK(nmea_checksum_ok("$GPGGA,123519*4G") == 0);
     /* '*' as the very last byte of an exact-size heap buffer: the checker
      * must stop at the NUL instead of reading the second hex digit past
      * it (`make sanitize` turns the old over-read into a hard failure). */
