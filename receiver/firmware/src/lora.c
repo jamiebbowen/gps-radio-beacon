@@ -694,12 +694,15 @@ uint8_t LoRa_GetRssiInst(int16_t *rssi_dbm) {
 }
 
 /**
- * @brief Transmit packet (for testing)
- * @note Currently unused by the receiver firmware. Kept safe for future use:
- *       switches the RF switch to TX, waits for TX_DONE, then restores the
- *       RX packet params and re-enters continuous RX regardless of outcome.
+ * @brief Transmit a packet with a chosen preamble length (blocking)
+ * @note Used for the two-way command uplink: a long preamble lets the
+ *       beacon's short listen sniff land inside it. Switches the RF switch
+ *       to TX, waits for TX_DONE, then restores the normal RX packet params
+ *       and re-enters continuous RX regardless of outcome.
+ * @param preamble_symbols LoRa preamble length in symbols
  */
-uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
+uint8_t LoRa_TransmitPreamble(const uint8_t *data, uint8_t length,
+                              uint16_t preamble_symbols) {
     if (!lora_initialized || data == NULL || length == 0) return LORA_ERROR;
     
     uint8_t result = LORA_ERROR;
@@ -717,8 +720,8 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
     if (LoRa_WriteBuffer(0, data, length) == LORA_OK) {
         /* Set packet length */
         uint8_t pkt_params[6] = {
-            (uint8_t)(LORA_PREAMBLE_LENGTH >> 8),
-            (uint8_t)(LORA_PREAMBLE_LENGTH & 0xFF),
+            (uint8_t)(preamble_symbols >> 8),
+            (uint8_t)(preamble_symbols & 0xFF),
             0x00,    // Variable length
             length,  // Payload length
             0x01,    // CRC on
@@ -728,8 +731,8 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
             /* Start TX (timeout field 0x000000 = no timeout) */
             uint8_t tx_params[3] = {0x00, 0x00, 0x00};
             if (LoRa_SendCommand(SX1268_CMD_SET_TX, tx_params, 3) == LORA_OK) {
-                /* Wait for TX_DONE; a full SF10/62.5k/CR4-6 19-byte packet
-                 * is ~0.9 s - give it 3 s of headroom. */
+                /* Wait for TX_DONE. A 6-byte command with the 80-symbol
+                 * command preamble is ~1.8 s at SF10/62.5k; 3 s headroom. */
                 uint32_t start = HAL_GetTick();
                 result = LORA_TIMEOUT;
                 while ((HAL_GetTick() - start) < 3000) {
@@ -762,6 +765,13 @@ uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
     LoRa_SetReceiveMode();
     
     return result;
+}
+
+/**
+ * @brief Transmit a packet with the normal LORA_PREAMBLE_LENGTH preamble
+ */
+uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length) {
+    return LoRa_TransmitPreamble(data, length, LORA_PREAMBLE_LENGTH);
 }
 
 /* ===== Private Functions ===== */

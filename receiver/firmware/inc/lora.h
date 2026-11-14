@@ -49,6 +49,10 @@ extern "C" {
 #define LORA_SYNC_WORD          0x12        // Private sync word
 #define LORA_TX_POWER_DBM       22          // 22 dBm (~160mW - SX1268 chip maximum)
 #define LORA_PREAMBLE_LENGTH    8           // Preamble length
+/* Command uplink preamble: the beacon listens for ~40 ms about once a
+ * second, so a command preamble longer than that period always contains
+ * one of its sniffs. 80 symbols x 16.384 ms (SF10 / 62.5 kHz) = 1.31 s. */
+#define LORA_CMD_PREAMBLE_SYMBOLS 80
 
 /* SX1268 Pin Configuration for STM32F4 
  * Using SPI2: PB13=SCK, PB14=MISO, PB15=MOSI
@@ -264,6 +268,8 @@ uint8_t LoRa_GetRssiInst(int16_t *rssi_dbm);
  * @retval Status code
  */
 uint8_t LoRa_Transmit(const uint8_t *data, uint8_t length);
+uint8_t LoRa_TransmitPreamble(const uint8_t *data, uint8_t length,
+                              uint16_t preamble_symbols);
 
 /**
  * @brief Get total IRQ count (DIO1 interrupts fired)

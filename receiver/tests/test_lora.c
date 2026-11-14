@@ -61,6 +61,8 @@ static int      fail_after_txns  = -1;     /* -1=off: BUSY jams after N transact
 static uint8_t  dma_fail         = 0;      /* Receive_DMA returns HAL_ERROR */
 static uint8_t  dma_stall        = 0;      /* DMA never completes     */
 static uint8_t  txdone_on_tx     = 1;      /* SET_TX latches TX_DONE  */
+static uint16_t chip_preamble    = 0;      /* last SET_PACKETPARAMS   */
+static uint16_t chip_tx_preamble = 0;      /* preamble in force at TX */
 static uint8_t  irq_during_read  = 0;      /* fire DIO1 mid-read (race test) */
 
 /* Transaction accumulation (CS low .. CS high) */
@@ -104,8 +106,12 @@ static void chip_handle_txn(void)
     switch (txn[0]) {
         case SX1268_CMD_SET_STANDBY:  chip_mode = 2; break;
         case SX1268_CMD_SET_RX:       chip_mode = 5; break;
+        case SX1268_CMD_SET_PACKETPARAMS:
+            if (txn_len >= 3) chip_preamble = (uint16_t)(((uint16_t)txn[1] << 8) | txn[2]);
+            break;
         case SX1268_CMD_SET_TX:
             chip_mode = 6;
+            chip_tx_preamble = chip_preamble;
             if (txdone_on_tx) chip_irq |= SX1268_IRQ_TX_DONE;
             break;
         case SX1268_CMD_SET_CAD:      chip_cad_starts++; break;
@@ -673,6 +679,21 @@ TEST(test_uninitialized_guards)
 /* Transmit (kept-safe path)                                           */
 /* ------------------------------------------------------------------ */
 
+TEST(test_transmit_long_preamble_for_commands)
+{
+    /* Command uplink: the PING goes out with the long preamble so the
+     * beacon's ~40 ms listen sniff lands inside it; RX gets the normal
+     * preamble setting back afterwards. */
+    fresh_init();
+    const uint8_t cmd[6] = {0x07, 3, 1, 0, 1, 0x55};
+    CHECK(LoRa_TransmitPreamble(cmd, sizeof(cmd), LORA_CMD_PREAMBLE_SYMBOLS) == LORA_OK);
+    CHECK(chip_tx_preamble == LORA_CMD_PREAMBLE_SYMBOLS);
+    CHECK(chip_preamble == LORA_PREAMBLE_LENGTH);    /* restored for RX */
+    CHECK(chip_mode == 5);
+    CHECK(LoRa_Transmit(cmd, sizeof(cmd)) == LORA_OK);
+    CHECK(chip_tx_preamble == LORA_PREAMBLE_LENGTH);  /* plain TX unchanged */
+}
+
 TEST(test_transmit)
 {
     fresh_init();
@@ -767,6 +788,7 @@ int main(void)
     run_test_status_and_accessors();
     run_test_uninitialized_guards();
     run_test_transmit();
+    run_test_transmit_long_preamble_for_commands();
     run_test_command_failure_propagation();
 
     return TEST_SUMMARY();
