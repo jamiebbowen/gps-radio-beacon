@@ -263,4 +263,26 @@ typedef struct __attribute__((packed)) {
 #define ENCODE_COORD(deg)       ((int32_t)((deg) * GPS_COORD_SCALE))
 
 
+/* Compile-time wire-size checks: changing a packet struct without its
+ * *_PACKET_SIZE (or the reverse) fails the build on both MCUs and in the
+ * host tests, instead of corrupting packets on the air. */
+#if defined(__cplusplus)
+  #define PF_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#else
+  #define PF_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#endif
+/* Receive-side structs hold the largest layout still accepted from the
+ * air (legacy IMU V1 with temp_c10, legacy 8-byte HELLO): rf_receiver
+ * copies up to that many bytes into them. */
+PF_STATIC_ASSERT(sizeof(BinaryGPSPacket_t) == GPS_PACKET_SIZE, "BinaryGPSPacket_t size");
+PF_STATIC_ASSERT(sizeof(HeartbeatPacket_t) == HEARTBEAT_PACKET_SIZE, "HeartbeatPacket_t size");
+PF_STATIC_ASSERT(sizeof(FusedPosPacket_t) == FUSED_PACKET_SIZE, "FusedPosPacket_t size");
+PF_STATIC_ASSERT(sizeof(LaunchT0Packet_t) == LAUNCH_T0_PACKET_SIZE, "LaunchT0Packet_t size");
+PF_STATIC_ASSERT(sizeof(ImuTracePacket_t) == IMU_TRACE_PACKET_SIZE_V1, "ImuTracePacket_t size");
+PF_STATIC_ASSERT(sizeof(FlightEventPacket_t) == FLIGHT_EVENT_PACKET_SIZE, "FlightEventPacket_t size");
+PF_STATIC_ASSERT(sizeof(MaximaPacket_t) == MAXIMA_PACKET_SIZE, "MaximaPacket_t size");
+PF_STATIC_ASSERT(sizeof(HelloPacket_t) == HELLO_PACKET_SIZE_V1, "HelloPacket_t size");
+PF_STATIC_ASSERT(sizeof(CmdPacket_t) == CMD_ACK_PACKET_SIZE, "CmdPacket_t size");
+PF_STATIC_ASSERT(sizeof(AckPacket_t) == CMD_ACK_PACKET_SIZE, "AckPacket_t size");
+
 #endif // _PACKET_FORMAT_H_
