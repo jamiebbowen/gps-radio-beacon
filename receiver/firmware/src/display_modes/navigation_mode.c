@@ -181,7 +181,8 @@ static const char *LoRa_QualityLabel(int16_t rssi, int8_t snr)
 void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remote_gps,
                            GPS_Data *local_gps_data, GPS_Data *remote_gps_data,
                            float compass_heading, uint32_t last_rf_packet_time,
-                           uint32_t rf_packet_count)
+                           uint32_t rf_packet_count,
+                           const Preflight_Result_t *pf)
 {
   float distance_to_tx = -1.0f;
   float direction_to_tx = -1.0f;
@@ -339,17 +340,6 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
       if (speed_ms > 999.9f) speed_ms = 999.9f;
     }
 
-    /* Ready-to-fly verdict: the same checks as the PRE-FLIGHT page -
-     * fresh link (35 s gate > any current prelaunch cadence + margin),
-     * TX fix with >=4 sats, local RX fix, live compass.
-     * SD card is advisory there and excluded here too. */
-    uint8_t rtf_link = (last_rf_packet_time > 0) &&
-                       (HAL_GetTick() - last_rf_packet_time) <= 35000u;
-    uint8_t rtf_tx   = (remote_gps_data->fix >= 1 &&
-                        remote_gps_data->satellites >= 4);
-    uint8_t rtf_rx   = has_valid_local_gps;
-    uint8_t rtf_cmp  = (compass_data.heading_valid && !compass_data.heading_stale);
-
     /* Row 2: Combined fix status (arrow-constrained) */
     const char *b_fix = "B:--";
     if (last_rf_packet_time > 0) {
@@ -470,12 +460,25 @@ void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remot
         }
         Display_DrawTextRowCol(5, 0, narrow);
       } else if (speed_ms < 2.0f) {
-        if (rtf_link && rtf_tx && rtf_rx && rtf_cmp) {
+        /* Ready-to-fly: the PRE-FLIGHT page's own evaluation (passed in by
+         * main.c), vetoes included - this row used to skip the TESTING-
+         * build and low-battery checks and could say READY while the
+         * checklist said NOT READY. */
+        uint8_t verdict = (pf != NULL) ? pf->verdict : (uint8_t)PF_NOT_READY;
+        if (verdict == PF_READY) {
           Display_DrawTextRowCol(5, 0, "READY TO FLY");
+        } else if (verdict == PF_VETO_TEST_BUILD) {
+          Display_DrawTextRowCol(5, 0, "NOT RDY:TST");
+        } else if (verdict == PF_VETO_LOW_POWER) {
+          Display_DrawTextRowCol(5, 0, "PWR LOW");
         } else {
+          uint8_t ok_l = (pf != NULL) && pf->link_ok;
+          uint8_t ok_t = (pf != NULL) && pf->tx_gps_ok;
+          uint8_t ok_r = (pf != NULL) && pf->rx_gps_ok;
+          uint8_t ok_c = (pf != NULL) && pf->compass_ok;
           snprintf(narrow, sizeof(narrow), "NOT RDY:%s%s%s%s",
-                   rtf_link ? "" : "L", rtf_tx ? "" : "T",
-                   rtf_rx ? "" : "R", rtf_cmp ? "" : "C");
+                   ok_l ? "" : "L", ok_t ? "" : "T",
+                   ok_r ? "" : "R", ok_c ? "" : "C");
           Display_DrawTextRowCol(5, 0, narrow);
         }
       } else {

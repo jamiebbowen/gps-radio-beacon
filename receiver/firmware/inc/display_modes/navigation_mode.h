@@ -15,6 +15,7 @@ extern "C" {
 /* Includes ------------------------------------------------------------------*/
 #include <stdint.h>
 #include "gps.h"
+#include "preflight_eval.h"
 
 /**
  * @brief Display navigation data on screen
@@ -30,7 +31,8 @@ extern "C" {
 void DisplayMode_Navigation(uint8_t has_valid_local_gps, uint8_t has_valid_remote_gps,
                            GPS_Data *local_gps_data, GPS_Data *remote_gps_data,
                            float compass_heading, uint32_t last_rf_packet_time,
-                           uint32_t rf_packet_count);
+                           uint32_t rf_packet_count,
+                           const Preflight_Result_t *pf);
 
 #ifdef __cplusplus
 }

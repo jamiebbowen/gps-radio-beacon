@@ -52,6 +52,7 @@
 #include "eink.h"
 #include "rf_receiver.h"
 #include "display_modes.h"
+#include "preflight_eval.h"
 #include "math_utils.h"
 #include "button.h"
 #include "sd_card.h"
@@ -1734,6 +1735,32 @@ int main(void)
   /* Use button-controlled display mode */
   DisplayMode_t display_mode = current_display_mode;
     
+  /* One go/no-go evaluation per loop, shared by the PRE-FLIGHT page and the
+   * navigation page's ready-to-fly row (they used to disagree: the nav row
+   * skipped the TESTING-build and low-battery vetoes).
+   * Link freshness: the gate must EXCEED the pre-launch cadence, otherwise
+   * the check flaps CHK for the tail of every pad cycle. 35 s covers the
+   * sparser (30 s) flight-prep regime with margin and stays correct during
+   * the denser (5 s) range-testing regime; heartbeats fill the gap in
+   * no-fix state. */
+  uint8_t pf_link_ok = 0;
+  uint32_t pf_link_age_s = 0;
+  if (last_rf_packet_time > 0) {
+    pf_link_age_s = (current_time - last_rf_packet_time) / 1000;
+    pf_link_ok = (pf_link_age_s <= 35);
+  }
+  Preflight_Inputs_t pf_in = {
+    .link_ok         = pf_link_ok,
+    .tx_fix          = remote_gps_data.fix,
+    .tx_sats         = (uint8_t)remote_gps_data.satellites,
+    .rx_fix_ok       = has_valid_local_gps,
+    .compass_ok      = compass_data.heading_valid && !compass_data.heading_stale,
+    .rx_vdd_mv       = (uint16_t)sys_vdd_mv,
+    .testing_suspect = RF_Receiver_TestingBuildSuspect(),
+  };
+  Preflight_Result_t pf_result;
+  Preflight_Evaluate(&pf_in, &pf_result);
+
   switch (display_mode) {
     case DISPLAY_MODE_GPS:
       DisplayMode_GPS(&local_gps_data, &last_good_local_gps, has_last_good_local_gps);
@@ -1755,7 +1782,7 @@ int main(void)
     case DISPLAY_MODE_NAVIGATION:
       DisplayMode_Navigation(has_valid_local_gps, has_valid_remote_gps,
                                 &local_gps_data, &remote_gps_data, compass_heading,
-                                last_rf_packet_time, rf_packet_count);
+                                last_rf_packet_time, rf_packet_count, &pf_result);
       break;
       
     case DISPLAY_MODE_SD_CARD:
@@ -1771,17 +1798,6 @@ int main(void)
       break;
 
     case DISPLAY_MODE_PREFLIGHT: {
-      /* Link freshness: the gate must EXCEED the pre-launch cadence,
-       * otherwise the check flaps CHK for the tail of every pad cycle.
-       * 35 s covers the sparser (30 s) flight-prep regime with margin and
-       * stays correct during the denser (5 s) range-testing regime;
-       * heartbeats fill the gap in no-fix state. */
-      uint8_t pf_link_ok = 0;
-      uint32_t pf_link_age_s = 0;
-      if (last_rf_packet_time > 0) {
-        pf_link_age_s = (current_time - last_rf_packet_time) / 1000;
-        pf_link_ok = (pf_link_age_s <= 35);
-      }
       int16_t pf_rssi = 0;
       int8_t pf_snr = 0;
       RF_Receiver_GetSignalQuality(&pf_rssi, &pf_snr);
@@ -1802,7 +1818,7 @@ int main(void)
                             remote_gps_data.fused_sensor_degraded,
                             has_valid_local_gps, (uint8_t)local_gps_data.satellites,
                             compass_data.heading_valid && !compass_data.heading_stale,
-                            sd_card_ok, (uint16_t)sys_vdd_mv);
+                            sd_card_ok, (uint16_t)sys_vdd_mv, &pf_result);
       break;
     }
       

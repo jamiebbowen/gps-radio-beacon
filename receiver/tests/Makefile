@@ -37,7 +37,7 @@ SRC_DIR  := ../firmware/src
 HEADERS := $(wildcard ../firmware/inc/*.h ../firmware/inc/display_modes/*.h test_harness.h stubs/*.h) Makefile
 
 # Modules with a matching test_<module>.c and $(SRC_DIR)/<module>.c
-MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass i2c_bus jogpad eink sd_diskio
+MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass i2c_bus jogpad eink sd_diskio preflight_eval
 BINS     := $(addprefix $(BUILD)/test_,$(MODULES)) \
             $(BUILD)/test_navigation_mode $(BUILD)/test_preflight_mode \
             $(BUILD)/test_display_modes $(BUILD)/test_fuzz_parsers
@@ -45,17 +45,19 @@ BINS     := $(addprefix $(BUILD)/test_,$(MODULES)) \
 # navigation_mode.c lives in display_modes/ and needs the real math_utils
 $(BUILD)/test_navigation_mode: test_navigation_mode.c \
         $(SRC_DIR)/display_modes/navigation_mode.c \
-        $(SRC_DIR)/math_utils.c $(HEADERS) | $(BUILD)
+        $(SRC_DIR)/math_utils.c $(SRC_DIR)/preflight_eval.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< \
 	    $(SRC_DIR)/display_modes/navigation_mode.c $(SRC_DIR)/math_utils.c \
-	    $(LDFLAGS)
+	    $(SRC_DIR)/preflight_eval.c $(LDFLAGS)
 
 # preflight_mode.c likewise lives in display_modes/ (RF layer stubbed in the
 # test file itself; no math_utils dep)
 $(BUILD)/test_preflight_mode: test_preflight_mode.c \
-        $(SRC_DIR)/display_modes/preflight_mode.c $(HEADERS) | $(BUILD)
+        $(SRC_DIR)/display_modes/preflight_mode.c \
+        $(SRC_DIR)/preflight_eval.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< \
-	    $(SRC_DIR)/display_modes/preflight_mode.c $(LDFLAGS)
+	    $(SRC_DIR)/display_modes/preflight_mode.c \
+	    $(SRC_DIR)/preflight_eval.c $(LDFLAGS)
 
 # The small formatting pages: one test binary links all of them and stubs
 # every sensor/RF getter they read (row/col text capture is the oracle).

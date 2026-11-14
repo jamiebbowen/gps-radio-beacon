@@ -37,6 +37,7 @@ PROJECT_SOURCES = \
 	$(SRC_DIR)/gps.c \
 	$(SRC_DIR)/gps_parser.c \
 	$(SRC_DIR)/math_utils.c \
+	$(SRC_DIR)/preflight_eval.c \
 	$(SRC_DIR)/lora.c \
 	$(SRC_DIR)/rf_receiver.c \
 	$(SRC_DIR)/rf_parser.c \

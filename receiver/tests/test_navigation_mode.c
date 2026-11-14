@@ -113,6 +113,8 @@ Compass_Data compass_data;
 
 static GPS_Data local_g, remote_g;
 static uint8_t draw_has_remote = 1;   /* has_valid_remote_gps for draw() */
+static uint16_t draw_vdd_mv = 3900;   /* receiver pack fed to the evaluation */
+static uint8_t  draw_testing = 0;     /* TESTING-build suspect */
 
 static void reset_scenario(void)
 {
@@ -132,6 +134,8 @@ static void reset_scenario(void)
     fake_rssi = -90;       fake_snr = 8;
     rf_initialized = 1;
     draw_has_remote = 1;
+    draw_vdd_mv = 3900;
+    draw_testing = 0;
     memset(&fake_hb, 0, sizeof(fake_hb));
     remote_g.latitude  = 39.8905f;      /* pad rocket a few dozen metres off */
     remote_g.longitude = -105.1155f;
@@ -143,8 +147,20 @@ static void draw(uint32_t now_ms, uint32_t last_pkt_ms, uint32_t pkt_count)
 {
     Test_SetTick(now_ms);
     cap_clear();
+    /* The shared go/no-go evaluation, built the way main.c builds it */
+    Preflight_Inputs_t in;
+    memset(&in, 0, sizeof(in));
+    in.link_ok = (last_pkt_ms > 0) && ((now_ms - last_pkt_ms) / 1000u) <= 35u;
+    in.tx_fix = remote_g.fix;
+    in.tx_sats = (uint8_t)remote_g.satellites;
+    in.rx_fix_ok = 1;
+    in.compass_ok = compass_data.heading_valid && !compass_data.heading_stale;
+    in.rx_vdd_mv = draw_vdd_mv;
+    in.testing_suspect = draw_testing;
+    Preflight_Result_t pf;
+    Preflight_Evaluate(&in, &pf);
     DisplayMode_Navigation(1, draw_has_remote, &local_g, &remote_g, 45.0f,
-                           last_pkt_ms, pkt_count);
+                           last_pkt_ms, pkt_count, &pf);
     if (getenv("NAVDBG")) {
         for (int r = 0; r < CAP_ROWS; r++)
             fprintf(stderr, "[%d] '%s'\n", r, cap_row_text[r]);
@@ -156,6 +172,31 @@ static void draw(uint32_t now_ms, uint32_t last_pkt_ms, uint32_t pkt_count)
 #define ROW_HAS(row, sub)  CHECK(strstr(cap_row_text[row], sub) != NULL)
 
 /* ------------------------------------------------------------------ */
+
+TEST(test_nav_ready_row_honours_vetoes)
+{
+    /* The ready row renders the PRE-FLIGHT page's own evaluation: a
+     * TESTING-build beacon or a low receiver pack must not read READY,
+     * even with every individual check green. */
+    reset_scenario();
+    draw_testing = 1;
+    draw(100000, 100000, 42);
+    ROW_IS(5, "NOT RDY:TST");
+
+    draw_testing = 0;
+    draw_vdd_mv = 3100;
+    draw(100000, 100000, 42);
+    ROW_IS(5, "PWR LOW");
+
+    draw_vdd_mv = 3900;
+    draw(100000, 100000, 42);
+    ROW_IS(5, "READY TO FLY");
+
+    /* No result at all (defensive): never READY */
+    cap_clear();
+    DisplayMode_Navigation(1, 1, &local_g, &remote_g, 45.0f, 100000, 42, NULL);
+    ROW_IS(5, "NOT RDY:LTRC");
+}
 
 TEST(test_nav_pad_ready_to_fly_verdict)
 {
@@ -295,6 +336,7 @@ TEST(test_nav_noise_alert_overrides_freshness_row)
 int main(void)
 {
     run_test_nav_pad_ready_to_fly_verdict();
+    run_test_nav_ready_row_honours_vetoes();
     run_test_nav_not_ready_names_failed_checks();
     run_test_nav_landed_shows_landed_not_rtf();
     run_test_nav_landed_drag_warning();
