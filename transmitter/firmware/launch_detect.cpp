@@ -11,6 +11,10 @@ sh2_SensorValue_t sensorValue;
 // Static variables for launch detection state
 static volatile launch_state_t current_state = LAUNCH_STATE_IDLE;
 static volatile uint32_t launch_time_seconds = 0;
+/* Separate validity flag: a launch confirmed at system time 0 (the
+ * reboot-resume path runs before loop() advances the clock) is real, so
+ * 0 cannot double as "never launched". */
+static bool launch_time_valid = false;
 static volatile uint32_t detection_start_time_ms = 0;
 static volatile bool launch_detected = false;
 static volatile bool imu_initialized = false;
@@ -128,6 +132,7 @@ void launch_detect_init(void) {
     // Initialize state variables
     current_state = LAUNCH_STATE_IDLE;
     launch_time_seconds = 0;
+    launch_time_valid = false;
     detection_start_time_ms = 0;
     launch_detected = false;
     gf_baseline_set = false;
@@ -223,6 +228,7 @@ void launch_detect_update(uint32_t system_time_seconds) {
                         
                         current_state = LAUNCH_STATE_CONFIRMED;
                         launch_time_seconds = system_time_seconds;
+                        launch_time_valid = true;
                         launch_detected = true;
                     }
                 } else {
@@ -330,6 +336,7 @@ bool launch_detect_gps_fallback_update(float alt_m, uint32_t system_time_seconds
             Serial.println(F(" m sustained - LAUNCH CONFIRMED"));
             current_state = LAUNCH_STATE_CONFIRMED;
             launch_time_seconds = system_time_seconds;
+            launch_time_valid = true;
             launch_detected = true;
             return true;
         }
@@ -426,6 +433,7 @@ void launch_detect_force_confirmed(uint32_t system_time_seconds) {
      * consistent reference. */
     current_state = LAUNCH_STATE_CONFIRMED;
     launch_time_seconds = system_time_seconds;
+    launch_time_valid = true;
     launch_detected = false;
 }
 
@@ -440,7 +448,7 @@ launch_state_t launch_detect_get_state(void) {
  * Get time since launch was detected (in seconds)
  */
 uint32_t launch_detect_get_time_since_launch(uint32_t system_time_seconds) {
-    if (launch_time_seconds > 0) {
+    if (launch_time_valid) {
         return (system_time_seconds - launch_time_seconds);
     }
     return 0;

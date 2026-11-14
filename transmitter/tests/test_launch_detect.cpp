@@ -427,6 +427,24 @@ TEST(test_force_confirmed_flying_without_edge)
     CHECK(launch_detect_get_time_since_launch(60) == 5);
 }
 
+TEST(test_launch_at_time_zero_still_counts)
+{
+    /* After a mid-flight reboot, setup() resumes at system time 0. A
+     * launch time of 0 must not read as "never launched", or LAUNCH never
+     * hands over to POST_LAUNCH (continuous TX, no callsign). */
+    reset_all();
+    launch_detect_init();
+    CHECK(launch_detect_get_time_since_launch(5) == 0);    /* not launched */
+    launch_detect_force_confirmed(0);
+    CHECK(launch_detect_get_time_since_launch(0) == 0);
+    CHECK(launch_detect_get_time_since_launch(5) == 5);
+    CHECK(launch_detect_get_time_since_launch(600) == 600);
+
+    /* Re-init clears it again */
+    launch_detect_init();
+    CHECK(launch_detect_get_time_since_launch(600) == 0);
+}
+
 TEST(test_gps_fallback_ignores_pad_drift)
 {
     reset_all();
@@ -613,6 +631,7 @@ int main(void)
     run_test_gps_fallback_ignores_climb_before_arming();
     run_test_gps_fallback_resettles_after_long_outage();
     run_test_force_confirmed_flying_without_edge();
+    run_test_launch_at_time_zero_still_counts();
     run_test_gps_fallback_ignores_pad_drift();
     run_test_gps_fallback_nan_sample_does_not_poison_baseline();
     run_test_landing_latches_on_quiet_and_stable();

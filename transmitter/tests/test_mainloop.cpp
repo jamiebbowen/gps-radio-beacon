@@ -428,6 +428,14 @@ int main(void)
     uint32_t hello_before = type_count(PACKET_TYPE_HELLO);
     fake_rstc.RCAUSE.reg  = RSTC_RCAUSE_WDT;     /* the reset that killed it */
     flog_prev_flying_flag = 1;                   /* marker row still FLYING */
+    /* A real reset clears RAM: the scheduler clock restarts at 0. Running
+     * setup() with the old ~700 s uptime hid a resume that could never
+     * leave LAUNCH (launch time 0 doubled as "never launched"). */
+    system_time_seconds = 0;
+    ms_counter = 0;
+    last_transmission_time = 0;
+    time_since_last_callsign_tx = 0;
+    post_launch_start_time = 0;
     setup();                                     /* <- the reboot itself   */
     CHECK(beacon_state == BEACON_STATE_LAUNCH);  /* airborne cadence now */
     CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
@@ -442,6 +450,16 @@ int main(void)
      * the certified event path alongside normal telemetry. */
     sim_run(5000);
     CHECK(fev_code_count[FLIGHT_EVENT_ANOM_REBOOT] == FLIGHT_EVENT_REPEATS);
+
+    /* The resumed flight is on the normal post-boost schedule: time since
+     * launch counts from the resume, LAUNCH hands over to POST_LAUNCH,
+     * and the continuous-TX phase ends so the FCC callsign airs again. */
+    CHECK(launch_detect_get_time_since_launch(system_time_seconds) >= 4);
+    CHECK(beacon_state == BEACON_STATE_POST_LAUNCH);
+    CHECK(transmit_fast_flag == 0);
+    uint32_t calls_after_resume = tx_callsigns;
+    sim_run((flight_cadence_callsign_interval_s() + 5) * 1000UL);
+    CHECK(tx_callsigns > calls_after_resume);    /* ID resumes in flight */
 
     /* The resumed flight still completes its life-cycle: quiet + stable
      * re-latches landing, which flips the marker to LANDED again. */
