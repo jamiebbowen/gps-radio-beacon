@@ -534,14 +534,16 @@ void loop() {
                 double lat_d = gps_nmea_to_decimal(c->lat, c->lat_dir);
                 double lon_d = gps_nmea_to_decimal(c->lon, c->lon_dir);
                 float alt_f = atof(c->altitude);
-                /* Corrupt fields can parse as NaN/Inf; lroundf() on a
-                 * non-finite value is UB - skip the record instead. */
+                /* Corrupt fields can parse as NaN/Inf: skip the record
+                 * rather than log a made-up position. Encode through the
+                 * saturating helpers in double - rounding lat/lon * 1e7f
+                 * through a float dropped ~3e-7 deg, and a bare int16 cast
+                 * wrapped a 40 km reading to -25536 m. */
                 if (isfinite(lat_d) && isfinite(lon_d) && isfinite(alt_f)) {
-                    int16_t alt_m = (int16_t)lroundf(alt_f);
                     flight_log_gps(millis(),
-                                   (int32_t)lroundf(lat_d * 10000000.0f),
-                                   (int32_t)lroundf(lon_d * 10000000.0f),
-                                   alt_m,
+                                   sat_i32(lat_d * 1e7),
+                                   sat_i32(lon_d * 1e7),
+                                   sat_i16(alt_f),
                                    nmea_u8_field(c->satellites, 99), c->fix_quality);
                 }
             }

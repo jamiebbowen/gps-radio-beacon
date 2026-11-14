@@ -244,8 +244,14 @@ void     flight_log_imu(uint32_t ms, int16_t ax, int16_t ay, int16_t az,
     int16_t v[7] = { ax, ay, az, gx, gy, gz, pk };
     memcpy(flog_imu_last, v, sizeof(v));
 }
-void     flight_log_gps(uint32_t ms, int32_t, int32_t, int16_t, uint8_t, uint8_t)
-         { (void)ms; flog_gps_calls++; }
+static int32_t flog_gps_last_lat = 0, flog_gps_last_lon = 0;
+static int16_t flog_gps_last_alt = 0;
+void     flight_log_gps(uint32_t ms, int32_t lat_e7, int32_t lon_e7, int16_t alt_m,
+                        uint8_t, uint8_t)
+{
+    (void)ms; flog_gps_calls++;
+    flog_gps_last_lat = lat_e7; flog_gps_last_lon = lon_e7; flog_gps_last_alt = alt_m;
+}
 static uint32_t flog_kind_count[16];   /* flash-log event records by kind */
 void     flight_log_event(uint32_t ms, uint8_t kind)
          { (void)ms; flog_event_calls++; flog_kind_count[kind & 15]++; }
@@ -517,6 +523,22 @@ int main(void)
     script_fix(SIM_LAT, SIM_LON, SIM_ALT, 8, 1);  /* honest field returns */
     sim_run(5000);
     CHECK(flog_gps_calls_value() > flog0);        /* logging resumes */
+
+    /* The flash row carries the fix at double precision (rounding through
+     * a float multiply dropped ~3e-7 deg) and a saturated altitude (a bare
+     * int16 cast stored a 40 km reading as -25536 m) */
+    CHECK(flog_gps_last_lat ==
+          sat_i32(gps_nmea_to_decimal(fake_coords.lat, fake_coords.lat_dir) * 1e7));
+    CHECK(flog_gps_last_lon ==
+          sat_i32(gps_nmea_to_decimal(fake_coords.lon, fake_coords.lon_dir) * 1e7));
+    snprintf(fake_coords.altitude, sizeof(fake_coords.altitude), "40000.0");
+    uint32_t flog_alt0 = flog_gps_calls_value();
+    for (int i = 0; i < 70 && flog_gps_calls_value() == flog_alt0; i++) {
+        sim_run(100);                             /* up to the next trace tick */
+    }
+    CHECK(flog_gps_calls_value() > flog_alt0);
+    CHECK(flog_gps_last_alt == INT16_MAX);
+    script_fix(SIM_LAT, SIM_LON, SIM_ALT, 8, 1);
 
     /* ---------- Touchdown: quiet IMU + stable alt -> battery save ---- */
     sim_run((LAND_QUIET_S + 20) * 1000UL);
