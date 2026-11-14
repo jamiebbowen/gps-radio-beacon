@@ -40,7 +40,10 @@ not in continuous TX.
 **Mid-flight reboot.** A persistent FLYING marker in the flight-log region
 survives a watchdog bite or brown-out. `setup()` then resumes LAUNCH with the
 launch time set to the resume, appends to the surviving log (never erases
-it), re-airs the callsign and certifies an `ANOM_REBOOT` flight event.
+it), re-airs the callsign and certifies an `ANOM_REBOOT` flight event. The
+marker is rewritten LANDED at the landing latch or, when the latch never
+trips (GPS lost at touchdown, a tree, a dead IMU), when the 600 s recovery
+window ends - so a later power-on is a normal pad boot.
 
 ## Packets
 
