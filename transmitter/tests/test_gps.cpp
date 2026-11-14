@@ -175,11 +175,16 @@ TEST(test_init_sends_ublox_config)
     static const uint8_t gll_off[]  = { 0xCA, 0x00, 0x91, 0x20, 0x00 };
     static const uint8_t rmc_on[]   = { 0xAC, 0x00, 0x91, 0x20, 0x01 };
     static const uint8_t rate_1hz[] = { 0x01, 0x00, 0x21, 0x30, 0xE8, 0x03 };
+    /* GSV off: nothing parses it, and on a multi-GNSS M10 it is most of the
+     * 1 Hz burst - more than Serial1's 350-byte ring buffer holds across a
+     * ~1.1 s blocking SF10 transmit, so it pushed the burst into overflow */
+    static const uint8_t gsv_off[]  = { 0xC5, 0x00, 0x91, 0x20, 0x00 };
     CHECK(log_contains_bytes(ubx_hdr,  sizeof(ubx_hdr)));
     CHECK(log_contains_bytes(gga_on,   sizeof(gga_on)));
     CHECK(log_contains_bytes(gll_off,  sizeof(gll_off)));
     CHECK(log_contains_bytes(rmc_on,   sizeof(rmc_on)));
     CHECK(log_contains_bytes(rate_1hz, sizeof(rate_1hz)));
+    CHECK(log_contains_bytes(gsv_off,  sizeof(gsv_off)));
 
     /* Baud self-heal through UBX-CFG-VALSET CFG-UART1-BAUDRATE = 115200
      * (RAM layer) - the configuration interface u-blox documents for the
