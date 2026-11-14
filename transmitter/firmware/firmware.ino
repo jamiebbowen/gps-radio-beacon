@@ -341,6 +341,13 @@ void loop() {
      * edges queue as redundant FLIGHT_EVENT packets; the anomaly LEVEL
      * tightens the trace cadence via the 1 Hz tick and re-announces below. */
     static uint32_t last_anom_announce_ms = 0;
+    /* Per-report IMU peaks for the maxima recap. The current values are
+     * only the LAST report of this pass (there are several after a
+     * blocking transmit), so a spike earlier in the pass was missed. Taken
+     * every pass - also before launch, so pad handling never leaks into
+     * the first airborne pass. */
+    float pass_peak_accel = launch_detect_take_peak_accel(IMU_PEAK_MAXIMA);
+    float pass_peak_gyro  = launch_detect_take_peak_gyro(IMU_PEAK_MAXIMA);
     if (launch_detect_get_state() == LAUNCH_STATE_CONFIRMED) {
         NavFused_t f;
         nav_get_fused(&f);
@@ -366,8 +373,8 @@ void loop() {
         mx.v_n_ms        = f.valid ? f.v_n : 0.0f;
         mx.v_e_ms        = f.valid ? f.v_e : 0.0f;
         mx.v_d_ms        = ev_in.v_d_ms;
-        mx.accel_ms2     = launch_detect_get_current_accel();
-        mx.gyro_mag_rads = ev_in.gyro_mag_rads;
+        mx.accel_ms2     = pass_peak_accel;
+        mx.gyro_mag_rads = pass_peak_gyro;
         mx.uptime_s      = system_time_seconds;
         flight_maxima_feed(&mx);
 

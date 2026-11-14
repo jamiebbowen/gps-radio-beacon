@@ -144,10 +144,8 @@ void launch_detect_get_accel_xyz(float *x, float *y, float *z)
 static float fake_gx = 0.5f, fake_gy = 0.f, fake_gz = -0.75f;
 void launch_detect_get_gyro_rads(float *x, float *y, float *z)
 { if (x) *x = fake_gx; if (y) *y = fake_gy; if (z) *z = fake_gz; }
-static float fake_total_accel = 1.25f;
-float launch_detect_get_current_accel(void) { return fake_total_accel; }
 static float fake_peak_accel = 1.25f;
-float launch_detect_take_peak_accel(void) { return fake_peak_accel; }
+float launch_detect_take_peak_accel(imu_peak_consumer_t who) { (void)who; return fake_peak_accel; }
 
 static uint32_t fake_gps_rejects = 0;
 uint32_t nav_get_gps_rejects(void) { return fake_gps_rejects; }
@@ -564,7 +562,6 @@ TEST(test_imu_trace_packet_contents)
     reset_tx();
     fake_ax = 0.55f; fake_ay = -1.25f; fake_az = 0.0f;     /* m/s^2 */
     fake_gx = 0.01f; fake_gy = -0.02f; fake_gz = 0.0f;     /* rad/s */
-    fake_total_accel = 0.2f;                               /* m/s^2, now */
     fake_peak_accel  = 1.35f;                              /* since last */
 
     CHECK(beacon_transmit_imu_trace(0) == 1);
@@ -621,7 +618,6 @@ TEST(test_imu_trace_saturates_never_wraps)
 
     fake_ax = fake_ay = fake_az = 0.0f;
     fake_gx = fake_gy = fake_gz = 0.0f;
-    fake_total_accel = 0.0f;
     fake_peak_accel = 0.0f;
 }
 
