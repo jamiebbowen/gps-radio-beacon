@@ -573,6 +573,20 @@ int main(void)
     uint32_t hb_ground = type_count(PACKET_TYPE_HEARTBEAT);
     sim_run(130000);
     CHECK(type_count(PACKET_TYPE_HEARTBEAT) > hb_ground);
+
+    /* ...densely during the walk-in, then the battery-save ramp thins it
+     * to one per BATTERY_SAVE_HB_SLOW_INTERVAL_SEC (config.h) */
+    uint32_t hb_dense0 = type_count(PACKET_TYPE_HEARTBEAT);
+    sim_run(300000);                                   /* 5 min, still dense */
+    uint32_t hb_dense = type_count(PACKET_TYPE_HEARTBEAT) - hb_dense0;
+    sim_run((BATTERY_SAVE_HB_FAST_SEC - 430) * 1000UL); /* past the window   */
+    uint32_t hb_slow0 = type_count(PACKET_TYPE_HEARTBEAT);
+    sim_run(300000);                                   /* 5 min, sparse     */
+    uint32_t hb_slow = type_count(PACKET_TYPE_HEARTBEAT) - hb_slow0;
+    printf("  battery-save no-fix heartbeats per 5 min: dense %u, sparse %u\n",
+           (unsigned)hb_dense, (unsigned)hb_slow);
+    CHECK(hb_dense >= 50);
+    CHECK(hb_slow >= 8 && hb_slow <= 11);
     script_fix(SIM_LAT, SIM_LON, SIM_ALT, 9, 1);
 
     /* Overlong serial line: dropped, the parser resyncs at the newline */

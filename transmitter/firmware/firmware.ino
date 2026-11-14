@@ -98,6 +98,7 @@ uint32_t system_time_seconds = 0;
 uint32_t last_transmission_time = 0;
 uint32_t last_callsign_tx_s = 0;
 uint32_t post_launch_start_time = 0;
+uint32_t battery_save_start_time = 0;   /* heartbeat ramp (config.h) */
 
 // Counter for 1-second timer
 uint16_t ms_counter = 0;
@@ -318,6 +319,7 @@ void loop() {
             if (landing_detect_update(gps_ok ? atof(c->altitude) : 0.0f,
                                       gps_ok, system_time_seconds)) {
                 beacon_state = BEACON_STATE_BATTERY_SAVE;
+                battery_save_start_time = system_time_seconds;
                 transmit_beacon_flag = 1;
                 transmit_fast_flag = 0;
                 radio_disable();
@@ -450,6 +452,7 @@ void loop() {
         uint32_t time_in_post_launch = system_time_seconds - post_launch_start_time;
         if (flight_cadence_should_leave_post_launch(time_in_post_launch)) {
             beacon_state = BEACON_STATE_BATTERY_SAVE;
+            battery_save_start_time = system_time_seconds;
             transmit_beacon_flag = 1;
             transmit_fast_flag = 0;
             /* Cadence-timeout path only: the landing-detect path already
@@ -534,7 +537,8 @@ void loop() {
             gps_poll_rx();
             beacon_transmit_heartbeat(gps_get_current_coordinates(),
                                       system_time_seconds,
-                                      flight_cadence_heartbeat_interval_s(beacon_state),
+                                      flight_cadence_heartbeat_interval_s(beacon_state,
+                                          system_time_seconds - battery_save_start_time),
                                       transmit_fast_flag);
             last_transmission_time = system_time_seconds;
         } else {
@@ -553,7 +557,8 @@ void loop() {
              * rate-limited heartbeat so the receiver still hears us. */
             beacon_transmit_heartbeat(gps_get_current_coordinates(),
                                       system_time_seconds,
-                                      flight_cadence_heartbeat_interval_s(beacon_state),
+                                      flight_cadence_heartbeat_interval_s(beacon_state,
+                                          system_time_seconds - battery_save_start_time),
                                       transmit_fast_flag);
         }
         }

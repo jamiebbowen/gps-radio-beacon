@@ -20,6 +20,15 @@
  * PRELAUNCH cadence constants below. */
 #define HEARTBEAT_INTERVAL_SEC 5
 
+/* BATTERY_SAVE heartbeat ramp. After landing, a beacon with no usable fix
+ * (buried, under canopy, GPS dead) is heard only through heartbeats, so
+ * they stay dense (HEARTBEAT_INTERVAL_SEC) for the walk-in, when the crew
+ * direction-finds on RSSI. After BATTERY_SAVE_HB_FAST_SEC they slow to
+ * BATTERY_SAVE_HB_SLOW_INTERVAL_SEC: each ~1.1 s SF10 burst at 5 s is
+ * ~22% PA duty, at 30 s ~4%, which buys hours on a long recovery. */
+#define BATTERY_SAVE_HB_FAST_SEC          1800  /* 30 min dense */
+#define BATTERY_SAVE_HB_SLOW_INTERVAL_SEC   30
+
 /* ---------------------------------------------------------------------------
  * Beep-before-silence pad policy (turn-on grace + quiet pad)
  * -------------------------------------------------------------------------*/

@@ -62,11 +62,23 @@ TEST(test_cadence_table_pins)
     CHECK(flight_cadence_fused_interval_ms(BEACON_STATE_BATTERY_SAVE)== 5000);
 
     /* Heartbeat cadence: dense during the boot grace minute, quiet pad */
-    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_TURN_ON)     == 5);
-    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_PRE_LAUNCH)  == 60);
-    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_LAUNCH)      == HEARTBEAT_INTERVAL_SEC);
-    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_POST_LAUNCH) == HEARTBEAT_INTERVAL_SEC);
-    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_BATTERY_SAVE)== HEARTBEAT_INTERVAL_SEC);
+    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_TURN_ON, 0)     == 5);
+    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_PRE_LAUNCH, 0)  == 60);
+    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_LAUNCH, 0)      == HEARTBEAT_INTERVAL_SEC);
+    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_POST_LAUNCH, 0) == HEARTBEAT_INTERVAL_SEC);
+    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_BATTERY_SAVE, 0)== HEARTBEAT_INTERVAL_SEC);
+
+    /* Battery-save ramp: dense while the crew walks in and direction-finds
+     * on RSSI, then sparse so a beacon with no sky view lasts hours longer.
+     * Only BATTERY_SAVE looks at the time in state. */
+    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_BATTERY_SAVE,
+                                              BATTERY_SAVE_HB_FAST_SEC - 1) == HEARTBEAT_INTERVAL_SEC);
+    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_BATTERY_SAVE,
+                                              BATTERY_SAVE_HB_FAST_SEC) == BATTERY_SAVE_HB_SLOW_INTERVAL_SEC);
+    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_BATTERY_SAVE, 86400) == BATTERY_SAVE_HB_SLOW_INTERVAL_SEC);
+    CHECK(BATTERY_SAVE_HB_FAST_SEC == 1800 && BATTERY_SAVE_HB_SLOW_INTERVAL_SEC == 30);
+    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_POST_LAUNCH, 86400) == HEARTBEAT_INTERVAL_SEC);
+    CHECK(flight_cadence_heartbeat_interval_s(BEACON_STATE_PRE_LAUNCH, 86400) == 60);
 
     /* Pad GPS audit: a sparse full-position copy; none elsewhere (the
      * first-good-fix one-shot is loop policy, not cadence policy) */
