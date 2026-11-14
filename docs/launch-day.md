@@ -18,8 +18,8 @@ bench checklist (`bench-checklist.md`) passed this weekend.
 
 The BNO085 measures *magnetic* north; the arrow points along *true* north.
 The receiver now self-corrects: after your local GPS first fixes, the
-CONUS declination grid gives the site value (Denver +8.5 deg, mid-Nevada
-+11.9 deg, ...) and applies it once. An explicit `DECLIN.TXT` on the card
+CONUS declination grid (WMM2025) gives the site value (Denver +7.5 deg,
+Reno +12.7 deg, Philadelphia -11.8 deg, ...) and applies it once. An explicit `DECLIN.TXT` on the card
 (produced by the user) still beats the table.
 
 ### Cross-state boot sanity

@@ -102,8 +102,8 @@ Connect the beacon over USB and watch the first seconds of boot:
       step and nothing stored on the SD card. Just keep the figure-8 habit:
       accuracy digits climb back to `M3` within a minute of motion.
 - [ ] Heading sanity: point the antenna north, heading reads ~0°
-      (declination is compiled for the Denver area — see
-      `COMPASS_MAGNETIC_DECLINATION_DEG` in `compass.c` before travelling).
+      (until the receiver's own GPS fixes, the Denver-area default applies;
+      after that the WMM2025 site grid in `compass.c` does).
 
 ## 5. SD logging round-trip (weekend-before check)
 
