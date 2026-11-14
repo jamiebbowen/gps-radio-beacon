@@ -40,14 +40,23 @@ static uint32_t parse_failures_null_packet = 0;
  * @brief Initialize RF parser
  * @retval Status code
  */
-uint8_t RF_Parser_Init(void)
+/**
+ * @brief New airframe context (see rf_parser.h): everything parsed so far
+ *        belonged to the previous beacon
+ */
+void RF_Parser_NewContext(void)
 {
-  /* Initialize parser state */
   memset(&parsed_gps_data, 0, sizeof(GPS_Data));
   memset(parsed_callsign, 0, sizeof(parsed_callsign));
   parsed_data_ready = 0;
   last_raw_gps_ms = 0;
   have_gps_backed_pos = 0;
+}
+
+uint8_t RF_Parser_Init(void)
+{
+  /* Initialize parser state */
+  RF_Parser_NewContext();
   
   /* Initialize diagnostic counters */
   parse_attempts = 0;

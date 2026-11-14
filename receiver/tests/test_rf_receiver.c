@@ -2503,6 +2503,40 @@ TEST(test_packet_soup_state_coherence)
     CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
 }
 
+TEST(test_new_context_forgets_the_previous_beacon)
+{
+    /* A manual pick tunes a different airframe: nothing parsed from the
+     * previous one may be reported as the new one's - not its position (a
+     * dead-reckoned packet would be held against the OLD beacon's fix and
+     * show it as the new target), not its callsign. */
+    fake_mode = 5;
+    RF_Receiver_StopScan();
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+    GPS_Data g;
+    inject_callsign("KE0MZS-3 CH0");
+    run_for(250, 250);
+    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);      /* rocket A */
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetGPSData(&g) == RF_OK);
+
+    RF_Receiver_StopScan();                                 /* manual pick */
+    (void)RF_Receiver_NextChannel();
+    char cs[RF_PARSER_MAX_CALLSIGN_LEN] = "x";
+    g.latitude = 1.0f;
+    (void)RF_Receiver_GetParsedData(&g, cs, sizeof(cs), NULL);
+    CHECK(cs[0] != 'K');                                    /* A's ID gone */
+
+    inject_fused_ex(36.20, -115.40, 9, FUSED_FLAG_DEAD_RECKONING, 0, 0);
+    run_for(250, 250);                                      /* rocket B, DR */
+    CHECK(RF_Receiver_GetGPSData(&g) == RF_OK);
+    CHECK_NEAR(g.latitude, 36.20, 1e-4);                    /* B's estimate */
+    CHECK_NEAR(g.longitude, -115.40, 1e-4);
+    CHECK(g.fused_position_held == 0);
+
+    RF_Receiver_StopScan();
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+}
+
 TEST(test_testing_build_cadence_detector)
 {
     /* Production beacons ID every 300 s; a TESTING_MODE flash IDs every
@@ -2676,6 +2710,7 @@ int main(void)
     run_test_receiver_cold_boot_mid_flight();
     run_test_receiver_cold_boot_mid_walk();
     run_test_packet_soup_state_coherence();
+    run_test_new_context_forgets_the_previous_beacon();
     run_test_testing_build_cadence_detector();
     run_test_boot_callsign_is_not_testing_cadence();
     run_test_heartbeat_uptime_regression_keeps_tracking();

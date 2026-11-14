@@ -28,6 +28,13 @@ extern "C" {
 uint8_t RF_Parser_Init(void);
 
 /**
+ * @brief Forget everything parsed from the previous airframe (a new channel
+ *        context): position and its GPS-backed ownership, raw-fix freshness,
+ *        fused metadata and the last callsign. Diagnostic counters stay.
+ */
+void RF_Parser_NewContext(void);
+
+/**
  * @brief Parse ASCII packet into GPS data structure
  * @param packet ASCII packet string to parse
  * @retval Status code (RF_PARSER_OK if successful, RF_PARSER_ERROR otherwise)
