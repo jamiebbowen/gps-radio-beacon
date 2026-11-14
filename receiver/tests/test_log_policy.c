@@ -78,10 +78,41 @@ TEST(test_rfstats_row_format)
     CHECK(m[strlen(m) - 1] == '0');           /* ends at sderr=0 */
 }
 
+TEST(test_heartbeat_row_format)
+{
+    LogPolicy_Heartbeat_t h;
+    memset(&h, 0, sizeof(h));
+    h.rocket_id = 3; h.channel = 0; h.satellites = 9; h.fix_quality = 1;
+    h.uptime_s = 120; h.rssi_dbm = -80; h.gps_state = 3; h.gps_resets = 0;
+    h.reset_name = "POR";
+    char m[128];
+    LogPolicy_FormatHeartbeat(&h, m, sizeof(m));
+    /* LOG_CONTRACT heartbeat: tools/test_log_summary.py parses this exact row */
+    CHECK(strcmp(m, "HEARTBEAT id=3 CH0 sats=9 fix=1 up=120s rssi=-80 gps=acq rst=0 rc=POR") == 0);
+
+    /* another rocket's heartbeat is marked, so the tools can skip it */
+    h.foreign = 1; h.gps_state = 1; h.gps_resets = 2; h.reset_name = "WDT";
+    LogPolicy_FormatHeartbeat(&h, m, sizeof(m));
+    CHECK(strcmp(m, "HEARTBEAT FOREIGN id=3 CH0 sats=9 fix=1 up=120s rssi=-80 gps=SILENT rst=2 rc=WDT") == 0);
+
+    /* every known GPS state has a name; anything newer prints '?' */
+    static const char *names[] = { "gps=unk ", "gps=SILENT ", "gps=GARBLED ", "gps=acq " };
+    h.foreign = 0;
+    for (uint8_t st = 0; st < 4; st++) {
+        h.gps_state = st;
+        LogPolicy_FormatHeartbeat(&h, m, sizeof(m));
+        CHECK(strstr(m, names[st]) != NULL);
+    }
+    h.gps_state = 9;
+    LogPolicy_FormatHeartbeat(&h, m, sizeof(m));
+    CHECK(strstr(m, "gps=? ") != NULL);
+}
+
 int main(void)
 {
     run_test_link_edge_hysteresis();
     run_test_contact_lost_once_and_regained_with_full_gap();
     run_test_rfstats_row_format();
+    run_test_heartbeat_row_format();
     return TEST_SUMMARY();
 }

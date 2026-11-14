@@ -58,4 +58,19 @@ typedef struct {
 /** Format the RFSTATS row; returns snprintf's result. */
 int LogPolicy_FormatRfStats(const LogPolicy_RfStats_t *s, char *out, size_t n);
 
+/* The HEARTBEAT row - tools/log_summary.py parses it, and
+ * tools/test_log_summary.py checks it still can (LOG_CONTRACT). */
+typedef struct {
+  uint8_t     foreign;       /* another rocket's: tools skip these     */
+  uint8_t     rocket_id, channel, satellites, fix_quality;
+  uint32_t    uptime_s;
+  int16_t     rssi_dbm;
+  uint8_t     gps_state;     /* HB_GPS_STATE(): 0 unk .. 3 acquiring   */
+  uint8_t     gps_resets;    /* HB_GPS_RESETS()                        */
+  const char *reset_name;    /* HB_RESET_NAME() of the TX boot cause   */
+} LogPolicy_Heartbeat_t;
+
+/** Format the HEARTBEAT row; returns snprintf's result. */
+int LogPolicy_FormatHeartbeat(const LogPolicy_Heartbeat_t *h, char *out, size_t n);
+
 #endif /* LOG_POLICY_H */

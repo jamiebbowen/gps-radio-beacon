@@ -16,6 +16,7 @@ import contextlib
 import importlib.util
 import io
 import os
+import pathlib
 import sys
 import tempfile
 
@@ -68,6 +69,21 @@ def expect(needle, out):
 
 
 out = run_report(SYNTHETIC_LOG)
+
+# Firmware/tool contract: the HEARTBEAT row that receiver/tests/
+# test_log_policy.c pins (marked LOG_CONTRACT) must parse here, field for
+# field - a format change on either side fails one of the two suites.
+import re
+_c_test = (pathlib.Path(__file__).resolve().parent.parent
+           / "receiver" / "tests" / "test_log_policy.c").read_text()
+_pinned = re.search(r'LOG_CONTRACT heartbeat[^\n]*\n\s*CHECK\(strcmp\(m, "([^"]+)"\)', _c_test)
+CHECKED += 1
+if not _pinned:
+    FAILURES.append("LOG_CONTRACT heartbeat row not found in test_log_policy.c")
+else:
+    _m = log_summary.HEARTBEAT_RE.search(_pinned.group(1))
+    if not _m or _m.groups() != ("3", "0", "9", "1", "120", "-80", "acq", "0"):
+        FAILURES.append(f"HEARTBEAT_RE does not parse the firmware row {_pinned.group(1)!r}")
 
 # Sections exist at all (the rot detector)
 for section in ("== Boot / reset ==", "== RF link ==", "== TX GPS health",
