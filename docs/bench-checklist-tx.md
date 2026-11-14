@@ -90,6 +90,10 @@ runbook is `launch-day.md`.
       flight profile is unsafe.
 - [ ] `Sensor was reset, re-enabling reports` may appear after violent
       shaking - that is the BNO085 self-recovery working.
+- [ ] No `IMU report queue overflow` line during the shake test. Since
+      commit 10b052f every batched report reaches the firmware (the library
+      call used before kept only the last report of each transfer); an
+      overflow here means the main loop is too slow to drain them.
 
 ## 5. Landing + descent evidence (post-flight review)
 
