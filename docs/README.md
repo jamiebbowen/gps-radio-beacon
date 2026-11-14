@@ -51,7 +51,7 @@ the "current truth" but is worth preserving for context:
   `lora-timing-fix`, `pin-changes-summary`)
 - Design history (`binary-packet-proposal` - since **adopted**; the current
   wire format is the binary typed packets described in
-  `transmitter/firmware/include/rf_packet.h`)
+  `packet_format.h` - `transmitter/firmware/include/` and `receiver/firmware/inc/`, kept identical)
 - Documents superseded by the main README or by a consolidated doc in this
   folder (`complete-system-summary`, `migration-guide`, `port-summary`,
   `build-fix`, `upload-fix`, `e22-400m33s-wiring`)

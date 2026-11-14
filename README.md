@@ -22,8 +22,8 @@ Tested on a Mach-0.99 / 2 km AGL flight with a 37 dB link margin — see
                                                               - microSD log (SPI, littlefs)
 ```
 
-The transmitter runs a state machine (`PRE_LAUNCH` -> `LAUNCH` -> `POST_LAUNCH`
--> `BATTERY_SAVE`) that auto-adapts TX cadence based on IMU-detected liftoff.
+The transmitter runs a state machine (`TURN_ON` -> `PRE_LAUNCH` -> `LAUNCH` ->
+`POST_LAUNCH` -> `BATTERY_SAVE`) that auto-adapts TX cadence based on IMU-detected liftoff.
 The receiver logs every packet to SD card for post-flight analysis.
 
 ## Repository layout
@@ -60,8 +60,8 @@ The receiver logs every packet to SD card for post-flight analysis.
 ```bash
 cd transmitter/firmware
 make install-deps     # one-time: installs arduino-cli + Adafruit SAMD core
-make compile
-make flash            # flashes via /dev/ttyACM0 by default
+make compile ID=3 CHANNEL=5   # per-airframe rocket ID and channel
+make flash ID=3 CHANNEL=5     # flashes via /dev/ttyACM0 by default
 make monitor          # optional: USB serial log
 ```
 
@@ -72,7 +72,7 @@ Edit `include/mpu_config.h` to set your amateur-radio callsign.
 ```bash
 cd receiver/firmware
 make                  # builds bin/gps_radio_beacon_receiver.elf
-# Flash with st-flash, OpenOCD, or DFU as appropriate for your toolchain
+make flash            # explicit flash step
 ```
 
 ### Flight analysis
