@@ -21,6 +21,12 @@ FLOORS = {
         "flight_events.cpp": (99.0, 98.0),
     }),
     "rx": (98.0, {
+        # The uncovered lines are defensive littlefs-failure branches
+        # (mount after a successful format failing, self-test readback
+        # mismatch) plus, on gcc 15, the first line of a two-line ternary
+        # that gcc 13 attributes to its taken arm. 97.5% keeps ~2 lines
+        # of compiler-attribution margin.
+        "sd_card.c": (97.5, None),
         "display_modes/navigation_mode.c": (90.0, 80.0),
         "display_modes/sd_card_mode.c": (95.0, None),
         "display_modes/compass_mode.c": (95.0, None),
