@@ -299,6 +299,10 @@ TEST(test_log_file_lazy_creation_and_sequencing)
     CHECK(read_file("L0001.TXT", big, sizeof(big)) > 0);  /* seq starts at 1 */
     CHECK(strstr(big, "Timestamp,Type,PktSrc") == big);   /* header first */
     CHECK(strstr(big, "12.345,NAV,GPS,39.89") != NULL);   /* row followed */
+    /* LOG_CONTRACT header: receiver/tools/tests/test_tools.py parses with this header */
+    CHECK(strstr(big, "Timestamp,Type,PktSrc,BeaconLat,BeaconLon,BeaconAlt_m,BeaconSats,VN_ms,VE_ms,VD_ms,FusedAge_ds,FusedFlags,BaseLat,BaseLon,BaseAlt_m,Distance_km,Bearing_deg,Heading_deg,RSSI_dBm,SNR_dB,Pitch_deg,Roll_deg,BaseSats,BaseHDOP\n") == big);
+    /* LOG_CONTRACT nav: receiver/tools/tests/test_tools.py parses this exact row */
+    CHECK(strstr(big, "12.345,NAV,GPS,39.890999,-105.112000,1800.0,9,0.00,0.00,0.00,0,00,0.000000,0.000000,0.0,1.250,270.0,45.0,-92,6,5.0,-2.0,0,0.0\n") != NULL);
 
     /* The write-time tracker: reads cleanly and clears on read. (Fake
      * ticks can't measure real bursts - only the semantics are pinned.) */
@@ -377,6 +381,8 @@ TEST(test_all_log_row_formats)
     CHECK(strstr(big, "12.50,-3.25,40.00") != NULL);      /* velocities */
     CHECK(strstr(big, ",IMU,512,55,-125,980,57,-114,12,1350,231,-95,-12,3\n")
           != NULL);                                       /* full IMU row */
+    /* LOG_CONTRACT imu: receiver/tools/tests/test_tools.py parses this exact row */
+    CHECK(strstr(big, "2.500,IMU,512,55,-125,980,57,-114,12,1350,231,-95,-12,3\n") != NULL);
     CHECK(strstr(big, ",BASE,") != NULL);
     CHECK(strstr(big, "1650.0,0,0.9") != NULL);   /* alt, sats, hdop */
 }
