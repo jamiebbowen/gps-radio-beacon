@@ -26,6 +26,19 @@
  * so tests can reach static helpers and exercise their defensive guards. */
 #include "../firmware/src/rf_parser.c"
 
+/* Full parser reset between tests. The firmware only ever calls
+ * RF_Parser_Init() at boot; tests reach the module statics directly. */
+static void parser_reset(void)
+{
+    memset(&parsed_gps_data, 0, sizeof(parsed_gps_data));
+    memset(parsed_callsign, 0, sizeof(parsed_callsign));
+    memset(last_valid_packet, 0, sizeof(last_valid_packet));
+    last_raw_gps_ms = 0;
+    parsed_data_ready = 0;
+    parse_attempts = parse_successes = parse_failures = 0;
+    parse_failures_null_packet = 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Packet-building helpers                                             */
 /* ------------------------------------------------------------------ */
@@ -81,18 +94,18 @@ static void build_fused_packet(uint8_t *buf, double lat_deg, double lon_deg,
 /* ------------------------------------------------------------------ */
 
 TEST(test_ascii_null_and_empty_rejected) {
-    RF_Parser_Reset();
+    parser_reset();
     uint32_t nulls = 0;
 
     CHECK(RF_Parser_ParseAsciiPacket(NULL) == RF_PARSER_ERROR);
     CHECK(RF_Parser_ParseAsciiPacket("") == RF_PARSER_ERROR);
 
-    RF_Parser_GetDetailedFailures(&nulls, NULL, NULL, NULL, NULL);
+    RF_Parser_GetDetailedFailures(&nulls);
     CHECK(nulls == 2);
 }
 
 TEST(test_ascii_position_packets_rejected) {
-    RF_Parser_Reset();
+    parser_reset();
     /* Comma-separated ASCII positions are retired: rejected, never stored. */
     CHECK(RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,1234.5,8")
           == RF_PARSER_ERROR);
@@ -110,7 +123,7 @@ TEST(test_ascii_position_packets_rejected) {
 }
 
 TEST(test_ascii_callsign_packet) {
-    RF_Parser_Reset();
+    parser_reset();
     CHECK(RF_Parser_ParseAsciiPacket("KD0ABC") == RF_PARSER_OK);
 
     GPS_Data gps;
@@ -124,7 +137,7 @@ TEST(test_ascii_callsign_packet) {
 /* ------------------------------------------------------------------ */
 
 TEST(test_binary_valid_packet) {
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t pkt[GPS_PACKET_SIZE];
     build_gps_packet(pkt, 39.8900750, -105.1155100, 1671, 12,
                      FLAG_LAUNCH_DETECTED | FLAG_FIX_QUALITY_GOOD | 0x01);
@@ -143,7 +156,7 @@ TEST(test_binary_valid_packet) {
 }
 
 TEST(test_binary_negative_altitude) {
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t pkt[GPS_PACKET_SIZE];
     build_gps_packet(pkt, 51.5000000, -0.1200000, -100, 8, 0x41);
 
@@ -156,7 +169,7 @@ TEST(test_binary_negative_altitude) {
 }
 
 TEST(test_binary_layouts_and_malformed) {
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t pkt[GPS_PACKET_SIZE];
     build_gps_packet(pkt, 39.89, -105.11, 100, 8, 0);
 
@@ -183,7 +196,7 @@ TEST(test_binary_layouts_and_malformed) {
 /* ------------------------------------------------------------------ */
 
 TEST(test_fused_valid_packet) {
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t pkt[FUSED_PACKET_SIZE];
     build_fused_packet(pkt, 39.8900750, -105.1155100,
                        8687,             /* (1671.7 + 500) * 4  */
@@ -216,7 +229,7 @@ TEST(test_fused_valid_packet) {
 TEST(test_fused_legacy_layouts_still_decode) {
     /* V2 (20 B: age at 17, flags at 18, id at 19) from beacons on the
      * previous firmware must keep decoding while the fleet transitions. */
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t v2[FUSED_PACKET_SIZE_V2];
     memset(v2, 0, sizeof(v2));
     v2[0] = PACKET_TYPE_FUSED;
@@ -236,7 +249,7 @@ TEST(test_fused_legacy_layouts_still_decode) {
 
     /* V1 (19 B WITHOUT the V3 marker: age at 17, flags at 18, no id).
      * Even age keeps bit0 clear so the version discriminator reads V1. */
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t v1[FUSED_PACKET_SIZE_V1];
     memset(v1, 0, sizeof(v1));
     v1[0] = PACKET_TYPE_FUSED;
@@ -253,7 +266,7 @@ TEST(test_fused_legacy_layouts_still_decode) {
 }
 
 TEST(test_fused_sensor_degraded_flag) {
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t pkt[FUSED_PACKET_SIZE];
     build_fused_packet(pkt, 39.89, -105.11, 6000, 0, 0, 0, 3,
                        FUSED_FLAG_SENSOR_DEGRADED);
@@ -275,7 +288,7 @@ TEST(test_sensor_degraded_cleared_by_raw_gps) {
     /* Only the fused stream carries the bit; once the beacon falls back to
      * raw GPS packets the RX must stop claiming the IMU is dead (same
      * clearing discipline as fused_dr / fused_gps_fresh). */
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t fused_pkt[FUSED_PACKET_SIZE], gps_pkt[GPS_PACKET_SIZE];
     build_fused_packet(fused_pkt, 39.89, -105.11, 6000, 0, 0, 0, 3,
                        FUSED_FLAG_SENSOR_DEGRADED);
@@ -290,7 +303,7 @@ TEST(test_sensor_degraded_cleared_by_raw_gps) {
 }
 
 TEST(test_fused_gate_reject_flag) {
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t pkt[FUSED_PACKET_SIZE];
     build_fused_packet(pkt, 39.89, -105.11, 6000, 0, 0, 0, 3,
                        FUSED_FLAG_GATE_REJECT);
@@ -312,7 +325,7 @@ TEST(test_fused_gate_reject_flag) {
 TEST(test_fused_reserved_bits_ignored) {
     /* Only bit 0 remains reserved: a newer TX may still set bit 1
      * (GATE_REJECT). The parser decodes it, rather than misattribute it. */
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t pkt[FUSED_PACKET_SIZE];
     build_fused_packet(pkt, 39.89, -105.11, 2400, 0, 0, 0, 3,
                        FUSED_FLAG_RESERVED_MASK);
@@ -395,7 +408,7 @@ TEST(test_fused_wire_format_constants_pin) {
 }
 
 TEST(test_fused_dead_reckoning_flag) {
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t pkt[FUSED_PACKET_SIZE];
     build_fused_packet(pkt, 39.89, -105.11, 6000, 0, 0, 0, 255,
                        FUSED_FLAG_DEAD_RECKONING);
@@ -414,7 +427,7 @@ TEST(test_fused_landed_flag_both_streams) {
      * on fused, FLAG_LANDED on raw GPS); the raw stream must update, not
      * clear, the field or the nav page chip would flap as the streams
      * interleave (same bug class as the fix-clobber regression above). */
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t fused_pkt[FUSED_PACKET_SIZE], gps_pkt[GPS_PACKET_SIZE];
     build_fused_packet(fused_pkt, 39.89, -105.11, 2400, 0, 0, 0, 3,
                        FUSED_FLAG_GPS_FRESH | FUSED_FLAG_LANDED);
@@ -441,7 +454,7 @@ TEST(test_airlink_golden_fused_decode) {
     /* Decode the same golden bytes the TX encoder test emits
      * (receiver/tests/airlink_golden.h) - the two suites share one
      * authoritative byte stream so wire-format drift is unmissable. */
-    RF_Parser_Reset();   /* last_raw_gps_ms=0 so the stale-override can't gate */
+    parser_reset();   /* last_raw_gps_ms=0 so the stale-override can't gate */
     CHECK(RF_Parser_ParseFusedPacket(AIRLINK_FUSED_GOLDEN,
                                      sizeof(AIRLINK_FUSED_GOLDEN)) == RF_PARSER_OK);
 
@@ -462,7 +475,7 @@ TEST(test_airlink_golden_fused_decode) {
 TEST(test_airlink_golden_gps_decode) {
     /* Raw-GPS sibling of the fused airlink pin: decode the exact bytes
      * the TX golden encoder test emits (airlink_golden.h). */
-    RF_Parser_Reset();
+    parser_reset();
     CHECK(RF_Parser_ParseBinaryPacket(AIRLINK_GPS_GOLDEN,
                                       sizeof(AIRLINK_GPS_GOLDEN)) == RF_PARSER_OK);
     GPS_Data gps;
@@ -480,7 +493,7 @@ TEST(test_stale_fused_does_not_override_fresh_raw) {
      * position ~22 km off while honest raw GPS packets kept arriving -
      * the nav page flickered between truth and fiction. Rule: a fused
      * packet with GPS_FRESH clear must not overwrite a recent raw fix. */
-    RF_Parser_Reset();
+    parser_reset();
     Test_SetTick(100000);
     uint8_t gps_pkt[GPS_PACKET_SIZE], fused_pkt[FUSED_PACKET_SIZE];
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x43);
@@ -511,7 +524,7 @@ TEST(test_stale_fused_does_not_override_fresh_raw) {
 TEST(test_fresh_fused_always_updates_position) {
     /* Sibling contract: a fused packet WITH GPS_FRESH holds priority, as
      * before - the override above only arms for self-admitted staleness. */
-    RF_Parser_Reset();
+    parser_reset();
     Test_SetTick(200000);
     uint8_t gps_pkt[GPS_PACKET_SIZE], fused_pkt[FUSED_PACKET_SIZE];
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x43);
@@ -529,7 +542,7 @@ TEST(test_fresh_fused_always_updates_position) {
 }
 
 TEST(test_fused_layouts_and_malformed) {
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t pkt[FUSED_PACKET_SIZE];
     build_fused_packet(pkt, 39.89, -105.11, 0, 0, 0, 0, 0, 0);
 
@@ -565,7 +578,7 @@ TEST(test_fused_does_not_clobber_gps_fix) {
     /* `fix` drives the "3D"/"NoFix" UI label and is only meaningful for raw
      * GPS packets; fused packets must leave it alone (regression guard for
      * the display-flapping bug documented in rf_parser.c). */
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t gps_pkt[GPS_PACKET_SIZE], fused_pkt[FUSED_PACKET_SIZE];
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x43);  /* fix = 3 */
     build_fused_packet(fused_pkt, 39.90, -105.12, 2400, 100, 0, 0, 3,
@@ -582,7 +595,7 @@ TEST(test_fused_does_not_clobber_gps_fix) {
 TEST(test_gps_does_not_clobber_fused_velocity) {
     /* Velocities come only from fused packets and must persist across raw
      * GPS packets so the nav display doesn't flicker to 0.0 m/s. */
-    RF_Parser_Reset();
+    parser_reset();
     uint8_t gps_pkt[GPS_PACKET_SIZE], fused_pkt[FUSED_PACKET_SIZE];
     build_fused_packet(fused_pkt, 39.90, -105.12, 2400, 1500, -250, 40, 3, 0);
     build_gps_packet(gps_pkt, 39.89, -105.11, 100, 10, 0x41);
@@ -596,21 +609,6 @@ TEST(test_gps_does_not_clobber_fused_velocity) {
     CHECK_NEAR(gps.v_north, 15.0, 1e-3); /* but velocity persisted      */
     CHECK_NEAR(gps.v_east, -2.5, 1e-3);
     CHECK_NEAR(gps.v_down, 0.4, 1e-3);
-}
-
-TEST(test_reset_clears_state) {
-    uint8_t pkt[GPS_PACKET_SIZE];
-    build_gps_packet(pkt, 39.89, -105.11, 100, 10, 0x41);
-    CHECK(RF_Parser_ParseBinaryPacket(pkt, sizeof(pkt)) == RF_PARSER_OK);
-
-    RF_Parser_Reset();
-
-    GPS_Data gps;
-    CHECK(RF_Parser_GetParsedData(&gps, NULL, 0, NULL) == 0);  /* no data */
-
-    uint32_t attempts = 1, ok = 1, fails = 1;
-    RF_Parser_GetDiagnostics(&attempts, &ok, &fails);
-    CHECK(attempts == 0 && ok == 0 && fails == 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -637,52 +635,18 @@ TEST(test_init_resets_diagnostics_and_marks_packet) {
     CHECK(strcmp(buf, "PARSER_INITIALIZED") == 0);
 
     /* Detailed failure counters must also be cleared. */
-    uint32_t nulls = 99, insufficient = 99;
-    RF_Parser_GetDetailedFailures(&nulls, &insufficient, NULL, NULL, NULL);
+    uint32_t nulls = 99;
+    RF_Parser_GetDetailedFailures(&nulls);
     CHECK(nulls == 0);
-    CHECK(insufficient == 0);
 
     /* A fresh parse after Init must work (state really was cleared). */
     CHECK(RF_Parser_ParseAsciiPacket("KD0ABC") == RF_PARSER_OK);
-}
-
-TEST(test_checksum_errors_always_zero_with_lora) {
-    /* LoRa has link-layer CRC, so this deprecated counter never moves.
-     * NULL must be tolerated (API-compat shim). */
-    uint16_t errors = 1234;
-    RF_Parser_GetChecksumErrors(&errors);
-    CHECK(errors == 0);
-    RF_Parser_GetChecksumErrors(NULL); /* must not crash */
-}
-
-TEST(test_raw_packet_truncated_to_buffer) {
-    RF_Parser_Reset();
-    (void)RF_Parser_ParseAsciiPacket("3953.40284,-10407.38970,1234.5,8");
-
-    /* Undersized destination: must truncate and NUL-terminate, not overrun */
-    char small[8];
-    uint16_t len = RF_Parser_GetLastRawPacket(small, sizeof(small));
-    CHECK(len == sizeof(small) - 1);
-    CHECK(small[sizeof(small) - 1] == '\0');
-    CHECK(strncmp(small, "3953.40", 7) == 0);
-}
-
-TEST(test_detailed_failures_deprecated_counters_zero) {
-    RF_Parser_Reset();
-    uint32_t nulls = 9, insufficient = 9, csum = 9, marker = 9, callsign = 9;
-    RF_Parser_GetDetailedFailures(&nulls, &insufficient,
-                                  &csum, &marker, &callsign);
-    /* The last three are dead with LoRa framing - pinned at zero */
-    CHECK(csum == 0);
-    CHECK(marker == 0);
-    CHECK(callsign == 0);
 }
 
 /* ------------------------------------------------------------------ */
 
 int main(void) {
     run_test_init_resets_diagnostics_and_marks_packet();
-    run_test_checksum_errors_always_zero_with_lora();
     run_test_ascii_null_and_empty_rejected();
     run_test_ascii_position_packets_rejected();
     run_test_ascii_callsign_packet();
@@ -705,9 +669,6 @@ int main(void) {
     run_test_fused_layouts_and_malformed();
     run_test_fused_does_not_clobber_gps_fix();
     run_test_gps_does_not_clobber_fused_velocity();
-    run_test_reset_clears_state();
-    run_test_raw_packet_truncated_to_buffer();
-    run_test_detailed_failures_deprecated_counters_zero();
 
     return TEST_SUMMARY();
 }

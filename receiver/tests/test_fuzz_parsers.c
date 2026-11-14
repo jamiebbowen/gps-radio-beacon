@@ -284,7 +284,6 @@ int main(void) {
         if ((i & 0x3FF) == 0) {
             char gb[260];
             RF_Parser_GetParsedData(&gps, gb, sizeof gb, NULL);
-            RF_Parser_GetLastRawPacket(gb, sizeof gb);
             RF_Parser_GetLastValidPacket(gb, sizeof gb);
         }
     }

@@ -28,14 +28,8 @@ extern "C" {
 #define RF_ERR_DMA_RX_INIT  0xE3
 
 /* RF data quality thresholds */
-#define RF_DATA_STALE_TIMEOUT_MS  30000  /* 30 seconds - mark data as stale */
-#define RF_MIN_RSSI_DBM          -120    /* Minimum acceptable RSSI in dBm */
-#define RF_MIN_SNR_DB            -10     /* Minimum acceptable SNR in dB */
 
 /* Timing calibration */
-#define RF_BAUD_FUDGE_FACTOR_DEFAULT 1000  /* Default = 1.000 (no adjustment) */
-#define RF_BAUD_FUDGE_MIN            950   /* Min = 0.950 (-5%) */
-#define RF_BAUD_FUDGE_MAX            1050  /* Max = 1.050 (+5%) */
 
 /* RF packet structure */
 typedef struct {
@@ -50,11 +44,8 @@ uint8_t RF_Receiver_Init(void);
 uint8_t RF_Receiver_DataAvailable(void);
 uint8_t RF_Receiver_GetGPSData(GPS_Data *gps_data);
 void RF_Receiver_UART_RxCpltCallback(UART_HandleTypeDef *huart);
-void RF_Receiver_GetDiagnostics(uint32_t *bytes_received, uint8_t *header_matches, uint8_t *last_bytes);
-void RF_Receiver_GetExtendedDiagnostics(uint16_t *checksum_errors);
 uint32_t RF_Receiver_GetLoRaPacketCount(void);
 void RF_Receiver_GetIRQDiagnostics(uint32_t *irq_checks, uint16_t *last_irq, uint8_t *device_mode, uint8_t *spi_test, uint8_t *busy_state);
-void RF_Receiver_GetAsciiBuffer(char *buffer, uint16_t max_len);
 uint16_t RF_Receiver_GetLastPacketASCII(char *buffer, uint16_t max_len);
 uint8_t RF_Receiver_GetParsedData(GPS_Data *gps_data, char *callsign, uint16_t callsign_size, uint8_t *checksum);
 
@@ -127,7 +118,6 @@ uint8_t RF_Receiver_TakeCrcDump(uint8_t *out, uint8_t max_len, uint8_t *total_le
  * otherwise. Manual operator scans remain possible; reboot clears. */
 uint8_t  RF_Receiver_FlightContactLatched(void);
 uint32_t RF_Receiver_GetRescanSuppressions(void);
-void     RF_Receiver_ClearFlightContactLatch(void);
 
 /* Airframe binding / foreign-beacon filter. The receiver binds to the
  * first rocket_id heard on the tuned channel and drops V2 position packets
@@ -161,15 +151,9 @@ void    RF_Receiver_StopScan(void);     /* Cancel (e.g. manual channel pick) */
 uint8_t RF_Receiver_IsScanning(void);
 uint8_t RF_Receiver_ScanUpdate(void);   /* Poll from main loop; 1 = just locked */
 
-/* Timing calibration functions */
-void RF_Receiver_SetBaudFudgeFactor(uint16_t fudge_factor);
-uint16_t RF_Receiver_GetBaudFudgeFactor(void);
-
 /* Signal quality and data age functions */
 void RF_Receiver_GetSignalQuality(int16_t *rssi, int8_t *snr);
-uint8_t RF_Receiver_IsDataStale(uint32_t current_time_ms);
 uint32_t RF_Receiver_GetLastPacketTime(void);
-uint8_t RF_Receiver_IsSignalQualityGood(void);
 
 /* Packet loss diagnostics */
 void RF_Receiver_GetPacketLossDiagnostics(uint32_t *irq_count, uint32_t *lora_packets, uint32_t *duplicates);

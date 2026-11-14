@@ -139,6 +139,22 @@ uint8_t LoRa_CadResult(void) { return fake_cad_result; }
  * exercise one-shot diagnostics and error paths without hardware. */
 #include "../firmware/src/rf_receiver.c"
 
+/* Test-side reset of the in-flight contact latch (the firmware clears it
+ * only by rebooting; tests reach the module statics directly). */
+static void clear_flight_contact_latch(void)
+{
+    flight_contact_latch = 0;
+    rescan_suppression_count = 0;
+}
+
+/* Age of the newest position packet - what main.c's freshness logic
+ * consumes (UINT32_MAX = none yet). Unsigned subtraction is wrap-safe. */
+static uint32_t position_age_ms(uint32_t now)
+{
+    uint32_t t = RF_Receiver_GetLastPacketTime();
+    return t ? (uint32_t)(now - t) : UINT32_MAX;
+}
+
 /* HAL fakes (declared in the stub headers) */
 void HAL_GPIO_Init(GPIO_TypeDef *p, GPIO_InitTypeDef *i) { (void)p; (void)i; }
 GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *p, uint16_t pin)
@@ -667,7 +683,7 @@ TEST(test_maxima_and_hello_dispatch)
 
 TEST(test_flight_contact_latch_blocks_auto_rescan)
 {
-    RF_Receiver_ClearFlightContactLatch();
+    clear_flight_contact_latch();
     CHECK(RF_Receiver_FlightContactLatched() == 0);
 
     /* Our beacon launches in front of us: one launch-flagged GPS packet */
@@ -695,7 +711,7 @@ TEST(test_flight_contact_latch_blocks_auto_rescan)
     RF_Receiver_StopScan();
 
     /* Power-cycle semantic: clearing restores pre-launch behavior */
-    RF_Receiver_ClearFlightContactLatch();
+    clear_flight_contact_latch();
     (void)RF_Receiver_ScanUpdate();
     CHECK(RF_Receiver_IsScanning() == 1);
     RF_Receiver_StopScan();
@@ -703,19 +719,19 @@ TEST(test_flight_contact_latch_blocks_auto_rescan)
 
 TEST(test_flight_contact_latch_sources)
 {
-    RF_Receiver_ClearFlightContactLatch();
+    clear_flight_contact_latch();
 
     /* A certified T0 from our beacon latches */
     inject_launch_t0(OUR_ROCKET_ID, 8);
     run_for(500, 250);
     CHECK(RF_Receiver_FlightContactLatched() == 1);
-    RF_Receiver_ClearFlightContactLatch();
+    clear_flight_contact_latch();
 
     /* Any flight event from our beacon latches */
     inject_flight_event(OUR_ROCKET_ID, FLIGHT_EVENT_APOGEE, 900);
     run_for(500, 250);
     CHECK(RF_Receiver_FlightContactLatched() == 1);
-    RF_Receiver_ClearFlightContactLatch();
+    clear_flight_contact_latch();
 
     /* A V3 fused packet carrying FUSED_FLAG_LAUNCH_DETECTED latches -
      * the flag lives at byte 17 on V3 (byte 18 is the rocket_id). */
@@ -724,7 +740,7 @@ TEST(test_flight_contact_latch_sources)
                         FUSED_FLAG_LAUNCH_DETECTED | FUSED_FLAG_V3;
     run_for(500, 250);
     CHECK(RF_Receiver_FlightContactLatched() == 1);
-    RF_Receiver_ClearFlightContactLatch();
+    clear_flight_contact_latch();
 
     /* Foreign flight traffic must NOT latch: it isn't our launch */
     inject_flight_event(FOREIGN_ROCKET_ID, FLIGHT_EVENT_APOGEE, 900);
@@ -908,9 +924,9 @@ TEST(test_position_packet_flow)
     /* Consuming the packet clears the ready flag */
     CHECK(RF_Receiver_DataAvailable() == 0);
 
-    /* Freshness: stale after the timeout, not before */
-    CHECK(RF_Receiver_IsDataStale(now_ms + 1000) == 0);
-    CHECK(RF_Receiver_IsDataStale(now_ms + 600000) == 1);
+    /* Freshness: the position timestamp is this packet's arrival */
+    CHECK(position_age_ms(now_ms) < 1000);
+    CHECK(position_age_ms(now_ms + 600000) >= 600000);
 }
 
 TEST(test_channel_scan_locks_on_packet)
@@ -1236,43 +1252,9 @@ TEST(test_fused_packet_flow)
 
 TEST(test_get_gps_data_without_packet)
 {
-    RF_Parser_Reset();
+    RF_Parser_Init();
     GPS_Data gps;
     CHECK(RF_Receiver_GetGPSData(&gps) == RF_ERROR);
-}
-
-TEST(test_data_staleness_tracking)
-{
-    /* Channel switch discards the previous rocket's freshness */
-    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
-    CHECK(RF_Receiver_GetLastPacketTime() == 0);
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 1);    /* nothing yet */
-
-    inject_gps_packet(39.89, -105.11, OUR_ROCKET_ID);
-    now_ms += 10; Test_SetTick(now_ms);
-    CHECK(RF_Receiver_DataAvailable() == 1);
-    GPS_Data gps;
-    (void)RF_Receiver_GetGPSData(&gps);
-
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);
-    CHECK(RF_Receiver_IsDataStale(now_ms + RF_DATA_STALE_TIMEOUT_MS + 1) == 1);
-    CHECK(RF_Receiver_GetLastPacketTime() != 0);
-}
-
-TEST(test_signal_quality_thresholds)
-{
-    last_rssi = -125; last_snr = 5;      /* below RSSI floor */
-    CHECK(RF_Receiver_IsSignalQualityGood() == 0);
-
-    last_rssi = -90; last_snr = -12;     /* below SNR floor */
-    CHECK(RF_Receiver_IsSignalQualityGood() == 0);
-
-    last_rssi = -90; last_snr = 5;
-    CHECK(RF_Receiver_IsSignalQualityGood() == 1);
-
-    int16_t rssi = 0; int8_t snr = 0;
-    RF_Receiver_GetSignalQuality(&rssi, &snr);
-    CHECK(rssi == -90 && snr == 5);
 }
 
 TEST(test_cad_result_failure_falls_back_to_dwell)
@@ -1371,30 +1353,13 @@ TEST(test_noise_sweep_null_guard)
 
 TEST(test_diagnostics_getters)
 {
-    uint32_t bytes = 0; uint8_t matches = 0; uint8_t last4[4] = {0};
-    RF_Receiver_GetDiagnostics(&bytes, &matches, last4);
-    CHECK(bytes > 0);                       /* packets flowed in earlier tests */
-    RF_Receiver_GetDiagnostics(NULL, NULL, NULL);  /* must not crash */
-
-    uint16_t csum = 0xFFFF;
-    RF_Receiver_GetExtendedDiagnostics(&csum);
-    CHECK(csum == 0);                       /* dead counter with LoRa CRC */
-    RF_Receiver_GetExtendedDiagnostics(NULL);
-
     char ascii[64];
-    RF_Receiver_GetAsciiBuffer(ascii, sizeof(ascii));
-    CHECK(ascii[sizeof(ascii) - 1] == '\0');
-    RF_Receiver_GetAsciiBuffer(NULL, 0);           /* must not crash */
     (void)RF_Receiver_GetLastPacketASCII(ascii, sizeof(ascii));
 
     GPS_Data gps; char cs[16]; uint8_t ck;
     (void)RF_Receiver_GetParsedData(&gps, cs, sizeof(cs), &ck);
 
     CHECK(RF_Receiver_GetLoRaPacketCount() > 0);
-
-    /* Deprecated UART-era shims: fixed answers, no side effects */
-    RF_Receiver_SetBaudFudgeFactor(1234);
-    CHECK(RF_Receiver_GetBaudFudgeFactor() == RF_BAUD_FUDGE_FACTOR_DEFAULT);
 
     uint32_t irqs = 1; uint32_t pkts = 0; uint32_t dups = 1;
     RF_Receiver_GetPacketLossDiagnostics(&irqs, &pkts, &dups);
@@ -1691,7 +1656,7 @@ TEST(test_over_horizon_walk_reacquisition)
     GPS_Data kept;
     CHECK(RF_Receiver_GetParsedData(&kept, NULL, 0, NULL) == 1);
     CHECK_NEAR(kept.latitude, 39.890, 1e-4);
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 1);
+    CHECK(position_age_ms(now_ms) > 30000);          /* long silence */
     CHECK(RF_Receiver_IsScanning() == 0);            /* silence < trigger */
 
     /* ~20 min in the auto re-scan starts looking. CAD must be skipped
@@ -1720,7 +1685,7 @@ TEST(test_over_horizon_walk_reacquisition)
     CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
     CHECK_NEAR(pos.latitude, 39.962, 1e-4);
     CHECK_NEAR(pos.longitude, -105.021, 1e-4);
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);
+    CHECK(position_age_ms(now_ms) < 1000);
     CHECK(RF_Receiver_GetLastPacketTime() == now_ms);
 }
 
@@ -1761,7 +1726,7 @@ TEST(test_fringe_link_crc_forensics)
 
     CHECK(RF_Receiver_GetCrcErrors() == crc0 + 40);   /* heard-but-corrupt */
     CHECK(RF_Receiver_GetLoRaPacketCount() == pkts0 + 10);
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);      /* freshest just arrived */
+    CHECK(position_age_ms(now_ms) < 1000);            /* freshest just arrived */
     CHECK(RF_Receiver_IsScanning() == 0);             /* < 5 min silence: no rescan */
     CHECK(RF_Receiver_NoiseAlert() == 0);             /* quiet band, no false alarm */
 }
@@ -1796,7 +1761,7 @@ TEST(test_tick_wraparound_ages)
     /* Cross 2^32. Nothing may read as "49 days old" (huge stale age) or
      * as fresh forever (age pinned at 0). */
     wrap_run(5000);                    /* now ~5.5 s past the last packet */
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);
+    CHECK(position_age_ms(now_ms) > 5000 && position_age_ms(now_ms) < 6000);
     HeartbeatPacket_t hb;
     uint32_t age_ms = 0;
     CHECK(RF_Receiver_GetLastHeartbeat(&hb, &age_ms) == 1);
@@ -1805,7 +1770,7 @@ TEST(test_tick_wraparound_ages)
     /* Past the stale timeout on the far side of the wrap, the flag still
      * matures normally. */
     wrap_run(30000);
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 1);
+    CHECK(position_age_ms(now_ms) > 35000 && position_age_ms(now_ms) < 36000);
 
     /* Scan dwell across the boundary: start it pre-wrap, and it must hop
      * exactly once after one dwell - the dwell arithmetic must not wrap-
@@ -1960,7 +1925,7 @@ TEST(test_receiver_cold_boot_mid_flight)
     last_any_packet_ms = 0;
     foreign_lock_streak = 0;
     rf_packet_ready = 0;                 /* a prior test may leave one pending */
-    RF_Parser_Reset();
+    RF_Parser_Init();
     (void)LoRa_SetChannel(0);
 
     RF_Receiver_StartScan();
@@ -1991,7 +1956,7 @@ TEST(test_receiver_cold_boot_mid_flight)
     GPS_Data pos;
     CHECK(RF_Receiver_GetGPSData(&pos) == RF_OK);
     CHECK_NEAR(pos.latitude, 39.80, 1e-4);
-    CHECK(RF_Receiver_IsDataStale(now_ms) == 0);
+    CHECK(position_age_ms(now_ms) < 1000);
 }
 
 TEST(test_receiver_cold_boot_mid_walk)
@@ -2010,7 +1975,7 @@ TEST(test_receiver_cold_boot_mid_walk)
     last_any_packet_ms = 0;
     foreign_lock_streak = 0;
     rf_packet_ready = 0;
-    RF_Parser_Reset();
+    RF_Parser_Init();
     (void)LoRa_SetChannel(0);
 
     RF_Receiver_StartScan();
@@ -2331,8 +2296,6 @@ int main(void)
     run_test_position_packet_flow();
     run_test_fused_packet_flow();
     run_test_get_gps_data_without_packet();
-    run_test_data_staleness_tracking();
-    run_test_signal_quality_thresholds();
     run_test_channel_scan_locks_on_packet();
     run_test_channel_scan_cad_fast_phase();
     run_test_cad_result_failure_falls_back_to_dwell();

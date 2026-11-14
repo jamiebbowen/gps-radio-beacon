@@ -196,22 +196,16 @@ uint16_t RF_Receiver_GetLastPacketASCII(char *buf, uint16_t max_len)
 uint8_t  RF_Receiver_TestingBuildSuspect(void) { return fake_testing; }
 
 static uint32_t fake_p_attempts = 0, fake_p_ok = 0, fake_p_fail = 0;
-static uint32_t fake_p_null = 0, fake_p_fields = 0, fake_p_chksum = 0,
-                fake_p_marker = 0, fake_p_cs_short = 0;
+static uint32_t fake_p_null = 0;
 void RF_Parser_GetDiagnostics(uint32_t *a, uint32_t *s, uint32_t *f)
 {
     if (a) *a = fake_p_attempts;
     if (s) *s = fake_p_ok;
     if (f) *f = fake_p_fail;
 }
-void RF_Parser_GetDetailedFailures(uint32_t *nul, uint32_t *fld,
-                                   uint32_t *chk, uint32_t *mrk, uint32_t *css)
+void RF_Parser_GetDetailedFailures(uint32_t *nul)
 {
     if (nul) *nul = fake_p_null;
-    if (fld) *fld = fake_p_fields;
-    if (chk) *chk = fake_p_chksum;
-    if (mrk) *mrk = fake_p_marker;
-    if (css) *css = fake_p_cs_short;
 }
 
 /* ------------------------------------------------------------------ */
@@ -276,7 +270,7 @@ static void reset_fakes(void)
     fake_foreign = 0; fake_bound = 0xFF;
     fake_ascii_len = 0; fake_ascii[0] = '\0'; fake_testing = 0;
     fake_p_attempts = fake_p_ok = fake_p_fail = 0;
-    fake_p_null = fake_p_fields = fake_p_chksum = fake_p_marker = fake_p_cs_short = 0;
+    fake_p_null = 0;
     memset(&fake_sd, 0, sizeof(fake_sd));
     fake_sd_status = SD_CARD_OK;
     fake_compass_update = fake_selftest = COMPASS_OK;
@@ -491,7 +485,7 @@ TEST(rf_mode_live_packet_layout)
     rf_last_time = 3000;
     fake_lora_pkts = 100;
     fake_p_attempts = 110; fake_p_ok = 100; fake_p_fail = 10;
-    fake_p_marker = 4; fake_p_chksum = 5; fake_p_fields = 1;
+    fake_p_null = 4;
     fake_dev_mode = 5; fake_last_irq = 0x002;
     strcpy(fake_ascii, "KE0MZS-3 CH2 TELEMETRY");
     fake_ascii_len = 22;
@@ -500,9 +494,9 @@ TEST(rf_mode_live_packet_layout)
     DisplayMode_RF(&rf_gps, &rf_valid, &rf_last_time, &rf_count,
                    &rf_last, rf_has_last);
     CHECK(strstr(row(0), "Last: 2000 ms") != NULL);
-    /* row 1: parse counters - successes/attempts + marker/chksum/fields */
-    CHECK(strstr(row(1), "P: 100/110") != NULL);
-    CHECK(strstr(row(1), "M4") && strstr(row(1), "C5") && strstr(row(1), "F1"));
+    /* row 1: parse counters - successes/attempts, failures, NULL packets */
+    CHECK(strstr(row(1), "P: 100/110 F") != NULL);
+    CHECK(strstr(row(1), " N4") != NULL);
     CHECK(strstr(row(2), "Lat: 39.90000") != NULL);
     CHECK(strstr(row(3), "Lon: -105.00000") != NULL);
     CHECK(strstr(row(5), "Fix: Y") && strstr(row(5), "Sat: 11"));

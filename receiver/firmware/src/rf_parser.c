@@ -16,7 +16,6 @@ static GPS_Data parsed_gps_data;
 static char parsed_callsign[RF_PARSER_MAX_CALLSIGN_LEN];
 static uint8_t parsed_data_ready;
 static char last_valid_packet[RF_PARSER_BUFFER_SIZE] = {0};
-static char last_raw_packet[RF_PARSER_BUFFER_SIZE]; /* Store the last raw packet for debugging */
 
 /* Freshness of the last raw GPS packet, for the stale-fused override:
  * a fused packet that admits its TX-side GPS is stale would otherwise
@@ -33,7 +32,6 @@ static uint32_t parse_failures = 0;
 
 /* Detailed failure counters */
 static uint32_t parse_failures_null_packet = 0;
-static uint32_t parse_failures_insufficient_fields = 0;
 
 /**
  * @brief Initialize RF parser
@@ -45,13 +43,13 @@ uint8_t RF_Parser_Init(void)
   memset(&parsed_gps_data, 0, sizeof(GPS_Data));
   memset(parsed_callsign, 0, sizeof(parsed_callsign));
   parsed_data_ready = 0;
+  last_raw_gps_ms = 0;
   
   /* Initialize diagnostic counters */
   parse_attempts = 0;
   parse_successes = 0;
   parse_failures = 0;
   parse_failures_null_packet = 0;
-  parse_failures_insufficient_fields = 0;
   
   /* Initialize last_valid_packet with a test string for diagnostic purposes */
   strcpy(last_valid_packet, "PARSER_INITIALIZED");
@@ -75,10 +73,6 @@ uint8_t RF_Parser_ParseAsciiPacket(const char *packet) {
     parse_failures_null_packet++;
     return RF_PARSER_ERROR;
   }
-  
-  /* Store the raw packet for debugging */
-  strncpy(last_raw_packet, packet, RF_PARSER_BUFFER_SIZE - 1);
-  last_raw_packet[RF_PARSER_BUFFER_SIZE - 1] = '\0';
   
   /* Positions are binary-only (RF_Parser_ParseBinaryPacket /
    * RF_Parser_ParseFusedPacket). The legacy comma-separated ASCII position
@@ -127,19 +121,6 @@ uint8_t RF_Parser_GetParsedData(GPS_Data *gps_data, char *callsign, uint16_t cal
 }
 
 /**
- * @brief Get checksum error count (deprecated - LoRa has built-in CRC)
- * @param checksum_errors Pointer to store checksum error count
- * @retval None
- */
-void RF_Parser_GetChecksumErrors(uint16_t *checksum_errors)
-{
-  /* Function kept for API compatibility but always returns 0 with LoRa */
-  if (checksum_errors) {
-    *checksum_errors = 0;
-  }
-}
-
-/**
  * @brief Get the last valid packet from the parser
  * @param buffer Buffer to store the last valid packet
  * @param max_len Maximum length of the buffer
@@ -156,29 +137,6 @@ uint16_t RF_Parser_GetLastValidPacket(char *buffer, uint16_t max_len)
     }
     
     strncpy(buffer, last_valid_packet, packet_len);
-    buffer[packet_len] = '\0'; /* Ensure null termination */
-  }
-  
-  return packet_len;
-}
-
-/**
- * @brief Get the last raw packet from the parser
- * @param buffer Buffer to store the last raw packet
- * @param max_len Maximum length of the buffer
- * @retval Length of the packet stored in the buffer
- */
-uint16_t RF_Parser_GetLastRawPacket(char *buffer, uint16_t max_len)
-{
-  uint16_t packet_len = 0;
-  
-  if (buffer && max_len > 0) {
-    packet_len = strlen(last_raw_packet);
-    if (packet_len > max_len - 1) {
-      packet_len = max_len - 1;
-    }
-    
-    strncpy(buffer, last_raw_packet, packet_len);
     buffer[packet_len] = '\0'; /* Ensure null termination */
   }
   
@@ -204,41 +162,6 @@ void RF_Parser_GetDiagnostics(uint32_t *attempts, uint32_t *successes, uint32_t 
   
   if (failures) {
     *failures = parse_failures;
-  }
-}
-
-/**
- * @brief Get detailed failure diagnostics
- * @param null_packet Pointer to store null packet failures
- * @param insufficient_fields Pointer to store insufficient fields failures
- * @param checksum_invalid Pointer to store checksum failures
- * @param marker_not_found Pointer to store marker failures
- * @param callsign_too_short Pointer to store callsign failures
- * @retval None
- */
-void RF_Parser_GetDetailedFailures(uint32_t *null_packet, uint32_t *insufficient_fields, 
-                                   uint32_t *checksum_invalid, uint32_t *marker_not_found,
-                                   uint32_t *callsign_too_short)
-{
-  if (null_packet) {
-    *null_packet = parse_failures_null_packet;
-  }
-  
-  if (insufficient_fields) {
-    *insufficient_fields = parse_failures_insufficient_fields;
-  }
-  
-  /* These counters are deprecated with LoRa but kept for API compatibility */
-  if (checksum_invalid) {
-    *checksum_invalid = 0;
-  }
-  
-  if (marker_not_found) {
-    *marker_not_found = 0;
-  }
-  
-  if (callsign_too_short) {
-    *callsign_too_short = 0;
   }
 }
 
@@ -463,22 +386,13 @@ uint8_t RF_Parser_ParseFusedPacket(const uint8_t *data, uint16_t length)
 }
 
 /**
- * @brief Reset parser state
- * @retval None
+ * @brief Packets rejected as NULL/empty (the only detailed failure class
+ *        left now that positions are binary-only)
+ * @param null_packet Output: NULL/empty packet failures (may be NULL)
  */
-void RF_Parser_Reset(void)
+void RF_Parser_GetDetailedFailures(uint32_t *null_packet)
 {
-  /* Reset parser state */
-  memset(&parsed_gps_data, 0, sizeof(GPS_Data));
-  memset(parsed_callsign, 0, sizeof(parsed_callsign));
-  memset(last_valid_packet, 0, sizeof(last_valid_packet));
-  last_raw_gps_ms = 0;
-  parsed_data_ready = 0;
-  
-  /* Reset diagnostic counters */
-  parse_attempts = 0;
-  parse_successes = 0;
-  parse_failures = 0;
-  parse_failures_null_packet = 0;
-  parse_failures_insufficient_fields = 0;
+  if (null_packet) {
+    *null_packet = parse_failures_null_packet;
+  }
 }

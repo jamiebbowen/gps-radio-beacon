@@ -61,7 +61,6 @@ static SPI_HandleTypeDef hspi_lora;
  * future TX paths don't need to re-plumb __HAL_LINKDMA. */
 static DMA_HandleTypeDef hdma_spi2_tx;
 static DMA_HandleTypeDef hdma_spi2_rx;
-static uint32_t rf_bytes_received = 0;
 static uint32_t rf_lora_packets_received = 0;  // Total LoRa packets received
 static uint32_t rf_crc_errors = 0;  // Packets heard but rejected by CRC (heard-and-corrupt vs never-heard)
 static uint32_t rf_irq_checks = 0;  // How many times we've checked IRQ status
@@ -69,7 +68,6 @@ static uint16_t rf_last_irq_status = 0;  // Last IRQ status we read
 static uint8_t rf_last_device_mode = 0;  // Last device operating mode
 static uint8_t rf_spi_test_result = 0xFF;  // SPI communication test (0=fail, 1=pass, 0xFF=not tested)
 static uint8_t rf_last_busy_state = 0;  // Last BUSY pin state
-static uint8_t rf_header_matches = 0;
 static uint32_t rf_wedges_recovered = 0;  // mid-session RX-loss recoveries
 static uint32_t wedge_deaf_start_ms = 0;    /* not-RX window opened at     */
 static uint32_t wedge_last_deaf_ms = 0;     /* last completed deaf stretch */
@@ -81,7 +79,6 @@ static uint8_t  crc_dump_len = 0;           /* bytes captured (<= 8)       */
 static uint8_t  crc_dump_total_len = 0;     /* on-air length of that frame */
 static uint8_t  crc_dump_pending = 0;       /* awaits the main-loop row    */
 static volatile uint8_t rf_packet_ready = 0;
-static uint8_t rf_last_bytes[4] = {0};
 static char rf_ascii_buffer[RF_ASCII_BUFFER_SIZE];
 static LoRa_Packet_t last_packet;
 static int16_t last_rssi = 0;
@@ -470,20 +467,8 @@ uint8_t RF_Receiver_DataAvailable(void)
     } else if (rd == LORA_OK) {
       rf_lora_packets_received++;  // Count every LoRa packet received
       last_any_packet_ms = now_ms;
-      rf_bytes_received += last_packet.length;
       last_rssi = last_packet.rssi;
       last_snr = last_packet.snr;
-      
-      /* Update last-bytes diagnostics with the trailing bytes of the packet.
-       * Guard against packets shorter than 4 bytes: indexing
-       * data[length - 4 + i] with length < 4 read out of bounds. */
-      {
-        uint16_t tail = (last_packet.length >= 4) ? 4 : last_packet.length;
-        uint16_t start = last_packet.length - tail;
-        for (uint16_t i = 0; i < tail; i++) {
-          rf_last_bytes[i] = last_packet.data[start + i];
-        }
-      }
       
       /* Parse packet based on format */
       /* Binary packet format - dispatch by type + length. Both the legacy
@@ -498,7 +483,6 @@ uint8_t RF_Receiver_DataAvailable(void)
                             last_packet.data[13]) &&
             RF_Parser_ParseBinaryPacket(last_packet.data, last_packet.length) == RF_PARSER_OK) {
           rf_packet_ready = 1;
-          rf_header_matches++;
           last_packet_time = HAL_GetTick();
           /* Launch evidence from OUR bound beacon: latch against scanning */
           if (last_packet.length == GPS_PACKET_SIZE &&
@@ -521,7 +505,6 @@ uint8_t RF_Receiver_DataAvailable(void)
         if (RF_RocketFilter(v_has_id, v_id) &&
             RF_Parser_ParseFusedPacket(last_packet.data, last_packet.length) == RF_PARSER_OK) {
           rf_packet_ready = 1;
-          rf_header_matches++;
           last_packet_time = HAL_GetTick();
           /* Launch evidence in the flags byte - index is version-
            * dependent: V3 flags at [17] (id at [18]), V1/V2 flags at
@@ -778,59 +761,6 @@ static uint8_t RF_SPI_Init(void)
 
 
 /**
- * @brief Get diagnostic information about RF receiver
- * @param bytes_received Pointer to store total bytes received
- * @param header_matches Pointer to store header match count
- * @param last_bytes Pointer to store last received bytes (4 bytes)
- * @retval None
- */
-void RF_Receiver_GetDiagnostics(uint32_t *bytes_received, uint8_t *header_matches, uint8_t *last_bytes)
-{
-  if (bytes_received) {
-    *bytes_received = rf_bytes_received;
-  }
-  
-  if (header_matches) {
-    *header_matches = rf_header_matches;
-  }
-  
-  if (last_bytes) {
-    /* Copy last bytes */
-    for (uint8_t i = 0; i < 4; i++) {
-      last_bytes[i] = rf_last_bytes[i];
-    }
-  }
-}
-
-/**
- * @brief Get extended diagnostic information about RF receiver
- * @param checksum_errors Pointer to store checksum error count
- * @retval None
- */
-void RF_Receiver_GetExtendedDiagnostics(uint16_t *checksum_errors)
-{
-  if (checksum_errors) {
-    /* Get checksum errors from the parser */
-    RF_Parser_GetChecksumErrors(checksum_errors);
-  }
-}
-
-
-
-/**
- * @brief Get the last valid ASCII packet
- * @param buffer Buffer to copy the ASCII data into
- * @param size Size of the buffer
- */
-void RF_Receiver_GetAsciiBuffer(char *buffer, uint16_t size) {
-  if (buffer && size > 0) {
-    /* Forward the call to the parser module */
-    RF_Parser_GetLastValidPacket(buffer, size);
-    buffer[size - 1] = '\0'; /* Ensure null termination */
-  }
-}
-
-/**
  * @brief Get the last valid ASCII packet and return its length
  * @param buffer Buffer to copy the ASCII data into
  * @param max_len Maximum length of the buffer
@@ -880,27 +810,6 @@ void RF_Receiver_GetIRQDiagnostics(uint32_t *irq_checks, uint16_t *last_irq, uin
 }
 
 /**
- * @brief Set the UART baud rate fudge factor (deprecated for LoRa)
- * @param fudge_factor Fudge factor value (in thousandths, e.g. 1000 = 1.0)
- * @retval None
- */
-void RF_Receiver_SetBaudFudgeFactor(uint16_t fudge_factor)
-{
-  /* Not applicable for LoRa - function kept for compatibility */
-  (void)fudge_factor;
-}
-
-/**
- * @brief Get the current UART baud rate fudge factor (deprecated for LoRa)
- * @retval Current fudge factor value (in thousandths)
- */
-uint16_t RF_Receiver_GetBaudFudgeFactor(void)
-{
-  /* Not applicable for LoRa - return default value for compatibility */
-  return RF_BAUD_FUDGE_FACTOR_DEFAULT;
-}
-
-/**
  * @brief Get signal quality metrics from last packet
  * @param rssi Pointer to store RSSI in dBm
  * @param snr Pointer to store SNR in dB
@@ -913,48 +822,12 @@ void RF_Receiver_GetSignalQuality(int16_t *rssi, int8_t *snr)
 }
 
 /**
- * @brief Check if received data is stale
- * @param current_time_ms Current system time in milliseconds
- * @retval 1 if data is stale, 0 if fresh
- */
-uint8_t RF_Receiver_IsDataStale(uint32_t current_time_ms)
-{
-  /* No packet received yet */
-  if (last_packet_time == 0) {
-    return 1;
-  }
-  
-  /* Check if data is older than timeout threshold */
-  uint32_t age_ms = current_time_ms - last_packet_time;
-  return (age_ms > RF_DATA_STALE_TIMEOUT_MS) ? 1 : 0;
-}
-
-/**
  * @brief Get timestamp of last valid packet
  * @retval Timestamp in milliseconds
  */
 uint32_t RF_Receiver_GetLastPacketTime(void)
 {
   return last_packet_time;
-}
-
-/**
- * @brief Check if signal quality is good enough for reliable data
- * @retval 1 if signal quality is good, 0 if poor
- */
-uint8_t RF_Receiver_IsSignalQualityGood(void)
-{
-  /* Check RSSI threshold */
-  if (last_rssi < RF_MIN_RSSI_DBM) {
-    return 0;
-  }
-  
-  /* Check SNR threshold */
-  if (last_snr < RF_MIN_SNR_DB) {
-    return 0;
-  }
-  
-  return 1;
 }
 
 /**
@@ -1234,13 +1107,6 @@ uint8_t RF_Receiver_FlightContactLatched(void)
 uint32_t RF_Receiver_GetRescanSuppressions(void)
 {
   return rescan_suppression_count;
-}
-
-/** Test/boot hook: clear the flight-contact latch (fresh session). */
-void RF_Receiver_ClearFlightContactLatch(void)
-{
-  flight_contact_latch = 0;
-  rescan_suppression_count = 0;
 }
 
 /**
