@@ -1511,11 +1511,14 @@ int main(void)
                                    (has_last_good_local_gps ? &last_good_local_gps : NULL);
               float row_dist_km = -1.0f, row_bearing = -1.0f;
               if (base_ptr) {
-                float d = calculate_distance(base_ptr->latitude, base_ptr->longitude,
-                                             rf_gps_data.latitude, rf_gps_data.longitude);
-                if (d >= 0.0f) row_dist_km = d / 1000.0f;
-                row_bearing = calculate_bearing(base_ptr->latitude, base_ptr->longitude,
-                                                rf_gps_data.latitude, rf_gps_data.longitude);
+                Nav_Solution_t row_nav;
+                Nav_Compute(base_ptr->latitude, base_ptr->longitude, has_valid_local_gps,
+                            rf_gps_data.latitude, rf_gps_data.longitude,
+                            compass_heading, &row_nav);
+                if (row_nav.valid) {
+                  row_dist_km = row_nav.distance_km;
+                  row_bearing = row_nav.bearing_deg;
+                }
               }
               SD_Card_LogNavigation(&rf_gps_data, base_ptr,
                                     row_dist_km, row_bearing,
@@ -1573,73 +1576,26 @@ int main(void)
 
     /* Calculate distance and direction if we have valid GPS data (current or last known good) and remote GPS */
     if ((has_valid_local_gps || has_last_good_local_gps) && has_valid_remote_gps) {
-      /* Use math_utils.c functions for accurate distance and bearing calculations */
-      
-      /* Calculate distance using Haversine formula */
-      float calc_distance;
-      
-      /* Use current GPS data if valid, otherwise use last known good GPS data */
-      if (has_valid_local_gps) {
-        calc_distance = calculate_distance(
-          local_gps_data.latitude, local_gps_data.longitude,
-          remote_gps_data.latitude, remote_gps_data.longitude);
-      } else {
-        /* Use last known good GPS data */
-        calc_distance = calculate_distance(
-          last_good_local_gps.latitude, last_good_local_gps.longitude,
-          remote_gps_data.latitude, remote_gps_data.longitude);
-      }
-      
-      /* Only update if we got a valid distance */
-      if (calc_distance >= 0.0f) {
-        distance_to_tx = calc_distance / 1000.0f; /* Convert to km */
-        /* Store as last known good distance */
+      /* One shared solution (math_utils.c Nav_Compute, the same one the
+       * navigation page uses): from the live local fix if there is one,
+       * else from the last good one. Unusable coordinates keep the last
+       * good distance and mark the direction unknown. */
+      const GPS_Data *nav_base = has_valid_local_gps ? &local_gps_data
+                                                     : &last_good_local_gps;
+      Nav_Solution_t nav_sol;
+      Nav_Compute(nav_base->latitude, nav_base->longitude, has_valid_local_gps,
+                  remote_gps_data.latitude, remote_gps_data.longitude,
+                  compass_heading, &nav_sol);
+      if (nav_sol.valid) {
+        distance_to_tx = nav_sol.distance_km;
         last_known_good_distance = distance_to_tx;
+        direction_to_tx = nav_sol.bearing_deg;
+        /* The arrow angle: bearing FROM the compass heading TO the beacon */
+        relative_direction = (compass_heading >= 0.0f && compass_heading <= 360.0f)
+                             ? nav_sol.relative_deg : -1.0f;
       } else {
-        /* Use last known good distance if available */
-        if (last_known_good_distance >= 0.0f) {
-          distance_to_tx = last_known_good_distance;
-        } else {
-          distance_to_tx = -1.0f; /* Invalid distance */
-        }
-      }
-      
-      /* Calculate bearing (direction) */
-      float calc_bearing;
-      
-      /* Use current GPS data if valid, otherwise use last known good GPS data */
-      if (has_valid_local_gps) {
-        calc_bearing = calculate_bearing(
-          local_gps_data.latitude, local_gps_data.longitude,
-          remote_gps_data.latitude, remote_gps_data.longitude);
-      } else {
-        /* Use last known good GPS data */
-        calc_bearing = calculate_bearing(
-          last_good_local_gps.latitude, last_good_local_gps.longitude,
-          remote_gps_data.latitude, remote_gps_data.longitude);
-      }
-      
-      /* Only update if we got a valid bearing */
-      if (calc_bearing >= 0.0f) {
-        direction_to_tx = calc_bearing;
-        
-        /* Calculate relative direction based on compass heading */
-        if (compass_heading >= 0.0f && compass_heading <= 360.0f) {
-          /* Calculate the relative direction to make arrow point correctly */
-          /* This is the angle FROM the compass heading TO the transmitter direction */
-          /* We want the arrow to point toward the transmitter */
-          /* When facing north (0°), and transmitter is east (90°), arrow should point right (90°) */
-          /* When facing east (90°), and transmitter is north (0°), arrow should point left (270°) */
-          relative_direction = direction_to_tx - compass_heading;
-          /* Normalize to 0-360 range */
-          while (relative_direction >= 360.0f) relative_direction -= 360.0f;
-          while (relative_direction < 0.0f) relative_direction += 360.0f;
-        } else {
-          /* Invalid compass heading */
-          relative_direction = -1.0f;
-        }
-      } else {
-        /* Invalid bearing */
+        distance_to_tx = (last_known_good_distance >= 0.0f) ? last_known_good_distance
+                                                            : -1.0f;
         direction_to_tx = -1.0f;
         relative_direction = -1.0f;
       }
