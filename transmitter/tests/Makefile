@@ -2,12 +2,13 @@
 #
 # Targets:
 #   make          - build and run all tests
-#   make coverage - re-run with gcov instrumentation and print line coverage
+#   make coverage - re-run with gcov instrumentation and print line, branch
+#                   and call coverage for every firmware module
 #   make clean    - remove build artifacts
 #
-# Modules under test compile unmodified on the host (no Arduino deps):
-#   ekf.cpp        - 6-state GPS/IMU EKF                (C++, g++)
-#   nmea_fields.c  - NMEA field extraction / conversion (C,   gcc)
+# Firmware modules compile unmodified on the host: pure-logic modules link
+# directly; hardware-facing ones (#included by their tests) run over the
+# Arduino / RadioLib / BNO08x / Wire stand-ins in stubs/.
 #
 # The shared CHECK/TEST harness lives in receiver/tests/ (firmware-agnostic).
 
@@ -165,31 +166,38 @@ test: $(BINS) $(BUILD)/altconfig_nofusion.o $(BUILD)/altconfig_testing.o
 	    echo "== $$b =="; ./$$b || rc=1; \
 	done; exit $$rc
 
+# Every firmware module paired with the test binary that owns it
+# (test:source). Each pair prints line, branch and call coverage; modules
+# #included by their test report through that test's own .gcno.
+COV_PAIRS := ekf:ekf.cpp nmea_fields:nmea_fields.c beacon:beacon.cpp \
+             nav:nav.cpp gps:gps.cpp radio:radio.cpp \
+             launch_detect:launch_detect.cpp uart:uart.cpp \
+             flight_log:flight_log.cpp flight_cadence:flight_cadence.cpp \
+             flight_events:flight_events.cpp flight_maxima:flight_maxima.cpp \
+             mainloop:firmware.ino
+
 coverage: COVFLAGS := --coverage
 coverage: clean $(BINS)
 	@for b in $(BINS); do ./$$b > /dev/null || exit 1; done
-	@gcov -o $(BUILD) $(BUILD)/test_ekf-ekf.gcno 2>/dev/null \
-	    | grep -A1 "File.*ekf.cpp"
-	@gcov -o $(BUILD) $(BUILD)/test_nmea_fields-nmea_fields.gcno 2>/dev/null \
-	    | grep -A1 "File.*nmea_fields.c"
-	@gcov -o $(BUILD) $(BUILD)/test_beacon*.gcno 2>/dev/null \
-	    | grep -A1 "File.*firmware/beacon.cpp"
-	@gcov -o $(BUILD) $(BUILD)/test_nav-test_nav.gcno 2>/dev/null \
-	    | grep -A1 "File.*firmware/nav.cpp"
-	@gcov -o $(BUILD) $(BUILD)/test_gps-test_gps.gcno 2>/dev/null \
-	    | grep -A1 "File.*firmware/gps.cpp"
-	@gcov -o $(BUILD) $(BUILD)/test_radio.gcno 2>/dev/null \
-	    | grep -A1 "File.*firmware/radio.cpp"
-	@gcov -o $(BUILD) $(BUILD)/test_launch_detect.gcno 2>/dev/null \
-	    | grep -A1 "File.*firmware/launch_detect.cpp"
-	@gcov -o $(BUILD) $(BUILD)/test_uart.gcno 2>/dev/null \
-	    | grep -A1 "File.*firmware/uart.cpp"
-	@gcov -o $(BUILD) $(BUILD)/test_flight_log.gcno 2>/dev/null \
-	    | grep -A1 "File.*firmware/flight_log.cpp"
+	@for p in $(COV_PAIRS); do t=$${p%%:*}; f=$${p##*:}; \
+	    gcov -b -o $(BUILD) $(BUILD)/test_$$t*.gcno 2>/dev/null \
+	        | grep -A4 "File '../firmware/$$f'" | grep -v '^--$$'; \
+	done
 	@mv -f *.gcov $(BUILD)/ 2>/dev/null || true
 
 clean:
-	rm -rf $(BUILD) *.gcov *.gcda *.gcno
+	rm -rf $(BUILD) build-san *.gcov *.gcda *.gcno
+
+# Header dependencies for every target. -MMD alone is not enough here:
+# each test compiles several sources in ONE command, and every source
+# rewrites the same .d file, so only the last source's headers survive
+# (test_beacon.d once listed no beacon.h / packet_format.h at all). This
+# rule appends the full header set after each target's own prerequisites,
+# so $< and the source filters in the recipes above are unaffected.
+TX_DEPS := $(wildcard ../firmware/include/*.h stubs/*.h) ../../receiver/tests/test_harness.h Makefile
+RX_DEPS := $(wildcard ../../receiver/firmware/inc/*.h ../../receiver/tests/stubs/*.h)
+$(BINS) $(BUILD)/altconfig_nofusion.o $(BUILD)/altconfig_testing.o: $(TX_DEPS)
+$(BUILD)/rf_parser_rx.o $(BUILD)/test_airlink_roundtrip: $(RX_DEPS)
 
 # Auto-generated header dependencies (see -MMD -MP above)
--include $(BINS:%=%.d) $(BUILD)/altconfig_nofusion.d
+-include $(BINS:%=%.d) $(BUILD)/altconfig_nofusion.d $(BUILD)/altconfig_testing.d
