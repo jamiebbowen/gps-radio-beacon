@@ -565,14 +565,15 @@ void loop() {
 
     /* Pad GPS audit: one full position packet when the first good fix
      * lands (the logged pad coordinate the drift baseline argues from),
-     * then a sparse periodic copy while on the pad. Fix quality is
-     * pre-checked here so a no-fix pad doesn't spam rejection logs. */
+     * then a sparse periodic copy while on the pad. The sender's own fix
+     * gate is checked quietly first so a no-fix pad doesn't spam
+     * rejection logs. */
     if (beacon_state == BEACON_STATE_TURN_ON ||
         beacon_state == BEACON_STATE_PRE_LAUNCH) {
         static uint8_t pad_fix_announced = 0;
         static uint32_t last_pad_audit_s = 0;
         const GPSCoordinates_t* c = gps_get_current_coordinates();
-        bool fix_ok = c->valid && c->fix_quality >= 1 && atoi(c->satellites) >= 4;
+        bool fix_ok = beacon_validate_fix(c, 0);
         uint32_t audit_iv_s = flight_cadence_gps_audit_interval_s(beacon_state);
         if (fix_ok && (!pad_fix_announced ||
                        (audit_iv_s != 0 &&

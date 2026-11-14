@@ -19,26 +19,28 @@
 static_assert(ROCKET_ID != 255, "ROCKET_ID 255 is reserved (RX unbound sentinel)");
 
 /**
- * Transmit GPS data in binary format (13 bytes)
- * @param coords Pointer to GPS coordinates structure
- * @param system_time_seconds Current system time in seconds
- * @param transmit_fast If true, transmit GPS data in fast mode
- * @return 1 if transmission was successful, 0 if coordinates were invalid
+ * The fix gate shared by every position sender (the flight-window sender
+ * and the pad audit in firmware.ino): valid, past the "0" pre-fix
+ * placeholder, enough satellites, fix quality >= 1, sane altitude.
+ * @param log_reason nonzero: print why a fix is rejected
+ * @return 1 if the fix may go on the air
  */
-uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast) {
-    (void)system_time_seconds; /* API parity with the ASCII variant; binary packets carry GPS time */
-    // Perform all the same validation checks as ASCII version
+uint8_t beacon_validate_fix(const GPSCoordinates_t *coords, uint8_t log_reason)
+{
+    if (coords == NULL) return 0;
     if (!coords->valid || (coords->lat[0] == '0' && strlen(coords->lat) == 1)) {
-        Serial.print(F("[Beacon] Rejecting GPS - valid="));
-        Serial.print(coords->valid);
-        Serial.print(F(" lat='"));
-        Serial.print(coords->lat);
-        Serial.print(F("' lon='"));
-        Serial.print(coords->lon);
-        Serial.println(F("'"));
+        if (log_reason) {
+            Serial.print(F("[Beacon] Rejecting GPS - valid="));
+            Serial.print(coords->valid);
+            Serial.print(F(" lat='"));
+            Serial.print(coords->lat);
+            Serial.print(F("' lon='"));
+            Serial.print(coords->lon);
+            Serial.println(F("'"));
+        }
         return 0;
     }
-    
+
     /* Minimum satellites: 4 (3D fix) in flight. Once the landing latch is
      * set, a 3-sat 2D fix still carries recovery-grade horizontal
      * coordinates - and a rocket under canopy with 3 sats would otherwise
@@ -48,24 +50,45 @@ uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t
     int sat_count = atoi(coords->satellites);
     int min_sats = launch_detect_has_landed() ? 3 : 4;
     if (sat_count < min_sats) {
-        Serial.print(F("[Beacon] Rejecting GPS - insufficient satellites: "));
-        Serial.println(sat_count);
+        if (log_reason) {
+            Serial.print(F("[Beacon] Rejecting GPS - insufficient satellites: "));
+            Serial.println(sat_count);
+        }
         return 0;
     }
-    
+
     if (coords->fix_quality < 1) {
-        Serial.print(F("[Beacon] Rejecting GPS - no fix, quality: "));
-        Serial.println(coords->fix_quality);
+        if (log_reason) {
+            Serial.print(F("[Beacon] Rejecting GPS - no fix, quality: "));
+            Serial.println(coords->fix_quality);
+        }
         return 0;
     }
-    
+
     float altitude = atof(coords->altitude);
     if (!isfinite(altitude) || altitude < -500.0f || altitude > 50000.0f) {
-        Serial.print(F("[Beacon] Rejecting GPS - unreasonable altitude: "));
-        Serial.println(altitude);
+        if (log_reason) {
+            Serial.print(F("[Beacon] Rejecting GPS - unreasonable altitude: "));
+            Serial.println(altitude);
+        }
         return 0;
     }
-    
+    return 1;
+}
+
+/**
+ * Transmit GPS data in binary format (13 bytes)
+ * @param coords Pointer to GPS coordinates structure
+ * @param system_time_seconds Current system time in seconds
+ * @param transmit_fast If true, transmit GPS data in fast mode
+ * @return 1 if transmission was successful, 0 if coordinates were invalid
+ */
+uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast) {
+    (void)system_time_seconds; /* API parity with the ASCII variant; binary packets carry GPS time */
+    if (!beacon_validate_fix(coords, 1)) return 0;
+    int sat_count = atoi(coords->satellites);
+    float altitude = atof(coords->altitude);
+
     /* Convert + validate BEFORE the radio is powered: atof() parses
      * "nan"/"inf" field text literally, and ENCODE_COORD's float->int32
      * cast of a non-finite value is undefined behavior - a checksum-valid

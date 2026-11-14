@@ -7,6 +7,8 @@
 #include "packet_format.h"
 
 // Beacon transmission functions
+/** Fix gate shared by every position sender; log_reason prints rejections. */
+uint8_t beacon_validate_fix(const GPSCoordinates_t *coords, uint8_t log_reason);
 uint8_t beacon_transmit_gps_data_binary(const GPSCoordinates_t* coords, uint32_t system_time_seconds, uint8_t transmit_fast_flag);
 void beacon_transmit_callsign(uint8_t transmit_fast);
 
