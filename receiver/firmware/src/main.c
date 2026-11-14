@@ -994,20 +994,20 @@ int main(void)
         int16_t hb_rssi;
         int8_t  hb_snr;
         RF_Receiver_GetSignalQuality(&hb_rssi, &hb_snr);
-        /* gps= verdict: acq (acquiring, normal) / SILENT (UART dead - wiring)
-         * / GARBLED (bytes but no NMEA) / unk (pre-health TX firmware) */
-        static const char *hb_gps_names[] = {"unk", "SILENT", "GARBLED", "acq"};
-        uint8_t hb_gps = HB_GPS_STATE(hb.gps_health);
+        /* The HEARTBEAT row (log_policy.c; the tools parse it) */
+        LogPolicy_Heartbeat_t hbrow = {0};
+        hbrow.foreign     = hbi.foreign ? 1 : 0;
+        hbrow.rocket_id   = hb.rocket_id;
+        hbrow.channel     = hb.channel;
+        hbrow.satellites  = hb.satellites;
+        hbrow.fix_quality = hb.fix_quality;
+        hbrow.uptime_s    = hb.uptime_s;
+        hbrow.rssi_dbm    = hb_rssi;
+        hbrow.gps_state   = HB_GPS_STATE(hb.gps_health);
+        hbrow.gps_resets  = HB_GPS_RESETS(hb.gps_health);
+        hbrow.reset_name  = HB_RESET_NAME(hb.reset_info);
         char hb_msg[128];   /* fits field-127 up/rssi + unknown rc name     */
-        snprintf(hb_msg, sizeof(hb_msg),
-                 "HEARTBEAT%s id=%u CH%u sats=%u fix=%u up=%us rssi=%d gps=%s rst=%u rc=%s",
-                 hbi.foreign ? " FOREIGN" : "",
-                 (unsigned)hb.rocket_id, (unsigned)hb.channel,
-                 (unsigned)hb.satellites, (unsigned)hb.fix_quality,
-                 (unsigned)hb.uptime_s, (int)hb_rssi,
-                 (hb_gps <= HB_GPS_ACQUIRING) ? hb_gps_names[hb_gps] : "?",
-                 (unsigned)HB_GPS_RESETS(hb.gps_health),
-                 HB_RESET_NAME(hb.reset_info));
+        LogPolicy_FormatHeartbeat(&hbrow, hb_msg, sizeof(hb_msg));
         SD_Card_EnsureLogFile();
         SD_Card_LogEvent(hb_msg);
       }

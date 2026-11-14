@@ -57,3 +57,19 @@ int LogPolicy_FormatRfStats(const LogPolicy_RfStats_t *s, char *out, size_t n)
                   (unsigned long)s->disp_ms, (unsigned long)s->cmp_ms,
                   (unsigned long)s->iters, (unsigned long)s->sderr, nfl_field);
 }
+
+int LogPolicy_FormatHeartbeat(const LogPolicy_Heartbeat_t *h, char *out, size_t n)
+{
+  /* gps= verdict: acq (acquiring, normal) / SILENT (UART dead - wiring) /
+   * GARBLED (bytes but no NMEA) / unk (pre-health TX firmware) */
+  static const char *gps_names[] = { "unk", "SILENT", "GARBLED", "acq" };
+  const char *gps = (h->gps_state < sizeof(gps_names) / sizeof(gps_names[0]))
+                    ? gps_names[h->gps_state] : "?";
+  return snprintf(out, n,
+                  "HEARTBEAT%s id=%u CH%u sats=%u fix=%u up=%lus rssi=%d gps=%s rst=%u rc=%s",
+                  h->foreign ? " FOREIGN" : "",
+                  (unsigned)h->rocket_id, (unsigned)h->channel,
+                  (unsigned)h->satellites, (unsigned)h->fix_quality,
+                  (unsigned long)h->uptime_s, (int)h->rssi_dbm, gps,
+                  (unsigned)h->gps_resets, h->reset_name ? h->reset_name : "?");
+}
