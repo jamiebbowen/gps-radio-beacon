@@ -28,6 +28,7 @@ MISO:H/L DET:H/L        ← Pin states
 |------|---------|---------|---------------|
 | **1** | MOUNT_FAIL | Mount failed even after a fresh format | Card or SPI badly broken |
 | **13** | FORMAT_FAIL | littlefs format failed | SPI or card dead |
+| **14** | NOT_FORMATTED | The card holds LittleFS (or can't be read) but would not mount; the receiver will not format it, so the flight logs survive | Marginal contact, card slow after a brown-out, corrupt metadata. Reseat and reboot; if it persists, pull it and run `make extract` on a PC, then `make format-card` to format it deliberately |
 | **91** | CARD_INIT(CMD0) | Block-device init failed at card init | No card, bad wiring, card not responding |
 | **92** | GEOMETRY(CMD9) | Block-device init failed reading capacity | Marginal card / SPI timing |
 | **99** | BD_UNKNOWN | Other block-device failure | Internal firmware error |

@@ -63,6 +63,7 @@ static uint8_t bd_storage[BD_BLOCK_COUNT * BD_BLOCK_SIZE];
 
 static int bd_init_result     = 0;   /* lfs_sd_bd_init return knob      */
 static int bd_prog_fail       = 0;   /* all writes fail                 */
+static int bd_read_fail       = 0;   /* all reads fail (card not answering) */
 static int bd_prog_fail_until_stepdown = 0; /* writes fail until the bus steps down */
 static int bd_prog_calls      = 0;   /* progs attempted since start     */
 static int bd_prog_fail_from  = 0;   /* 0=off; N=prog #N onwards fails  */
@@ -72,6 +73,7 @@ static int bd_corrupt_at_sync = 0;   /* 0=off; N=corrupt on the Nth sync */
 static int ram_read(const struct lfs_config *c, lfs_block_t block,
                     lfs_off_t off, void *buffer, lfs_size_t size)
 {
+    if (bd_read_fail) return LFS_ERR_IO;
     (void)c;
     memcpy(buffer, &bd_storage[block * BD_BLOCK_SIZE + off], size);
     return 0;
@@ -257,6 +259,46 @@ TEST(test_init_format_failure_paths)
      * itself (-> 13), and no block-device call happens between format
      * returning and mount reading. The branch guards against media that
      * lie about persisting writes - kept as defensive code. */
+}
+
+TEST(test_init_never_formats_a_card_holding_littlefs)
+{
+    /* A card that holds LittleFS but will not mount right now (marginal
+     * contact, slow after a brown-out, a corrupt metadata pair) keeps its
+     * flight logs: no auto-format, error 14 - extract it on a PC. */
+    wipe_card();
+    CHECK(SD_Card_Init() == SD_CARD_OK);                /* blank: formats */
+    /* The superblock magic the check looks for, pinned to a real format:
+     * "littlefs" after the revision count and the superblock tag */
+    CHECK(memcmp(&bd_storage[8], "littlefs", 8) == 0 ||
+          memcmp(&bd_storage[BD_BLOCK_SIZE + 8], "littlefs", 8) == 0);
+    CHECK(SD_Card_SaveLastBeacon(39.5f, -105.2f, 1655.0f) == SD_CARD_OK);
+    sd_deinit();
+
+    /* Unreadable: the mount and the superblock check both fail */
+    bd_read_fail = 1;
+    CHECK(SD_Card_Init() == SD_CARD_ERROR);
+    CHECK(sd_info.write_errors == 14);
+    bd_read_fail = 0;
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+    float lat = 0, lon = 0, alt = 0;
+    CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_OK);
+    CHECK(lat > 39.4f && lat < 39.6f);
+    sd_deinit();
+
+    /* Readable, superblock there, metadata pair corrupt (both revision
+     * counts flipped): still not formatted */
+    uint8_t rev0 = bd_storage[0], rev1 = bd_storage[BD_BLOCK_SIZE];
+    bd_storage[0] ^= 0xFF;
+    bd_storage[BD_BLOCK_SIZE] ^= 0xFF;
+    CHECK(SD_Card_Init() == SD_CARD_ERROR);
+    CHECK(sd_info.write_errors == 14);
+    bd_storage[0] = rev0;
+    bd_storage[BD_BLOCK_SIZE] = rev1;
+    CHECK(SD_Card_Init() == SD_CARD_OK);
+    lat = 0;
+    CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_OK);
+    CHECK(lat > 39.4f && lat < 39.6f);
 }
 
 TEST(test_remount_preserves_files)
@@ -1047,6 +1089,7 @@ int main(void)
     run_test_init_bd_failure_codes();
     run_test_init_blank_card_formats_and_mounts();
     run_test_init_format_failure_paths();
+    run_test_init_never_formats_a_card_holding_littlefs();
     run_test_remount_preserves_files();
     run_test_log_file_lazy_creation_and_sequencing();
     run_test_all_log_row_formats();

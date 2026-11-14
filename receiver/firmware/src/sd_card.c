@@ -176,6 +176,21 @@ static SD_Card_Status sd_open_new_log_file(void);
 /* Init / deinit / presence                                                  */
 /* ========================================================================= */
 
+/* 1 only when both superblock blocks read cleanly and neither carries the
+ * LittleFS magic: "littlefs" at offset 8, after the 4-byte revision count
+ * and the superblock tag. A blank or factory-FAT card; nothing to lose. */
+static uint8_t SD_Card_HoldsNoLittleFs(void)
+{
+    for (lfs_block_t b = 0; b < 2; b++) {
+        if (lfs_sd_cfg.read(&lfs_sd_cfg, b, 0, adhoc_file_cache,
+                            lfs_sd_cfg.read_size) != 0) {
+            return 0;
+        }
+        if (memcmp(&adhoc_file_cache[8], "littlefs", 8) == 0) return 0;
+    }
+    return 1;
+}
+
 SD_Card_Status SD_Card_Init(void)
 {
     memset(&sd_info, 0, sizeof(sd_info));
@@ -212,6 +227,15 @@ SD_Card_Status SD_Card_Init(void)
     for (int attempt = 0; attempt < 3 && err != 0; attempt++) {
         if (attempt > 0) HAL_Delay(50);  /* let the bus settle */
         err = lfs_mount(&lfs, &lfs_sd_cfg);
+    }
+    if (err && !SD_Card_HoldsNoLittleFs()) {
+        /* The card holds LittleFS (or cannot even be read) but will not
+         * mount right now - marginal contact, slow after a brown-out, a
+         * corrupt metadata pair. Formatting would wipe every flight log
+         * before anyone could react: keep it for `make extract` on a PC
+         * (`make format-card` formats one deliberately). */
+        sd_info.write_errors = 14;
+        return SD_CARD_ERROR;
     }
     if (err) {
         Display_Clear();
