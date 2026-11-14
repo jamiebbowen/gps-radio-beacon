@@ -159,9 +159,13 @@ static uint32_t position_age_ms(uint32_t now)
 
 /* HAL fakes (declared in the stub headers) */
 void HAL_GPIO_Init(GPIO_TypeDef *p, GPIO_InitTypeDef *i) { (void)p; (void)i; }
+/* One pin can be driven high: the LoRa BUSY line in the BUSY test */
+static GPIO_TypeDef *fake_high_port = NULL;
+static uint16_t      fake_high_pin  = 0;
 GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *p, uint16_t pin)
 {
-    (void)p; (void)pin; return GPIO_PIN_RESET;
+    return (p != NULL && p == fake_high_port && pin == fake_high_pin)
+               ? GPIO_PIN_SET : GPIO_PIN_RESET;
 }
 void HAL_GPIO_WritePin(GPIO_TypeDef *p, uint16_t pin, GPIO_PinState s)
 {
@@ -1255,6 +1259,25 @@ TEST(test_init_failure_paths)
     fake_device_status_fail = 0;
 }
 
+TEST(test_busy_diagnostic_reads_the_lora_busy_line)
+{
+    /* The diagnostic read PB0 - a floating spare since BUSY moved to PA9
+     * in board v2.8 - so the RF page's BUSY field showed noise. */
+    fake_high_port = LORA_BUSY_PORT;
+    fake_high_pin  = LORA_BUSY_PIN;
+    CHECK(RF_Receiver_Init() == RF_OK);
+    uint8_t busy = 0;
+    RF_Receiver_GetIRQDiagnostics(NULL, NULL, NULL, NULL, &busy);
+    CHECK(busy == 1);
+
+    fake_high_port = GPIOB;               /* the old (wrong) pin high */
+    fake_high_pin  = GPIO_PIN_0;
+    CHECK(RF_Receiver_Init() == RF_OK);
+    RF_Receiver_GetIRQDiagnostics(NULL, NULL, NULL, NULL, &busy);
+    CHECK(busy == 0);
+    fake_high_port = NULL;
+}
+
 TEST(test_spi_selftest_oneshot_in_poll)
 {
     /* If init never ran the self-test (result still 0xFF), the first
@@ -2345,6 +2368,7 @@ int main(void)
     /* Failure paths first: they re-init repeatedly and must end with a
      * clean, successful init for the rest of the suite. */
     run_test_init_failure_paths();
+    run_test_busy_diagnostic_reads_the_lora_busy_line();
     CHECK(RF_Receiver_Init() == RF_OK);
 
     run_test_radio_wedge_rx_recovery();

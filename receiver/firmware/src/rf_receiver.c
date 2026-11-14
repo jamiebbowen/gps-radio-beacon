@@ -260,7 +260,7 @@ uint8_t RF_Receiver_Init(void)
   }
   
   /* Check BUSY pin */
-  rf_last_busy_state = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0) == GPIO_PIN_SET) ? 1 : 0;
+  rf_last_busy_state = (HAL_GPIO_ReadPin(LORA_BUSY_PORT, LORA_BUSY_PIN) == GPIO_PIN_SET) ? 1 : 0;
   
   return RF_OK;
 }
@@ -347,7 +347,7 @@ uint8_t RF_Receiver_DataAvailable(void)
     }
     
     /* Check BUSY pin state */
-    rf_last_busy_state = (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_0) == GPIO_PIN_SET) ? 1 : 0;
+    rf_last_busy_state = (HAL_GPIO_ReadPin(LORA_BUSY_PORT, LORA_BUSY_PIN) == GPIO_PIN_SET) ? 1 : 0;
     
     /* Get device status to verify mode */
     uint8_t device_status = 0;
