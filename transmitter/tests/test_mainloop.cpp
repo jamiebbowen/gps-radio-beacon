@@ -84,9 +84,17 @@ void radio_disable(void) { radio_disables++; radio_enabled_flag = 0; }
 void radio_init(void)    {}
 uint8_t radio_get_channel(void) { return 0; }
 
+/* FCC 97.119(a): the station ID must go out at least every 10 minutes
+ * while transmitting. Longest stretch any packet aired after the last
+ * callsign (the boot ID counts as the first). */
+static uint32_t last_id_ms = 0;
+static uint32_t max_unid_ms = 0;
+
 int transmit_packet(const uint8_t *data, size_t length)
 {
     uint8_t t = data[0];
+    if (sim_ms - last_id_ms > max_unid_ms) max_unid_ms = sim_ms - last_id_ms;
+    if (t >= 0x20 && t <= 0x7E) last_id_ms = sim_ms;
     if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_HELLO) {
         tx_by_type[t]++;
         if (t == PACKET_TYPE_FLIGHT_EVENT && length >= 3)
@@ -633,5 +641,11 @@ int main(void)
            (unsigned long)tx_callsigns,
            (unsigned long)type_count(PACKET_TYPE_FLIGHT_EVENT));
 
+    /* Across every scenario above - pad, launch, continuous TX, recovery,
+     * battery save, reboots - no packet aired more than 10 minutes after
+     * the last callsign. */
+    printf("  longest stretch on air without a callsign: %lu s\n",
+           (unsigned long)(max_unid_ms / 1000UL));
+    CHECK(max_unid_ms <= 600000UL);
     return TEST_SUMMARY();
 }
