@@ -65,6 +65,7 @@ static volatile uint32_t launch_time_seconds = 0;
  * 0 cannot double as "never launched". */
 static bool launch_time_valid = false;
 static volatile uint32_t detection_start_time_ms = 0;
+static uint32_t last_above_ms = 0;        /* newest above-threshold report */
 static volatile bool launch_detected = false;
 static volatile bool imu_initialized = false;
 
@@ -194,6 +195,7 @@ void launch_detect_init(void) {
     launch_time_seconds = 0;
     launch_time_valid = false;
     detection_start_time_ms = 0;
+    last_above_ms = 0;
     launch_detected = false;
     gf_baseline_set = false;
     gf_armed = false;
@@ -279,14 +281,23 @@ void launch_detect_update(uint32_t system_time_seconds) {
                     
                     current_state = LAUNCH_STATE_DETECTING;
                     detection_start_time_ms = millis();
+                    last_above_ms = detection_start_time_ms;
                 }
                 break;
                 
             case LAUNCH_STATE_DETECTING:
                 // Check if acceleration is still above threshold
                 if (total_accel > LAUNCH_ACCEL_THRESHOLD) {
+                    // The window needs the acceleration seen continuously:
+                    // after a report gap it restarts at this report
+                    uint32_t now_ms = millis();
+                    if (now_ms - last_above_ms > LAUNCH_MAX_REPORT_GAP_MS) {
+                        Serial.println("[Launch] Report gap, restarting detection");
+                        detection_start_time_ms = now_ms;
+                    }
+                    last_above_ms = now_ms;
                     // Check if we've sustained this acceleration long enough
-                    uint32_t duration = millis() - detection_start_time_ms;
+                    uint32_t duration = now_ms - detection_start_time_ms;
                     if (duration >= LAUNCH_ACCEL_DURATION) {
                         // Launch confirmed!
                         Serial.println("[Launch] ✓ LAUNCH CONFIRMED!");
