@@ -37,9 +37,9 @@ void DisplayMode_GPS(GPS_Data *gps_data, GPS_Data *last_good_gps, uint8_t has_la
     
   /* Display fix status and satellite count */
   if (using_last_good) {
-    sprintf(buffer, "Fix: L (was Y)");
+    snprintf(buffer, sizeof(buffer), "Fix: L (was Y)");
   } else {
-    sprintf(buffer, "Fix: %s Sat: %d", gps_data->fix ? "Y" : "N", gps_data->satellites);
+    snprintf(buffer, sizeof(buffer), "Fix: %s Sat: %d", gps_data->fix ? "Y" : "N", gps_data->satellites);
   }
   Display_DrawTextRowCol(0, 0, buffer);
   
@@ -47,29 +47,29 @@ void DisplayMode_GPS(GPS_Data *gps_data, GPS_Data *last_good_gps, uint8_t has_la
   int32_t lat_int = (int32_t)(display_gps->latitude * 100000);
   int32_t lat_dec = labs(lat_int % 100000);
   int32_t lat_whole = lat_int / 100000;
-  sprintf(buffer, "Lat: %ld.%05ld", (long)lat_whole, (long)lat_dec);
+  snprintf(buffer, sizeof(buffer), "Lat: %ld.%05ld", (long)lat_whole, (long)lat_dec);
   Display_DrawTextRowCol(1, 0, buffer);
   
   int32_t lon_int = (int32_t)(display_gps->longitude * 100000);
   int32_t lon_dec = labs(lon_int % 100000);
   int32_t lon_whole = lon_int / 100000;
-  sprintf(buffer, "Lon: %ld.%05ld", (long)lon_whole, (long)lon_dec);
+  snprintf(buffer, sizeof(buffer), "Lon: %ld.%05ld", (long)lon_whole, (long)lon_dec);
   Display_DrawTextRowCol(2, 0, buffer);
   
   /* Display altitude - use integer formatting to avoid float issues */
   int32_t alt_int = (int32_t)(display_gps->altitude * 10);
   int32_t alt_dec = labs(alt_int % 10);
   int32_t alt_whole = alt_int / 10;
-  sprintf(buffer, "Alt: %ld.%01ldm", (long)alt_whole, (long)alt_dec);
+  snprintf(buffer, sizeof(buffer), "Alt: %ld.%01ldm", (long)alt_whole, (long)alt_dec);
   Display_DrawTextRowCol(3, 0, buffer);
   
   /* Display time */
-  sprintf(buffer, "Time: %02d:%02d:%02d", display_gps->hour, display_gps->minute, display_gps->second);
+  snprintf(buffer, sizeof(buffer), "Time: %02d:%02d:%02d", display_gps->hour, display_gps->minute, display_gps->second);
   Display_DrawTextRowCol(4, 0, buffer);
   
   /* Display date */
   if (display_gps->day > 0 && display_gps->month > 0 && display_gps->year >= 2000) {
-    sprintf(buffer, "Date: %02d/%02d/%02d", display_gps->day, display_gps->month, display_gps->year % 100);
+    snprintf(buffer, sizeof(buffer), "Date: %02d/%02d/%02d", display_gps->day, display_gps->month, display_gps->year % 100);
     Display_DrawTextRowCol(5, 0, buffer);
   } else {
     /* Date not available (GPGGA doesn't contain date, only GPRMC does) */

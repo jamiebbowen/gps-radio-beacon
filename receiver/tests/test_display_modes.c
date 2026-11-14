@@ -45,11 +45,13 @@ static char cap[CAP_ROWS][CAP_COLS + 1];
 static uint32_t cap_updates = 0, cap_clears = 0;
 static uint32_t cap_lines = 0, cap_circles = 0, cap_texts = 0, cap_pixels = 0;
 static uint32_t cap_chars = 0;
+static size_t   cap_max_text_len = 0;  /* longest string a page handed over */
 
 static char cap_text_log[512];           /* every DrawText string, '|'-joined */
 static void cap_clear(void)
 {
     cap_text_log[0] = '\0';
+    cap_max_text_len = 0;
     memset(cap, 0, sizeof(cap));
     cap_updates = cap_clears = cap_lines = cap_circles = 0;
     cap_texts = cap_pixels = cap_chars = 0;
@@ -60,6 +62,7 @@ void Display_Update(void) { cap_updates++; }
 void Display_DrawTextRowCol(uint8_t row, uint8_t col, const char *text)
 {
     if (row >= CAP_ROWS || !text) return;
+    if (strlen(text) > cap_max_text_len) cap_max_text_len = strlen(text);
     /* Pad with spaces up to col, then copy */
     size_t l = strlen(cap[row]);
     while (l < (size_t)col && l < CAP_COLS) cap[row][l++] = ' ';
@@ -532,6 +535,23 @@ TEST(rf_mode_live_packet_layout)
     CHECK(strncmp(row(7), "LEMETRY", 7) == 0);
 }
 
+TEST(rf_mode_counters_never_overrun_the_line_buffer)
+{
+    /* uint32 counters at their widest: "P: %lu/%lu F%lu N%lu" alone needs
+     * 49 bytes - the page's 32-byte line buffer must truncate, not overrun */
+    reset_fakes();
+    memset(&rf_gps, 0, sizeof(rf_gps));
+    memset(&rf_last, 0, sizeof(rf_last));
+    rf_valid = 0; rf_has_last = 0; rf_last_time = 0;
+    fake_lora_pkts = UINT32_MAX;
+    fake_p_attempts = fake_p_ok = fake_p_fail = fake_p_null = UINT32_MAX;
+    cap_clear();
+    DisplayMode_RF(&rf_gps, &rf_valid, &rf_last_time, &rf_count,
+                   &rf_last, rf_has_last);
+    CHECK(cap_max_text_len < 32);
+    CHECK(strncmp(row(1), "P: 4294967295/", 14) == 0);
+}
+
 TEST(rf_mode_last_good_and_testing_star)
 {
     reset_fakes();
@@ -712,6 +732,7 @@ int main(void)
     run_sd_card_mode_absent_and_error_decode();
     run_sd_card_mode_small_sizes_and_every_error_code();
     run_rf_mode_live_packet_layout();
+    run_rf_mode_counters_never_overrun_the_line_buffer();
     run_rf_mode_last_good_and_testing_star();
     run_rf_mode_no_gps_no_packets();
     run_compass_heading_live_layout();

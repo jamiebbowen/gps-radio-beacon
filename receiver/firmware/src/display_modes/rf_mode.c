@@ -57,18 +57,18 @@ void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps,
   
   if (*last_rf_packet_time > 0) {
     uint32_t time_since_last = HAL_GetTick() - *last_rf_packet_time;
-    sprintf(buffer, "Last: %lu ms", (unsigned long)time_since_last);
+    snprintf(buffer, sizeof(buffer), "Last: %lu ms", (unsigned long)time_since_last);
     Display_DrawTextRowCol(0, 0, buffer);
   } else {
     /* Mode: 0=Unused, 2=STDBY, 3=STDBY_XOSC, 4=FS, 5=RX, 6=TX */
     /* SPI: 0=Fail, 1=Pass, F=Not tested; BUSY: 0=Ready, 1=Stuck */
     /* Show IRQ status in hex to debug what IRQs we're getting */
-    sprintf(buffer, "L:%lu M:%u IRQ:%03X", (unsigned long)lora_packets, device_mode, last_irq);
+    snprintf(buffer, sizeof(buffer), "L:%lu M:%u IRQ:%03X", (unsigned long)lora_packets, device_mode, last_irq);
     Display_DrawTextRowCol(0, 0, buffer);
   }
   
   /* Display parser diagnostics */
-  sprintf(buffer, "P: %lu/%lu F%lu N%lu", (unsigned long)parse_successes, (unsigned long)parse_attempts, (unsigned long)parse_failures, (unsigned long)null_packet);
+  snprintf(buffer, sizeof(buffer), "P: %lu/%lu F%lu N%lu", (unsigned long)parse_successes, (unsigned long)parse_attempts, (unsigned long)parse_failures, (unsigned long)null_packet);
   Display_DrawTextRowCol(1, 0, buffer);
   
   /* Determine which GPS data to display */
@@ -87,9 +87,9 @@ void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps,
     int32_t lat_dec = labs(lat_int % 100000);
     int32_t lat_whole = lat_int / 100000;
     if (using_last_good) {
-      sprintf(buffer, "Lat: %ld.%05ld (L)", (long)lat_whole, (long)lat_dec);
+      snprintf(buffer, sizeof(buffer), "Lat: %ld.%05ld (L)", (long)lat_whole, (long)lat_dec);
     } else {
-      sprintf(buffer, "Lat: %ld.%05ld", (long)lat_whole, (long)lat_dec);
+      snprintf(buffer, sizeof(buffer), "Lat: %ld.%05ld", (long)lat_whole, (long)lat_dec);
     }
     Display_DrawTextRowCol(2, 0, buffer);
     
@@ -97,9 +97,9 @@ void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps,
     int32_t lon_dec = labs(lon_int % 100000);
     int32_t lon_whole = lon_int / 100000;
     if (using_last_good) {
-      sprintf(buffer, "Lon: %ld.%05ld (L)", (long)lon_whole, (long)lon_dec);
+      snprintf(buffer, sizeof(buffer), "Lon: %ld.%05ld (L)", (long)lon_whole, (long)lon_dec);
     } else {
-      sprintf(buffer, "Lon: %ld.%05ld", (long)lon_whole, (long)lon_dec);
+      snprintf(buffer, sizeof(buffer), "Lon: %ld.%05ld", (long)lon_whole, (long)lon_dec);
     }
     Display_DrawTextRowCol(3, 0, buffer);
     
@@ -108,18 +108,18 @@ void DisplayMode_RF(GPS_Data *remote_gps_data, uint8_t *has_valid_remote_gps,
     int32_t alt_dec = labs(alt_int % 10);
     int32_t alt_whole = alt_int / 10;
     if (using_last_good) {
-      sprintf(buffer, "Alt: %ld.%01ldm (LAST)", (long)alt_whole, (long)alt_dec);
+      snprintf(buffer, sizeof(buffer), "Alt: %ld.%01ldm (LAST)", (long)alt_whole, (long)alt_dec);
     } else {
-      sprintf(buffer, "Alt: %ld.%01ldm", (long)alt_whole, (long)alt_dec);
+      snprintf(buffer, sizeof(buffer), "Alt: %ld.%01ldm", (long)alt_whole, (long)alt_dec);
     }
     Display_DrawTextRowCol(4, 0, buffer);
     
     /* Display remote GPS fix status and satellite count */
     if (using_last_good) {
       /* Compact: "Fix: L (was Y) Sat: NN" is 22 chars, one past the display */
-      sprintf(buffer, "Fix:L(was Y) Sat:%d", display_gps->satellites);
+      snprintf(buffer, sizeof(buffer), "Fix:L(was Y) Sat:%d", display_gps->satellites);
     } else {
-      sprintf(buffer, "Fix: %s Sat: %d", display_gps->fix ? "Y" : "N", display_gps->satellites);
+      snprintf(buffer, sizeof(buffer), "Fix: %s Sat: %d", display_gps->fix ? "Y" : "N", display_gps->satellites);
     }
     Display_DrawTextRowCol(5, 0, buffer);
   } else if (*last_rf_packet_time > 0) {
