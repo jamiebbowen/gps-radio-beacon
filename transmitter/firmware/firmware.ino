@@ -474,6 +474,11 @@ void loop() {
          * the radio is idle anyway this early) and mark the opening. */
         beacon_transmit_launch_t0(system_time_seconds, /*fast=*/1);
         flight_log_arm();
+        /* The commercial altimeters' pad history is not this flight's (a
+         * StratoLogger 'OnPad' stream opens with the site elevation MSL; a
+         * charge can be latched from the last flight). A reboot-resume has
+         * no launch edge: what the inputs hear after the reboot counts. */
+        altimeter_flight_start(millis());
         flight_log_event(millis(), FLOG_KIND_LAUNCH);
         /* Reboot evidence at the top of the new flight's record: a brown-out
          * or watchdog reboot earlier this boot is otherwise invisible (the

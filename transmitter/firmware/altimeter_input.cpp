@@ -133,6 +133,17 @@ void altimeter_log_service(uint32_t now_ms)
     }
 }
 
+void altimeter_flight_start(uint32_t now_ms)
+{
+    for (uint8_t i = 0; i < ALTIMETER_INPUTS; i++) {
+        alt_flight_start(&s_dec[i]);
+        s_logged_events[i] = 0;
+        s_logged_records[i] = s_dec[i].records;
+        s_last_log_ms[i] = now_ms - ALT_LOG_INTERVAL_MS;   /* next one logs */
+    }
+    s_events_unsent = 0;
+}
+
 uint8_t altimeter_new_events(void)
 {
     return s_events_unsent;

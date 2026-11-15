@@ -956,6 +956,27 @@ int main(void)
            (unsigned)(type_count(PACKET_TYPE_HEARTBEAT) - hb_pad0));
     CHECK(type_count(PACKET_TYPE_HEARTBEAT) - hb_pad0 == 10);
 
+    /* A launch from this pad: what the altimeters reported on the pad is
+     * not this flight's. A StratoLogger 'OnPad' stream opens with the site
+     * elevation MSL, and an Eggtimer can still show CH1 fired from the last
+     * flight; the recap at liftoff carries neither. */
+    alt_inject(ALT_J2_PA_BIT, "5280\r\n0\r\n0\r\n0\r\n");
+    alt_inject(ALT_J6_PA_BIT, "{000>@1>~1B---->");
+    sim_run(1000);
+    uint32_t mx_lift0 = type_count(PACKET_TYPE_MAXIMA);
+    sim_run_burst(500, 25.0f);
+    sim_run(200);
+    CHECK(launch_detect_get_state() == LAUNCH_STATE_CONFIRMED);
+    CHECK(type_count(PACKET_TYPE_MAXIMA) > mx_lift0);
+    {
+        MaximaAltPacket_t lp;
+        memset(&lp, 0, sizeof(lp));
+        memcpy(&lp, last_mx_pkt, last_mx_len);
+        CHECK(lp.alt_inputs == 0x05);                /* J2 + J6, compact */
+        CHECK(lp.alt[0].apogee_4ft == 0);            /* not 5280 ft MSL */
+        CHECK((lp.alt[1].status & ALT_ST_DROGUE) == 0);
+    }
+
     /* Mid-flight reboot whose flash resume fails (append point not
      * found): the flight state still resumes, but the surviving record
      * is never re-armed (erased) and no reset-cause row is appended */

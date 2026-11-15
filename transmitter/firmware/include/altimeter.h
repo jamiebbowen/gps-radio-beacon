@@ -57,6 +57,12 @@ void    alt_init(alt_state_t *s);
 /** Feed one received byte. @retval 1 when a record was decoded */
 uint8_t alt_feed(alt_state_t *s, char c, uint32_t now_ms);
 
+/** The beacon's launch: what was reported on the pad is not this flight's
+ *  (a StratoLogger 'OnPad' stream opens with the site elevation MSL; a
+ *  charge latched on the pad). Apogee restarts at the current altitude and
+ *  the fired events clear; the recognised format stays locked. */
+void    alt_flight_start(alt_state_t *s);
+
 /** ALT_ST_* status: format, fired events, stale (no record for
  *  ALT_STALE_MS). 0 while no format is recognised. */
 uint8_t alt_status(const alt_state_t *s, uint32_t now_ms);
