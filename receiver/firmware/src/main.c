@@ -1987,6 +1987,8 @@ void SysTick_Handler(void)
  * handler stays a few instructions and cannot itself crash.
  * (CrashRecord/CRASH_MAGIC/g_crash live above Error_Handler.) */
 
+#if defined(__arm__)
+/* Target-only: Thumb-2 assembly. HardFault_Capture below is plain C. */
 __attribute__((naked)) void HardFault_Handler(void)
 {
   /* Which stack was in use at the fault, per EXC_RETURN bit 2 */
@@ -1998,6 +2000,7 @@ __attribute__((naked)) void HardFault_Handler(void)
     "b    HardFault_Capture\n"
   );
 }
+#endif
 
 __attribute__((used)) static void HardFault_Capture(uint32_t *frame)
 {

@@ -22,4 +22,7 @@ void     Test_SetTick(uint32_t tick_ms);
  * function fakes live in the test executables that need them). */
 #include "stm32f4xx_hal_ext.h"
 
+/* RCC/ADC/IWDG/core surface used by main.c (fakes live in test_main.c) */
+#include "stm32f4xx_hal_sys.h"
+
 #endif /* __STM32F4xx_HAL_H */

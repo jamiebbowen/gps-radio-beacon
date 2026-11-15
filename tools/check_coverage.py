@@ -40,6 +40,9 @@ FLOORS = {
         "display_modes/compass_mode.c": (95.0, None),
         "display_modes/rf_mode.c": (95.0, None),
         "bno085.c": (98.0, 85.0),
+        # test_main runs the whole boot and loop; a dropped scenario shows
+        # up here first (100% / 80% on gcc 13)
+        "main.c": (99.0, 78.0),
     }),
 }
 
@@ -55,7 +58,6 @@ EXEMPT = {
     "tx": {},
     "rx": {
         "syscalls.c": "newlib syscall stubs over the linker's heap symbols",
-        "main.c": "no host build yet",
     },
 }
 
