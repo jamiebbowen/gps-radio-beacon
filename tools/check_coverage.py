@@ -6,6 +6,11 @@ exits 1 (naming the module and the floor) when any module drops below its
 line or branch floor - so a coverage regression fails CI with a message
 instead of scrolling by.
 
+Every firmware source must report: one with no coverage data (a new
+module without a test, a COV_PAIRS entry dropped from a tests Makefile)
+fails too, unless EXEMPT names it with the reason. An exemption for a
+source that now has coverage, or no longer exists, fails as stale.
+
 Usage:
   make -C transmitter/tests coverage | python3 tools/check_coverage.py tx
   make -C receiver/tests coverage    | python3 tools/check_coverage.py rx
@@ -13,6 +18,9 @@ Usage:
 import os
 import re
 import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
 
 # (default line floor, {module: (line floor, branch floor or None)})
 FLOORS = {
@@ -34,6 +42,28 @@ FLOORS = {
         "bno085.c": (98.0, 85.0),
     }),
 }
+
+# Where each suite's firmware sources live, named the way `make coverage`
+# reports them (relative to that root).
+SOURCES = {
+    "tx": (REPO / "transmitter/firmware", ("*.cpp", "*.c", "*.ino")),
+    "rx": (REPO / "receiver/firmware/src", ("**/*.c",)),
+}
+
+# The only sources allowed no host coverage, each with its reason.
+EXEMPT = {
+    "tx": {},
+    "rx": {
+        "syscalls.c": "newlib syscall stubs over the linker's heap symbols",
+        "main.c": "no host build yet",
+    },
+}
+
+
+def firmware_sources(suite):
+    root, patterns = SOURCES[suite]
+    return {p.relative_to(root).as_posix()
+            for pat in patterns for p in root.glob(pat) if p.is_file()}
 
 
 def parse(text):
@@ -75,16 +105,40 @@ def print_uncovered(mod, gcov_dir):
             print(f"      uncovered {mod}:{m.group(1)}: {m.group(2).strip()[:90]}")
 
 
+def check_complete(mods, sources, exempt):
+    """Sources missing from the report, and stale exemptions: (lines, count)."""
+    out, failed = [], 0
+    for mod in sorted(sources - set(mods) - set(exempt)):
+        failed += 1
+        out.append(f"  FAIL {mod:40s} no coverage data")
+        out.append(f"::error::coverage {mod}: no coverage data - give it a test "
+                   "and a COV_PAIRS entry, or an EXEMPT entry with the reason")
+    for mod in sorted(exempt):
+        if mod in mods:
+            failed += 1
+            out.append(f"::error::coverage {mod}: exempt but covered - drop its EXEMPT entry")
+        elif mod not in sources:
+            failed += 1
+            out.append(f"::error::coverage {mod}: exempt but not a firmware source "
+                       "- drop its EXEMPT entry")
+        else:
+            out.append(f"  skip {mod:40s} exempt: {exempt[mod]}")
+    return out, failed
+
+
 def main():
     if len(sys.argv) != 2 or sys.argv[1] not in FLOORS:
         print(__doc__)
         return 2
-    default, special = FLOORS[sys.argv[1]]
+    suite = sys.argv[1]
+    default, special = FLOORS[suite]
     mods = parse(sys.stdin.read())
     if not mods:
         print("::error::no coverage data found in the input")
         return 1
-    failed = 0
+    lines, failed = check_complete(mods, firmware_sources(suite), EXEMPT[suite])
+    for line in lines:
+        print(line)
     for mod in sorted(mods):
         cov = mods[mod]
         lf, bf = special.get(mod, (default, None))
