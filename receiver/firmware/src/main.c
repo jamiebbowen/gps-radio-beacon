@@ -877,7 +877,7 @@ int main(void)
           (foreign_logged == 0 || foreign - foreign_logged >= 4)) {
         int16_t f_rssi; int8_t f_snr;
         RF_Receiver_GetSignalQuality(&f_rssi, &f_snr);
-        char f_msg[56];
+        char f_msg[72];   /* worst case 65: 10-digit count, 6-char rssi */
         snprintf(f_msg, sizeof(f_msg),
                  "RF foreign pkts=%lu dropped CH%u rssi=%ddBm snr=%d",
                  (unsigned long)foreign, (unsigned)RF_Receiver_GetChannel(),
