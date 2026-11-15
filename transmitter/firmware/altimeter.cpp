@@ -132,6 +132,12 @@ uint8_t alt_feed(alt_state_t *s, char c, uint32_t now_ms)
     return 0;
 }
 
+void alt_flight_start(alt_state_t *s)
+{
+    s->apogee_ft = s->alt_ft;
+    s->events = 0;
+}
+
 uint8_t alt_status(const alt_state_t *s, uint32_t now_ms)
 {
     if (s->format == ALT_FMT_UNKNOWN) return 0;

@@ -334,11 +334,49 @@ TEST(test_inputs_ring_overflow_recovers)
     CHECK(p.alt_inputs == 0x02 && p.alt[0].apogee_4ft == 26);   /* 102 ft / 4, rounded */
 }
 
+TEST(test_flight_start_drops_pad_history)
+{
+    /* StratoLogger CF 'OnPad' telemetry (manual p.40): the first value is
+     * the site elevation MSL, then AGL altitudes */
+    alt_state_t s; alt_init(&s);
+    feed(&s, "5280\r\n0\r\n0\r\n0\r\n", 1000);
+    CHECK(s.format == ALT_FMT_STRATOLOGGER && s.apogee_ft == 5280);
+    alt_flight_start(&s);
+    for (int ft = 100; ft <= 3000; ft += 100) {
+        char b[16];
+        snprintf(b, sizeof(b), "%d\r\n", ft);
+        feed(&s, b, 2000);
+    }
+    feed(&s, "2900\r\n", 3000);
+    CHECK(s.apogee_ft == 3000 && s.alt_ft == 2900);
+    CHECK(s.format == ALT_FMT_STRATOLOGGER);            /* the lock stays */
+
+    /* A charge latched on the pad: not relayed, not logged, cleared */
+    altimeter_init();
+    s_idle = 0;
+    flog_calls = 0;
+    inject(ALT_J6_PA_BIT, "{000>@1>~1B---->");
+    altimeter_poll(100);
+    CHECK(altimeter_new_events() == 1);
+    altimeter_flight_start(150);
+    CHECK(altimeter_new_events() == 0);
+    MaximaAltPacket_t p;
+    CHECK(altimeter_fill_maxima(&p, 200) == MAXIMA_ALT_PACKET_SIZE(1) - MAXIMA_PACKET_SIZE);
+    CHECK(p.alt[0].status == ALT_ST_FMT_EGGTIMER);
+    altimeter_log_service(300);                         /* nothing new yet */
+    CHECK(flog_calls == 0);
+    inject(ALT_J6_PA_BIT, "{010>");
+    altimeter_poll(400);
+    altimeter_log_service(400);                         /* first flight record */
+    CHECK(flog_calls == 1 && flog_alt == 1000 && flog_status == ALT_ST_FMT_EGGTIMER);
+}
+
 int main(void)
 {
     run_test_stratologger_lines();
     run_test_rrc3_all_items();
     run_test_eggtimer_elements();
+    run_test_flight_start_drops_pad_history();
     run_test_rrc3_firmware_versions();
     run_test_eggtimer_spec_stream();
     run_test_noise_overflow_and_format_lock();

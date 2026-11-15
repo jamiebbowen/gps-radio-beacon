@@ -26,6 +26,11 @@ void    altimeter_poll(uint32_t now_ms);
  *  ALT_LOG_INTERVAL_MS while it reports, at once on a new deploy event. */
 void    altimeter_log_service(uint32_t now_ms);
 
+/** Launch edge: every input drops its pad history (alt_flight_start), and
+ *  nothing reported before liftoff is relayed or logged as this flight's;
+ *  each input's first record after it is logged at once. */
+void    altimeter_flight_start(uint32_t now_ms);
+
 /** 1 while an input reported a deploy event not yet relayed. */
 uint8_t altimeter_new_events(void);
 
