@@ -69,6 +69,25 @@ TEST(test_eggtimer_elements)
     CHECK(s.events == (ALT_EVT_DROGUE | ALT_EVT_MAIN) && s.alt_ft == 700);
 }
 
+TEST(test_eggtimer_spec_stream)
+{
+    /* The Proton example transmission from the Eggtimer Telemetry Data
+     * Format Specification (5/2021). '{' is altitude/100 ft - sent by the
+     * Quark D3+, ION, Quantum and Proton; only the Quark pre-D3 sends '<'
+     * in feet. '%' is the apogee after nose-over, '~' the channel states. */
+    alt_state_t s; alt_init(&s);
+    feed(&s, "{000>@1>#0000>~AB---->?079>! 211>=KM6ZFL>", 1000);
+    CHECK(s.format == ALT_FMT_EGGTIMER && s.alt_ft == 0);
+    feed(&s, "{040>@2>#0010>~AB---->( 0213>\\-001>?079>! 212>=KM6ZFL>", 3000);
+    CHECK(s.alt_ft == 4000);
+    feed(&s, "{046>@4>#0016>~AB---->( 0033>\\-001>?079>! 212>=KM6ZFL>", 5000);
+    CHECK(s.alt_ft == 4600 && s.apogee_ft == 4600);
+    feed(&s, "{046>@5>#0018>~1B---->( 2787>\\ 000>%04679>^0660>[025>?079>! 210>=KM6ZFL>", 7000);
+    CHECK(s.events == ALT_EVT_DROGUE && s.apogee_ft == 4679);
+    feed(&s, "{030>@5>#0062>~1B---->(-0037>\\ 000>%04679>^0660>[025>?079>! 207>=KM6ZFL>", 9000);
+    CHECK(s.alt_ft == 3000 && s.apogee_ft == 4679);
+}
+
 TEST(test_noise_overflow_and_format_lock)
 {
     alt_state_t s; alt_init(&s);
@@ -285,6 +304,7 @@ int main(void)
     run_test_stratologger_lines();
     run_test_rrc3_all_items();
     run_test_eggtimer_elements();
+    run_test_eggtimer_spec_stream();
     run_test_noise_overflow_and_format_lock();
     run_test_rx_every_byte_any_phase();
     run_test_rx_sender_clock_error();

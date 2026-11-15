@@ -10,7 +10,8 @@
  *    "TTTT.T,+AAAAA,+VVVV,+TTT,DMA" CR (events: lowercase = continuity,
  *    UPPERCASE = fired, '-' = none);
  *  - Eggtimer telemetry: trigger byte + data + '>' elements every 2 s
- *    ('<' altitude ft, '%' apogee ft, '~' channel states, ...).
+ *    ('{' altitude/100 ft - '<' feet on the Quark pre-D3 -, '%' apogee
+ *    ft after nose-over, '~' channel states, ...).
  */
 #ifndef ALTIMETER_H
 #define ALTIMETER_H
