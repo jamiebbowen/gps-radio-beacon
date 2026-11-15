@@ -65,7 +65,15 @@ static uint32_t sd_sector_count = 0;  /* from CMD9 GET_SECTOR_COUNT */
  * succeeds because it's a fresh CMD sequence with fresh CRC, and the cost
  * of 2-3 retries is trivial compared to the cost of LittleFS concluding the
  * card is corrupt and bailing out. Keep the number small so a genuinely
- * dead card still surfaces quickly. */
+ * dead card still surfaces quickly.
+ *
+ * What survives the retries is LFS_ERR_IO, for reads and writes alike:
+ * sd_card.c owns the response (write-error count, bus step-down, handle
+ * recovery). Never LFS_ERR_CORRUPT from prog - that tells LittleFS the
+ * block is bad, and it relocates to the next free block, three writes
+ * each, until the whole card has been tried: hours on a 16 GB card, so
+ * the IWDG reset the receiver first. The card's FTL already retires its
+ * own bad flash. */
 #define LFS_SD_BD_RETRIES  3
 
 static int bd_read(const struct lfs_config *c, lfs_block_t block,
@@ -101,7 +109,7 @@ static int bd_prog(const struct lfs_config *c, lfs_block_t block,
         DRESULT r = SD_write(0, (const BYTE *)buffer, sector, count);
         if (r == RES_OK) return 0;
     }
-    return LFS_ERR_CORRUPT;
+    return LFS_ERR_IO;
 }
 
 static int bd_erase(const struct lfs_config *c, lfs_block_t block)

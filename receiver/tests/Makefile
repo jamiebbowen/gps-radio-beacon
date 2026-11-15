@@ -37,7 +37,7 @@ SRC_DIR  := ../firmware/src
 HEADERS := $(wildcard ../firmware/inc/*.h ../firmware/inc/display_modes/*.h test_harness.h stubs/*.h) Makefile
 
 # Modules with a matching test_<module>.c and $(SRC_DIR)/<module>.c
-MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass i2c_bus jogpad eink sd_diskio preflight_eval log_policy beacon_track rx_channel eink_summary
+MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass i2c_bus jogpad eink sd_diskio preflight_eval log_policy beacon_track rx_channel eink_summary lfs_sd_bd
 BINS     := $(addprefix $(BUILD)/test_,$(MODULES)) \
             $(BUILD)/test_navigation_mode $(BUILD)/test_preflight_mode \
             $(BUILD)/test_display_modes $(BUILD)/test_fuzz_parsers
@@ -108,6 +108,13 @@ LFS_DIR  := ../firmware/lib/littlefs
 LFS_CFLAGS := -I$(LFS_DIR) -DLFS_NO_MALLOC -DLFS_NO_DEBUG -DLFS_NO_WARN -DLFS_NO_ERROR
 $(BUILD)/test_sd_card: test_sd_card.c $(SRC_DIR)/sd_card.c \
                        $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(HEADERS) | $(BUILD)
+	$(CC) $(CFLAGS) $(COVFLAGS) $(LFS_CFLAGS) \
+	    -o $@ $< $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(LDFLAGS)
+
+# lfs_sd_bd.c: the real block device under the real LittleFS, with the
+# card faked at the sd_diskio sector API (see test_lfs_sd_bd.c)
+$(BUILD)/test_lfs_sd_bd: test_lfs_sd_bd.c $(SRC_DIR)/lfs_sd_bd.c \
+                         $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) $(COVFLAGS) $(LFS_CFLAGS) \
 	    -o $@ $< $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(LDFLAGS)
 

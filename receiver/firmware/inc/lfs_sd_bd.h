@@ -13,7 +13,8 @@
  *   - read_size  = prog_size = 512 B (SD sector size)
  *   - block_size = 4096 B (8 sectors per LittleFS block — good tradeoff
  *                  between wear-leveling granularity and metadata overhead)
- *   - cache_size = 512 B (one sector per cache)
+ *   - cache_size = 4096 B (one full block; sd_card.c's per-file caches
+ *                  must be this size too)
  *
  * The SD card's internal FTL handles actual flash erase, so LittleFS "erase"
  * is a no-op at this layer.
