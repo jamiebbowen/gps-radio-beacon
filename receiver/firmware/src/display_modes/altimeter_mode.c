@@ -1,0 +1,44 @@
+/**
+ * @file altimeter_mode.c
+ * @brief Commercial altimeters the beacon relays (ALTIMETER packets): per
+ *        input the recognised format, latest altitude, apogee and the
+ *        charges it reported fired.
+ */
+#include "display_modes/altimeter_mode.h"
+#include "display.h"
+#include "rf_receiver.h"
+#include <stdio.h>
+
+void DisplayMode_Altimeter(void)
+{
+    static const char *jack[ALTIMETER_INPUTS] = { "J2", "J5", "J6" };
+    static const char *fmt[4] = { "?", "SLCF", "RRC3", "EGG" };
+    char buffer[32];
+    AltimeterPacket_t a;
+    uint32_t age_ms = 0;
+
+    Display_DrawTextRowCol(0, 0, "ALTIMETERS");
+    if (!RF_Receiver_PeekAltimeter(&a, &age_ms)) {
+        Display_DrawTextRowCol(2, 0, "None relayed yet");
+        return;
+    }
+    snprintf(buffer, sizeof(buffer), "Heard %lus ago", (unsigned long)(age_ms / 1000u));
+    Display_DrawTextRowCol(1, 0, buffer);
+
+    uint8_t row = 2;
+    for (uint8_t i = 0; i < ALTIMETER_INPUTS; i++) {
+        if (!(a.inputs & (1u << i))) continue;
+        const AltimeterEntry_t *e = &a.entry[i];
+        snprintf(buffer, sizeof(buffer), "%s %s %ldft%s", jack[i],
+                 fmt[e->status & ALT_ST_FMT_MASK],
+                 (long)e->alt_4ft * ALT_FT_PER_UNIT,
+                 (e->status & ALT_ST_STALE) ? " old" : "");
+        Display_DrawTextRowCol(row++, 0, buffer);
+        snprintf(buffer, sizeof(buffer), " Apo %ldft %c%c%c",
+                 (long)e->apogee_4ft * ALT_FT_PER_UNIT,
+                 (e->status & ALT_ST_DROGUE) ? 'D' : '-',
+                 (e->status & ALT_ST_MAIN) ? 'M' : '-',
+                 (e->status & ALT_ST_AUX) ? 'A' : '-');
+        Display_DrawTextRowCol(row++, 0, buffer);
+    }
+}

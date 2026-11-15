@@ -22,6 +22,7 @@
 #include "display.h"
 #include "display_modes/channel_mode.h"
 #include "display_modes/rf_stats_mode.h"
+#include "display_modes/altimeter_mode.h"
 #include "display_modes/gps_mode.h"
 #include "display_modes/sd_card_mode.h"
 #include "display_modes/rf_mode.h"
@@ -196,6 +197,17 @@ uint16_t RF_Receiver_GetLastPacketASCII(char *buf, uint16_t max_len)
     return n;
 }
 uint8_t  RF_Receiver_TestingBuildSuspect(void) { return fake_testing; }
+
+static uint8_t fake_alt_have = 0;
+static AltimeterPacket_t fake_alt;
+static uint32_t fake_alt_age = 0;
+uint8_t RF_Receiver_PeekAltimeter(AltimeterPacket_t *alt, uint32_t *age_ms)
+{
+    if (!fake_alt_have) return 0;
+    *alt = fake_alt;
+    if (age_ms) *age_ms = fake_alt_age;
+    return 1;
+}
 
 static uint32_t fake_p_attempts = 0, fake_p_ok = 0, fake_p_fail = 0;
 static uint32_t fake_p_null = 0;
@@ -535,6 +547,36 @@ TEST(rf_mode_live_packet_layout)
     CHECK(strncmp(row(7), "LEMETRY", 7) == 0);
 }
 
+TEST(altimeter_page)
+{
+    reset_fakes();
+    fake_alt_have = 0;
+    cap_clear();
+    DisplayMode_Altimeter();
+    CHECK(strstr(row(0), "ALTIMETERS") != NULL);
+    CHECK(strstr(row(2), "None relayed yet") != NULL);
+
+    memset(&fake_alt, 0, sizeof(fake_alt));
+    fake_alt.inputs = 0x06;                              /* J5 + J6 */
+    fake_alt.entry[1].status = ALT_ST_FMT_RRC3 | ALT_ST_DROGUE;
+    fake_alt.entry[1].alt_4ft = 628;
+    fake_alt.entry[1].apogee_4ft = 628;
+    fake_alt.entry[2].status = ALT_ST_FMT_EGGTIMER | ALT_ST_DROGUE | ALT_ST_MAIN | ALT_ST_STALE;
+    fake_alt.entry[2].alt_4ft = 250;
+    fake_alt.entry[2].apogee_4ft = 630;
+    fake_alt_have = 1;
+    fake_alt_age = 12500;
+    cap_clear();
+    DisplayMode_Altimeter();
+    CHECK(strstr(row(1), "Heard 12s ago") != NULL);
+    CHECK(strcmp(row(2), "J5 RRC3 2512ft") == 0);
+    CHECK(strcmp(row(3), " Apo 2512ft D--") == 0);
+    CHECK(strcmp(row(4), "J6 EGG 1000ft old") == 0);
+    CHECK(strcmp(row(5), " Apo 2520ft DM-") == 0);
+    CHECK(cap_max_text_len < 32);
+    fake_alt_have = 0;
+}
+
 TEST(rf_mode_counters_never_overrun_the_line_buffer)
 {
     /* uint32 counters at their widest: "P: %lu/%lu F%lu N%lu" alone needs
@@ -733,6 +775,7 @@ int main(void)
     run_sd_card_mode_small_sizes_and_every_error_code();
     run_rf_mode_live_packet_layout();
     run_rf_mode_counters_never_overrun_the_line_buffer();
+    run_altimeter_page();
     run_rf_mode_last_good_and_testing_star();
     run_rf_mode_no_gps_no_packets();
     run_compass_heading_live_layout();

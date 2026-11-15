@@ -57,7 +57,8 @@ PROJECT_SOURCES = \
 	$(SRC_DIR)/display_modes/sd_card_mode.c \
 	$(SRC_DIR)/display_modes/channel_mode.c \
 	$(SRC_DIR)/display_modes/rf_stats_mode.c \
-	$(SRC_DIR)/display_modes/preflight_mode.c
+	$(SRC_DIR)/display_modes/preflight_mode.c \
+	$(SRC_DIR)/display_modes/altimeter_mode.c
 
 VENDOR_SOURCES = \
 	lib/littlefs/lfs.c \
