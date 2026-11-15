@@ -64,6 +64,11 @@ explicit `make -C receiver/firmware flash` or `make -C transmitter/firmware uplo
   `firmware.ino`). Serial1's receive ring is 350 bytes, ~2.3 s of GGA+RMC,
   and one airborne pass can block for several seconds of SF10 airtime: a new
   send in `loop()` while airborne gets a GPS read in front of it.
+- **A write the SD card refuses is `LFS_ERR_IO`, never `LFS_ERR_CORRUPT`**
+  (`lfs_sd_bd.c`). CORRUPT tells LittleFS the block is bad: it relocates
+  through every free block (hours on a 16 GB card, so the IWDG resets the
+  receiver) and sd_card.c's write-error ladder never sees the error. The
+  card's FTL retires its own bad flash.
 - **TC3 is the altimeter-input sampler** (38.4 kHz, `altimeter_input.cpp`;
   D11/D12/D13 are the J6/J5/J2 serial inputs). Its 48 MHz source runs open
   loop in flight: keep `alt_rx_sample`'s edge re-sync (the window is pinned
@@ -75,8 +80,17 @@ explicit `make -C receiver/firmware flash` or `make -C transmitter/firmware uplo
 - Every bug fix starts with a regression test that fails before the fix.
 - Fakes must behave like the real part. Several bugs here hid behind fakes
   written to the code's assumptions (the BNO085 SHTP read, the LoRa CRC
-  path); when you write a fake, model the datasheet or a known-good driver.
+  path, the SD block device's write error); when you write a fake, model
+  the datasheet or a known-good driver.
 - TX host tests build with `-fno-exceptions`, matching the SAMD core.
+- Every firmware source has host coverage: the coverage gate fails a source
+  missing from `make coverage`'s report. A new module needs a test and a
+  `COV_PAIRS` entry; `EXEMPT` in `tools/check_coverage.py` (with the reason)
+  is the only way out, and a stale exemption fails too.
+- The receiver's `main.c` builds on the host (`receiver/tests/test_main.c`:
+  boot and loop over the real SD stack, one forked process per boot). Keep
+  it that way: target-only code goes under `#if defined(__arm__)`, and a
+  new loop breadcrumb or boot step gets a scenario there.
 - No function may exist only for tests: the reachability scan must report
   nothing but functions inlined into callers in their own file.
 

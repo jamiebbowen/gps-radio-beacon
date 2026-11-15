@@ -26,6 +26,7 @@ make clean
 | `display.c` — SSD1309 driver incl. headless I2C fault ladder | `test_display.c` | 100% / 97.7% |
 | `gps.c` — sentence RX path, FIFO drop-oldest, watchdog, rx stats | `test_gps.c` | 100% / 96.7% |
 | `sd_card.c` — LittleFS logging incl. IO-error retry, failed syncs, recovery ladder | `test_sd_card.c` | 98.2% / 71.3% |
+| `lfs_sd_bd.c` — LittleFS block device over the SD sector driver: geometry, retries, write failure as `LFS_ERR_IO` | `test_lfs_sd_bd.c` | 100% / 100% |
 | `lora.c` — SX1268 driver incl. CAD, CRC-frame capture, long-preamble TX | `test_lora.c` | 100% / 88.5% |
 | `compass.c` — heading pipeline incl. declination lattice & quat-lock table | `test_compass.c` | 100% / 84.3% |
 | `bno085.c` — SHTP transport and SH-2 record framing (hub-faithful fake) | `test_compass.c` | 100% / 88.0% |
@@ -35,11 +36,18 @@ make clean
 | `sd_diskio.c` — SD-over-SPI driver behind a scripted virtual card | `test_sd_diskio.c` | 100% / 78.1% |
 | `navigation_mode.c` — arrow, range budget, readiness, link/status rows | `test_navigation_mode.c` | 98.6% / 86.7% |
 | `preflight_mode.c` — go/no-go checklist page | `test_preflight_mode.c` | 100% / 90.9% |
+| `beacon_track.c` — the beacon position: target, age, BEACON.TXT pacing | `test_beacon_track.c` | 100% / 89.3% |
+| `rx_channel.c` — boot scan on the remembered channel, manual pick, scan lock | `test_rx_channel.c` | 100% / 100% |
+| `eink_summary.c` — the e-ink summary page's content | `test_eink_summary.c` | 100% / 93.8% |
+| `main.c` — boot and main loop: watchdog, init retries, reset/crash breadcrumbs, every radio event's SD row, buttons and pages | `test_main.c` | 100% / 80.7% |
 | display_modes/ small pages — channel/RF stats/GPS/SD/RF/compass | `test_display_modes.c` | 100% each |
 | `rf_parser.c` + `gps_parser.c` — fuzz over mutated real packets | `test_fuzz_parsers.c` | (sanitizer) |
 
 Figures from `make coverage`; every unit test also runs under ASan + UBSan
-+ float-cast-overflow with `make sanitize`.
++ float-cast-overflow with `make sanitize`. The CI gate
+(`tools/check_coverage.py`) fails any firmware source missing from the
+report, so a new module needs a test and a `COV_PAIRS` entry (only
+`syscalls.c`, newlib stubs over linker symbols, is exempt).
 
 (The transmitter's EKF is tested separately in `transmitter/tests/`, ~100%;
 its `nmea_fields.c` helpers get the same fuzz treatment in
@@ -98,13 +106,33 @@ timeouts, the fastest-first speed ladder, and the per-transaction
 prescaler reassertion that keeps the negotiated speed alive across
 shared-SPI1 display traffic.
 
+`test_main.c` runs the real `main.c` (renamed `receiver_main()`) over the
+real `sd_card.c` + `lfs_sd_bd.c` + LittleFS on a RAM card faked at the
+sd_diskio sector API, with transfer times at the 656 kHz data clock, and
+over the real logic modules it composes. The hardware-facing modules
+(radio, GPS, compass, displays, buttons) are faked at their API, keeping
+their contracts (one-shot getters consume, the GPS fix latch expires).
+Each boot is its own forked process, so main()'s one-shot statics start
+fresh; the card and the crash-record RAM sit in shared memory and survive
+into the next boot, so reboot stories (crash -> reset -> FAULT row, a saved
+beacon or channel restored) run end to end. Within a boot the firmware
+runs on a thread that hands control back to the script whenever the
+simulated clock reaches the time asked for, so scripts read inject, run,
+check. Assertions read the log back off the card. The watchdog model
+checks the longest gap between feeds against the IWDG timeout at the
+datasheet's fastest LSI (47 kHz: 22.3 s, not the nominal 32.8 s).
+
 ## How it works
 
 `stubs/` contains minimal stand-ins for `stm32f4xx_hal.h` /
 `stm32f4xx_hal_uart.h` / `stm32f4xx_hal_spi.h` plus the FatFs `ff.h` /
 `diskio.h` surface, so the real firmware sources compile unmodified with
-the host `gcc` - no vendor trees required. Keep stubs behavior-free;
-tests must remain hardware-independent.
+the host `gcc` - no vendor trees required. `stm32f4xx_hal_sys.h` adds the
+RCC/ADC/IWDG/Cortex-M surface `main.c` uses; registers it pokes directly
+(IWDG, RCC->CSR, SCB fault status) are blocks the test defines, and their
+bit values are the reference manual's. Keep stubs behavior-free; tests
+must remain hardware-independent. Target-only code (inline Thumb-2
+assembly) sits under `#if defined(__arm__)`.
 
 ## Adding tests
 
