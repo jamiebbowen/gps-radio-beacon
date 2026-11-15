@@ -7,8 +7,10 @@
  *  - PerfectFlite StratoLogger CF telemetry: one altitude (ft) per line,
  *    CR LF, ~20 Hz in flight;
  *  - Missile Works RRC3 telemetry, all data items:
- *    "TTTT.T,+AAAAA,+VVVV,+TTT,DMA" CR (events: lowercase = continuity,
- *    UPPERCASE = fired, '-' = none);
+ *    "TTTT.T,+AAAAA,+VVVV,+TTT,DMA" CR, ",X.X" battery volts appended on
+ *    v1.60+ (events: UPPERCASE while the output fires; v1.5x shows '-'
+ *    before and lowercase after, v1.6x '?' no continuity and lowercase
+ *    continuity);
  *  - Eggtimer telemetry: trigger byte + data + '>' elements every 2 s
  *    ('{' altitude/100 ft - '<' feet on the Quark pre-D3 -, '%' apogee
  *    ft after nose-over, '~' channel states, ...).
@@ -41,6 +43,7 @@ typedef struct {
     int32_t  alt_ft;           /* latest altitude, as reported          */
     int32_t  apogee_ft;        /* reported apogee, else the max seen    */
     uint8_t  events;           /* ALT_EVT_* fired so far (latched)      */
+    uint8_t  rrc3_dash;        /* RRC3 channels that showed '-' (v1.5x) */
     uint32_t last_ms;          /* time of the newest decoded record     */
     uint32_t records;
     uint32_t errors;           /* overlong or undecodable records       */

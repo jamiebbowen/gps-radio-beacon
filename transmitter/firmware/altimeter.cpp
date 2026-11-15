@@ -58,18 +58,30 @@ static uint8_t decode_line(alt_state_t *s)
         altitude(s, ft);
         return 1;
     }
-    /* RRC3, all data items: timestamp, altitude, velocity, temp, events */
-    if (n != 5) return 0;
-    int32_t ts, ft, vel, temp;
+    /* RRC3, all data items: timestamp, altitude, velocity, temperature,
+     * events - plus battery volts on v1.60+ firmware */
+    if (n != 5 && n != 6) return 0;
+    int32_t ts, ft, vel, temp, volts;
+    const char *ev_end = (n == 6) ? f[5] - 1 : e;
     if (!parse_int(f[0], f[1] - 1, &ts) || !parse_int(f[1], f[2] - 1, &ft) ||
-        !parse_int(f[2], f[3] - 1, &vel) || !parse_int(f[3], f[4] - 1, &temp))
+        !parse_int(f[2], f[3] - 1, &vel) || !parse_int(f[3], f[4] - 1, &temp) ||
+        (n == 6 && !parse_int(f[5], e, &volts)))
         return 0;
     if (!accept(s, ALT_FMT_RRC3)) return 0;
     altitude(s, ft);
-    for (const char *p = f[4]; p < e; p++) {
-        if (*p == 'D') s->events |= ALT_EVT_DROGUE;
-        else if (*p == 'M') s->events |= ALT_EVT_MAIN;
-        else if (*p == 'A') s->events |= ALT_EVT_AUX;
+    /* Events by position: D, M, A. v1.5x shows '-' before activation, the
+     * UPPERCASE letter only while the output is active (a 1 s pulse) and
+     * lowercase after it, so lowercase means fired once that channel has
+     * shown '-'. v1.6x: '?' no continuity, lowercase continuity,
+     * UPPERCASE fired. */
+    static const char ev_up[3] = { 'D', 'M', 'A' };
+    static const uint8_t ev_bit[3] = { ALT_EVT_DROGUE, ALT_EVT_MAIN, ALT_EVT_AUX };
+    for (uint8_t k = 0; k < 3 && f[4] + k < ev_end; k++) {
+        char c = f[4][k];
+        if (c == '-') s->rrc3_dash |= ev_bit[k];
+        else if (c == ev_up[k]) s->events |= ev_bit[k];
+        else if (c == ev_up[k] + ('a' - 'A') && (s->rrc3_dash & ev_bit[k]))
+            s->events |= ev_bit[k];
     }
     return 1;
 }

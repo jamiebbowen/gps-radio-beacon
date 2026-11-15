@@ -85,7 +85,7 @@ altimeter works on any jack:
 | Altimeter | Setup | What the beacon reads |
 |-----------|-------|------------------------|
 | PerfectFlite StratoLogger CF | telemetry enabled (DT2/DataCast) | one altitude per line, ft |
-| Missile Works RRC3 | telemetry on, **all data items**, English units | altitude, fired drogue/main/aux |
+| Missile Works RRC3 | telemetry pre-launch @ 0.5 s (data control 1), **all data items** (31, or 63 with battery on v1.60+), imperial units | altitude, fired drogue/main/aux (UPPERCASE while firing; on v1.5x also lowercase after `-`) |
 | Eggtimer (Quantum/Quasar/Proton) | telemetry output | `{` altitude/100 ft (`<` feet on the Quark pre-D3), `%` apogee after nose-over, `~` channels (1 = drogue, 2 = main) |
 
 A format locks after three consistent records. While airborne the
