@@ -107,6 +107,10 @@ Connect the beacon over USB and watch the first seconds of boot:
 
 ## 4b. Relayed altimeters
 
+- [ ] On the pad, with an RRC3 streaming pre-launch telemetry into J5, the
+      PRE-FLIGHT row reads `SD OK   ALT J5` within one heartbeat (5 s in
+      TURN_ON, 60 s in PRE_LAUNCH) and LOG.TXT gets `ALTIM pad id=.. J5 RRC3`;
+      unplugging it shows `ALT J5?` once it goes quiet.
 - [ ] With an altimeter streaming into the beacon after a shake launch, the
       ALTIMETERS page (button cycle) shows each jack's format, apogee and
       fired charges (`D`/`M`/`A`), and `Heard Ns ago` counts up between

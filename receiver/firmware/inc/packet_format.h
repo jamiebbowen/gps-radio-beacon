@@ -69,8 +69,15 @@ typedef struct __attribute__((packed)) {
     uint8_t  gps_health;    // GPS receiver health, see HB_GPS_* below
     uint8_t  reset_info;    // V3: SAMD51 RSTC_RCAUSE on the TX boot that
                             // started this session (HB_RESET_* bit masks).
+    uint8_t  alt_inputs;    // V4: commercial altimeters recognised on the pad
+                            // (HB_ALT_FMT per jack, HB_ALT_STALE)
 } HeartbeatPacket_t;
-#define HEARTBEAT_PACKET_SIZE     9
+#define HEARTBEAT_PACKET_SIZE     10  // V4: + alt_inputs, same 725 ms as 9 B
+#define HEARTBEAT_PACKET_SIZE_V3  9   // without alt_inputs
+/* alt_inputs: bits 2i..2i+1 = the ALT_ST_FMT_* recognised on input i
+ * (0 J2, 1 J5, 2 J6; 0 = none), bit 6 = a recognised input went quiet */
+#define HB_ALT_FMT(b, i)   ((uint8_t)(((b) >> (2 * (i))) & 0x03))
+#define HB_ALT_STALE       0x40
 #define HEARTBEAT_PACKET_SIZE_V2  8   // legacy layout without reset_info
 #define HEARTBEAT_PACKET_SIZE_V1  7   // legacy layout without gps_health
 

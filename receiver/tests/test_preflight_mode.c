@@ -68,6 +68,7 @@ uint8_t RF_Receiver_GetParsedData(GPS_Data *out_data, char *out_callsign,
 /* ------------------------------------------------------------------ */
 
 static const char *page_row(int r) { return cap_row_text[r]; }
+static uint8_t render_alt_hb = 0xFF;   /* heartbeat alt_inputs; 0xFF = none */
 
 static void render(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
                    uint8_t tx_fix, uint8_t tx_sats, uint8_t tx_hb_state,
@@ -92,7 +93,8 @@ static void render(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
     Preflight_Evaluate(&in, &pf);
     DisplayMode_Preflight(link_ok, link_age_s, rssi,
                           tx_fix, tx_sats, tx_hb_state, sensor_deg,
-                          rx_fix_ok, rx_sats, compass_ok, sd_ok, vdd, &pf);
+                          rx_fix_ok, rx_sats, compass_ok, sd_ok, render_alt_hb,
+                          vdd, &pf);
 }
 
 /* ------------------------------------------------------------------ */
@@ -110,9 +112,27 @@ TEST(test_preflight_all_green_ready)
     CHECK(strstr(page_row(3), "RX GPS   OK 8sat") != NULL);
     CHECK(strstr(page_row(4), "COMPASS  OK") != NULL);
     CHECK(strstr(page_row(4), "3.3V") != NULL);
-    CHECK(strstr(page_row(5), "SD CARD  OK") != NULL);
+    CHECK(strcmp(page_row(5), "SD OK   ALT --") == 0);
     CHECK(strstr(page_row(6), "TX IMU   OK") != NULL);
     CHECK(strstr(page_row(7), "READY TO FLY") != NULL);
+}
+
+TEST(test_preflight_altimeter_row)
+{
+    /* The beacon heartbeat's altimeter byte: advisory, the verdict holds */
+    render_alt_hb = 0;
+    render(1, 3, -55, 1, 9, HB_GPS_ACQUIRING, 0, 1, 8, 1, 1, 3304);
+    CHECK(strcmp(page_row(5), "SD OK   ALT none") == 0);
+    CHECK(strstr(page_row(7), "READY TO FLY") != NULL);
+    render_alt_hb = (uint8_t)((ALT_ST_FMT_RRC3 << 2) | (ALT_ST_FMT_EGGTIMER << 4));
+    render(1, 3, -55, 1, 9, HB_GPS_ACQUIRING, 0, 1, 8, 1, 0, 3304);
+    CHECK(strcmp(page_row(5), "SD WARN ALT J5 J6") == 0);
+    render_alt_hb = (uint8_t)(ALT_ST_FMT_STRATOLOGGER | (ALT_ST_FMT_RRC3 << 2) |
+                              (ALT_ST_FMT_EGGTIMER << 4) | HB_ALT_STALE);
+    render(1, 3, -55, 1, 9, HB_GPS_ACQUIRING, 0, 1, 8, 1, 0, 3304);
+    CHECK(strcmp(page_row(5), "SD WARN ALT J2 J5 J6?") == 0);   /* 21 cols */
+    CHECK(strlen(page_row(5)) <= 21);
+    render_alt_hb = 0xFF;
 }
 
 TEST(test_preflight_link_missing)
@@ -220,13 +240,14 @@ TEST(test_preflight_sensor_degraded_advisory)
 TEST(test_preflight_sd_advisory)
 {
     render(1, 2, -50, 1, 9, HB_GPS_ACQUIRING, 0, 1, 8, 1, 0, 3304);
-    CHECK(strstr(page_row(5), "WARN nolog") != NULL);
+    CHECK(strstr(page_row(5), "SD WARN") != NULL);
     CHECK(strstr(page_row(7), "READY TO FLY") != NULL);  /* sd not a gate */
 }
 
 int main(void)
 {
     run_test_preflight_all_green_ready();
+    run_test_preflight_altimeter_row();
     run_test_preflight_link_missing();
     run_test_preflight_weak_link_rssi();
     run_test_preflight_testing_build_flag();

@@ -472,3 +472,23 @@ void RF_Parser_FormatAltimeter(const MaximaAltPacket_t *a, char *buf, size_t n)
                     (e->status & ALT_ST_STALE) ? "(old)" : "");
   }
 }
+
+void RF_Parser_FormatPadAltimeters(uint8_t rocket_id, uint8_t alt_hb,
+                                   char *buf, size_t n)
+{
+  static const char *jack[ALTIMETER_INPUTS] = { "J2", "J5", "J6" };
+  static const char *fmt[4] = { "?", "SLCF", "RRC3", "EGG" };
+  if (buf == NULL || n == 0) return;
+  int len = snprintf(buf, n, "ALTIM pad id=%u", (unsigned)rocket_id);
+  uint8_t any = 0;
+  for (uint8_t i = 0; i < ALTIMETER_INPUTS; i++) {
+    uint8_t f = HB_ALT_FMT(alt_hb, i);
+    if (f == 0 || len < 0 || (size_t)len >= n) continue;
+    any = 1;
+    len += snprintf(buf + len, n - (size_t)len, " %s %s", jack[i], fmt[f]);
+  }
+  if (len >= 0 && (size_t)len < n) {
+    snprintf(buf + len, n - (size_t)len, "%s%s", any ? "" : " none",
+             (alt_hb & HB_ALT_STALE) ? " quiet" : "");
+  }
+}

@@ -393,6 +393,23 @@ TEST(test_flight_start_drops_pad_history)
     CHECK(flog_calls == 1 && flog_alt == 1000 && flog_status == ALT_ST_FMT_EGGTIMER);
 }
 
+TEST(test_heartbeat_byte)
+{
+    altimeter_init();
+    s_idle = 0;
+    CHECK(altimeter_heartbeat_byte(100) == 0);                  /* none */
+    inject(ALT_J5_PA_BIT, "0012.5,+01200,+0410,+072,dma\r"
+                          "0013.0,+01380,+0300,+071,dma\r"
+                          "0013.5,+01400,+0290,+071,dma\r");
+    inject(ALT_J2_PA_BIT, "1180\r\n1190\r\n1200\r\n");
+    altimeter_poll(200);
+    uint8_t b = altimeter_heartbeat_byte(300);
+    CHECK(HB_ALT_FMT(b, 0) == ALT_ST_FMT_STRATOLOGGER);
+    CHECK(HB_ALT_FMT(b, 1) == ALT_ST_FMT_RRC3);
+    CHECK(HB_ALT_FMT(b, 2) == 0 && (b & HB_ALT_STALE) == 0);
+    CHECK(altimeter_heartbeat_byte(200 + ALT_STALE_MS + 1) & HB_ALT_STALE);
+}
+
 TEST(test_report_counters)
 {
     altimeter_init();
@@ -438,6 +455,7 @@ int main(void)
     run_test_status_encoding();
     run_test_inputs_detect_relay_and_log();
     run_test_inputs_ring_overflow_recovers();
+    run_test_heartbeat_byte();
     run_test_report_counters();
     return TEST_SUMMARY();
 }

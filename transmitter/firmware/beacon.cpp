@@ -225,6 +225,9 @@ uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t syste
      * identity in the receiver log instead of hiding in an uptime gap. */
     extern uint8_t g_boot_rcause;
     hb.reset_info  = (uint8_t)g_boot_rcause;
+    /* V4: which jacks hold a recognised altimeter - the pad crew's check
+     * that the altimeters are wired, without USB */
+    hb.alt_inputs  = altimeter_heartbeat_byte(millis());
     
     if (!transmit_fast) {
         radio_enable();

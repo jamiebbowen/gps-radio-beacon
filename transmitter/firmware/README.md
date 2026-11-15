@@ -54,7 +54,7 @@ Layouts are in `include/packet_format.h`. The receiver has its own copy in
 |------|------|---------|
 | GPS | 0x01 | raw position (pad audit, battery save) |
 | FUSED | 0x04 | EKF position + velocity, flags (dead reckoning, landed...) |
-| HEARTBEAT | 0x05 | no-fix keepalive with GPS health and reset cause |
+| HEARTBEAT | 0x05 | pad keepalive with GPS health, reset cause and the altimeters recognised on the jacks (V4, 10 B - same airtime as 9) |
 | IMU | 0x06 | inertial trace: accel, gyro, peak accel |
 | LAUNCH_T0 | 0x07 | one-shot launch declaration |
 | CMD / ACK | 0x08 / 0x09 | receiver command and the beacon's answer (PING) |

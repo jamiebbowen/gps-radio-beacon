@@ -68,6 +68,12 @@ to repopulate the target.
      exact brown-out scenario that cost us a session once). SWAP THE PACK
      BEFORE FLYING. `READY TO FLY` is blocked while the rail is low.
    - `COMPASS OK 3.3V` → rail healthy, the voltage reads with the name.
+   - `SD OK   ALT J5 J6` → the card logs, and the beacon's heartbeat says it
+     recognises a commercial altimeter on J5 and J6 (advisory, the verdict
+     ignores it). `ALT none` with an altimeter wired → it isn't streaming
+     telemetry on the pad (RRC3: pre-launch telemetry; StratoLogger: OnPad)
+     or the jack isn't seated; `?` → one stopped talking; `--` → no fresh
+     heartbeat yet. LOG.TXT gets an `ALTIM pad` row when it changes.
    - Wait for `** READY TO FLY **`.
 5. Quick arrow sanity: walk 10 m away, arrow should track the pad.
 

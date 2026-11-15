@@ -22,7 +22,7 @@
  *   TX GPS   OK 10sat fix1      / CHK sats=0 ACQ
  *   RX GPS   OK 8sat            / CHK no fix
  *   COMPASS  OK                 / CHK
- *   SD CARD  OK                 / WARN no logging
+ *   SD OK   ALT J5 J6           / SD WARN ALT none
  *   TX IMU   OK                 / CHK dead!  (advisory)
  *   ** READY TO FLY **          / NOT READY
  */
@@ -31,7 +31,7 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
                            uint8_t tx_sensor_degraded,
                            uint8_t rx_fix_ok, uint8_t rx_sats,
                            uint8_t compass_ok, uint8_t sd_ok,
-                           uint16_t rx_vdd_mv,
+                           uint8_t alt_hb, uint16_t rx_vdd_mv,
                            const Preflight_Result_t *pf)
 {
     /* Sized for worst-case formatted expansion (sats up to 255, fix up to
@@ -111,8 +111,29 @@ void DisplayMode_Preflight(uint8_t link_ok, uint32_t link_age_s, int16_t rssi,
         Display_DrawTextRowCol(4, 0, buf);
     }
 
-    /* SD card (advisory: receiver works without it, but no track log) */
-    Display_DrawTextRowCol(5, 0, sd_ok ? "SD CARD  OK" : "SD CARD  WARN nolog");
+    /* SD card (advisory: receiver works without it, but no track log) and
+     * the jacks where the beacon's heartbeat says it recognised a
+     * commercial altimeter (advisory too; '?' = one went quiet, "--" = no
+     * fresh heartbeat) */
+    char alt[16] = "--";
+    if (alt_hb != 0xFF) {
+        static const char *jack[ALTIMETER_INPUTS] = { "J2", "J5", "J6" };
+        int n = 0;
+        alt[0] = '\0';
+        for (uint8_t i = 0; i < ALTIMETER_INPUTS; i++) {
+            if (HB_ALT_FMT(alt_hb, i) && n >= 0 && (size_t)n < sizeof(alt)) {
+                n += snprintf(alt + n, sizeof(alt) - (size_t)n, "%s%s",
+                              n ? " " : "", jack[i]);
+            }
+        }
+        if (n == 0) {
+            snprintf(alt, sizeof(alt), "none");
+        } else if ((alt_hb & HB_ALT_STALE) && (size_t)n < sizeof(alt)) {
+            snprintf(alt + n, sizeof(alt) - (size_t)n, "?");
+        }
+    }
+    snprintf(buf, sizeof(buf), "SD %-4s ALT %s", sd_ok ? "OK" : "WARN", alt);
+    Display_DrawTextRowCol(5, 0, buf);
 
     /* TX IMU (advisory: a dead BNO085 costs fused smoothing only - the
      * beacon still flies on raw GPS with the altitude-climb fallback.

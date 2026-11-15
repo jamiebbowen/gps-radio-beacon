@@ -36,6 +36,10 @@ void    altimeter_log_service(uint32_t now_ms);
  *  each input's first record after it is logged at once. */
 void    altimeter_flight_start(uint32_t now_ms);
 
+/** The heartbeat's alt_inputs byte (packet_format.h): the format each jack
+ *  has recognised, and HB_ALT_STALE when a recognised one went quiet. */
+uint8_t altimeter_heartbeat_byte(uint32_t now_ms);
+
 /** 1 while an input reported a deploy event not yet relayed. */
 uint8_t altimeter_new_events(void);
 
