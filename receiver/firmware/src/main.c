@@ -1000,8 +1000,8 @@ int main(void)
         SD_Card_EnsureLogFile();
         SD_Card_LogEvent(mx_msg);
       }
-      /* Commercial altimeter relay: one row per packet, all its inputs */
-      AltimeterPacket_t alt_pkt;
+      /* Commercial altimeters on the recap: one row per packet, all inputs */
+      MaximaAltPacket_t alt_pkt;
       if (RF_Receiver_GetAltimeter(&alt_pkt)) {
         char alt_msg[128];
         RF_Parser_FormatAltimeter(&alt_pkt, alt_msg, sizeof(alt_msg));

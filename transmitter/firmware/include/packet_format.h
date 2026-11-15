@@ -31,7 +31,7 @@ typedef struct __attribute__((packed)) {
 #define PACKET_TYPE_FLIGHT_EVENT 0x0A // Apogee/deploy/landing + flight anomaly
 #define PACKET_TYPE_MAXIMA     0x0B // Running flight maxima recap (in flight)
 #define PACKET_TYPE_HELLO      0x0C // Boot identity: fw hash (one-shot)
-#define PACKET_TYPE_ALTIMETER  0x0D // Commercial altimeter relay (AltimeterPacket_t)
+// 0x0D: retired before flight (altimeter relay, now the MAXIMA tail) - do not reuse
 
 /* Heartbeat: 8 bytes. Sent instead of a GPS packet when no transmittable fix
  * exists (no fix / <4 sats), so the receiver's channel scan can lock and the
@@ -228,6 +228,42 @@ typedef struct __attribute__((packed)) {
 #define MAXIMA_PACKET_SIZE     11   /* V2: 725 ms vs 856 at 12 B */
 #define MAXIMA_PACKET_SIZE_V1  12   /* legacy: u16 max_gyro_dps  */
 
+/* MAXIMA altimeter tail: the commercial altimeters on the transmitter's
+ * serial inputs (J2/J5/J6: StratoLogger CF, RRC3 or Eggtimer, recognised
+ * from their data) ride the recap once at least one input has a
+ * recognised format. A recap also goes out at once when an altimeter
+ * reports a newly fired charge, and at the landing latch. With no
+ * altimeter the recap stays the plain 11 bytes; with 1/2/3 it is 15/18/21
+ * bytes (856/987/1118 ms on air). Only the inputs flagged in alt_inputs
+ * are on the air, ascending; the receiver expands them to alt[i] = input
+ * i. Apogee is as the altimeter reports it (feet AGL in all three
+ * telemetry modes; else the highest altitude seen), in units of 4 ft,
+ * saturating. */
+#define ALTIMETER_INPUTS          3     /* 0 = J2, 1 = J5, 2 = J6           */
+#define ALT_ST_FMT_MASK           0x03
+#define ALT_ST_FMT_STRATOLOGGER   0x01
+#define ALT_ST_FMT_RRC3           0x02
+#define ALT_ST_FMT_EGGTIMER       0x03
+#define ALT_ST_DROGUE             0x04  /* drogue / apogee charge fired     */
+#define ALT_ST_MAIN               0x08  /* main charge fired                */
+#define ALT_ST_AUX                0x10  /* any other channel fired          */
+#define ALT_ST_STALE              0x20  /* no record from it for 5 s        */
+#define ALT_FT_PER_UNIT           4
+
+typedef struct __attribute__((packed)) {
+    uint8_t  status;          // ALT_ST_* (format in bits 0-1)
+    int16_t  apogee_4ft;      // reported apogee (else the max seen) / 4 ft
+} MaximaAltEntry_t;
+
+typedef struct __attribute__((packed)) {
+    MaximaPacket_t   mx;
+    uint8_t          alt_inputs;   // bit i: the entry for input i follows
+    MaximaAltEntry_t alt[ALTIMETER_INPUTS];
+} MaximaAltPacket_t;
+#define MAXIMA_ALT_ENTRY_SIZE       3
+#define MAXIMA_ALT_PACKET_SIZE(n)   (MAXIMA_PACKET_SIZE + 1 + MAXIMA_ALT_ENTRY_SIZE * (n))
+#define MAXIMA_ALT_PACKET_MAX_SIZE  21
+
 /* HELLO: 8 bytes. Sent once at boot, right after the callsign: the wire
  * copy of the beacon's firmware identity (git short hash + dirty mark),
  * so every receiver log names exactly which transmitter firmware flew.
@@ -242,42 +278,6 @@ typedef struct __attribute__((packed)) {
 #define HELLO_PACKET_SIZE    6   /* uptime at boot is always ~2 s - cut */
 #define HELLO_PACKET_SIZE_V1 8   /* legacy layout with uptime_s         */
 
-/* ALTIMETER: 3 + 5 bytes per entry. Relay of the commercial altimeters on
- * the transmitter's serial inputs (J2/J5/J6: StratoLogger CF, RRC3 or
- * Eggtimer, recognised from their data). Sent with each MAXIMA recap and
- * at once when an altimeter reports a new deploy event, and only while at
- * least one input has a recognised format. Only the inputs flagged in
- * `inputs` are on the air, ascending (1 altimeter: 8 bytes, 725 ms on air;
- * 2: 13 bytes, 856 ms; 3: 18 bytes, 987 ms); the receiver expands them to
- * entry[i] = input i. Altitudes are as the altimeter reports them (feet,
- * AGL in all three telemetry modes) in units of 4 ft, saturating. */
-#define ALTIMETER_INPUTS          3     /* 0 = J2, 1 = J5, 2 = J6           */
-#define ALT_ST_FMT_MASK           0x03
-#define ALT_ST_FMT_STRATOLOGGER   0x01
-#define ALT_ST_FMT_RRC3           0x02
-#define ALT_ST_FMT_EGGTIMER       0x03
-#define ALT_ST_DROGUE             0x04  /* drogue / apogee charge fired     */
-#define ALT_ST_MAIN               0x08  /* main charge fired                */
-#define ALT_ST_AUX                0x10  /* any other channel fired          */
-#define ALT_ST_STALE              0x20  /* no record from it for 5 s        */
-#define ALT_FT_PER_UNIT           4
-
-typedef struct __attribute__((packed)) {
-    uint8_t  status;          // ALT_ST_* (format in bits 0-1)
-    int16_t  alt_4ft;         // latest altitude / 4 ft
-    int16_t  apogee_4ft;      // reported apogee (else the max seen) / 4 ft
-} AltimeterEntry_t;
-
-typedef struct __attribute__((packed)) {
-    uint8_t  packet_type;     // PACKET_TYPE_ALTIMETER
-    uint8_t  rocket_id;
-    uint8_t  inputs;          // bit i: the entry for input i follows
-    AltimeterEntry_t entry[ALTIMETER_INPUTS];
-} AltimeterPacket_t;
-#define ALTIMETER_ENTRY_SIZE      5
-#define ALTIMETER_PACKET_HDR      3
-#define ALTIMETER_PACKET_SIZE(n)  (ALTIMETER_PACKET_HDR + ALTIMETER_ENTRY_SIZE * (n))
-#define ALTIMETER_PACKET_MAX_SIZE 18
 
 /* ------------------------------------------------------------------
  * Two-way channel (post-landing / diagnostics). Both frames are 6 bytes:
@@ -334,7 +334,7 @@ PF_STATIC_ASSERT(sizeof(MaximaPacket_t) == MAXIMA_PACKET_SIZE, "MaximaPacket_t s
 PF_STATIC_ASSERT(sizeof(HelloPacket_t) == HELLO_PACKET_SIZE, "HelloPacket_t size");
 PF_STATIC_ASSERT(sizeof(CmdPacket_t) == CMD_ACK_PACKET_SIZE, "CmdPacket_t size");
 PF_STATIC_ASSERT(sizeof(AckPacket_t) == CMD_ACK_PACKET_SIZE, "AckPacket_t size");
-PF_STATIC_ASSERT(sizeof(AltimeterEntry_t) == ALTIMETER_ENTRY_SIZE, "AltimeterEntry_t size");
-PF_STATIC_ASSERT(sizeof(AltimeterPacket_t) == ALTIMETER_PACKET_MAX_SIZE, "AltimeterPacket_t size");
+PF_STATIC_ASSERT(sizeof(MaximaAltEntry_t) == MAXIMA_ALT_ENTRY_SIZE, "MaximaAltEntry_t size");
+PF_STATIC_ASSERT(sizeof(MaximaAltPacket_t) == MAXIMA_ALT_PACKET_MAX_SIZE, "MaximaAltPacket_t size");
 
 #endif // _PACKET_FORMAT_H_

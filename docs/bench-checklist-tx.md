@@ -120,9 +120,9 @@ runbook is `launch-day.md`.
       idles (needs > 1.8 V high, < 1.0 V low); if marginal, use J5/J6.
 - [ ] An unplugged jack produces nothing (no `[Alt]` line, no errors).
 - [ ] After a shake launch with an altimeter streaming, the receiver shows
-      it on the ALTIMETERS page within 15 s; a fired charge (RRC3 `D`,
-      Eggtimer `~1`) prints `[Alt] Jn events drogue` and reaches the
-      receiver within ~2 s.
+      it on the ALTIMETERS page within 15 s (it rides the maxima recap); a
+      fired charge (RRC3 `D`, Eggtimer `~1`) prints `[Alt] Jn events
+      drogue` and an immediate recap carries it to the receiver within ~2 s.
 - [ ] DUMP after the flight lists kind 11 rows (`ms,11,input,status,alt_ft,apogee_ft`).
 
 ## 5. Landing + descent evidence (post-flight review)

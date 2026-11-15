@@ -91,8 +91,8 @@ static struct { struct { uint8_t reg; } RCAUSE; } fake_rstc;
 /* ------------------------------------------------------------------ */
 
 static uint32_t tx_by_type[16];   /* indexed by packet_type byte */
-static uint8_t  last_alt_pkt[ALTIMETER_PACKET_MAX_SIZE];
-static size_t   last_alt_len = 0;
+static uint8_t  last_mx_pkt[MAXIMA_ALT_PACKET_MAX_SIZE];   /* newest recap */
+static size_t   last_mx_len = 0;
 static uint32_t fev_code_count[256]; /* FLIGHT_EVENT_* code histogram   */
 static uint32_t tx_callsigns = 0;
 static uint32_t tx_other = 0;
@@ -150,11 +150,11 @@ int transmit_packet(const uint8_t *data, size_t length)
     }
     if (sim_ms - last_id_ms > max_unid_ms) max_unid_ms = sim_ms - last_id_ms;
     if (t >= 0x20 && t <= 0x7E) last_id_ms = sim_ms;
-    if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_ALTIMETER) {
+    if (t >= PACKET_TYPE_GPS && t < 16) {
         tx_by_type[t]++;
-        if (t == PACKET_TYPE_ALTIMETER && length <= sizeof(last_alt_pkt)) {
-            memcpy(last_alt_pkt, data, length);
-            last_alt_len = length;
+        if (t == PACKET_TYPE_MAXIMA && length <= sizeof(last_mx_pkt)) {
+            memcpy(last_mx_pkt, data, length);
+            last_mx_len = length;
         }
         if (t == PACKET_TYPE_FLIGHT_EVENT && length >= 3)
             fev_code_count[data[2]]++;      /* code field, offset 2 */
@@ -390,16 +390,19 @@ void uart_init(void) {}
 /* What the TC3 sampler sees for `text` on PORT A bit `pa_bit`: 8N1 at
  * ALT_RX_OVERSAMPLE samples per bit, idle high around it (the other jacks
  * stay low - unplugged). */
+static uint32_t alt_idle = 0;   /* jacks with an altimeter idling high */
 static void alt_inject(uint8_t pa_bit, const char *text)
 {
-    for (int k = 0; k < 8; k++) altimeter_sample(1u << pa_bit);
+    alt_idle |= 1u << pa_bit;
+    for (int k = 0; k < 8; k++) altimeter_sample(alt_idle);
     for (const char *p = text; *p; p++) {
         uint16_t frame = (uint16_t)(((uint8_t)*p << 1) | 0x200);
         for (int bit = 0; bit < 10; bit++)
             for (unsigned s = 0; s < ALT_RX_OVERSAMPLE; s++)
-                altimeter_sample((uint32_t)((frame >> bit) & 1u) << pa_bit);
+                altimeter_sample((alt_idle & ~(1u << pa_bit)) |
+                                 ((uint32_t)((frame >> bit) & 1u) << pa_bit));
     }
-    for (int k = 0; k < 8; k++) altimeter_sample(1u << pa_bit);
+    for (int k = 0; k < 8; k++) altimeter_sample(alt_idle);
 }
 
 /* ------------------------------------------------------------------ */
@@ -585,7 +588,6 @@ int main(void)
 
     /* ---------- A commercial altimeter on J5 (RRC3, all data items) --- */
     {
-        uint32_t alt0 = type_count(PACKET_TYPE_ALTIMETER);
         uint32_t mxa = type_count(PACKET_TYPE_MAXIMA);
         uint32_t logs0 = flog_alt_calls;
         for (int k = 0; k < 3; k++) {
@@ -595,22 +597,21 @@ int main(void)
         CHECK(flog_alt_calls > logs0);                /* in the flight log */
         sim_run(16000);                               /* one maxima recap */
         CHECK(type_count(PACKET_TYPE_MAXIMA) > mxa);
-        CHECK(type_count(PACKET_TYPE_ALTIMETER) > alt0);   /* rides with it */
-        CHECK(last_alt_len == ALTIMETER_PACKET_SIZE(1));
-        AltimeterPacket_t ap;
+        CHECK(last_mx_len == MAXIMA_ALT_PACKET_SIZE(1));   /* it rides the recap */
+        MaximaAltPacket_t ap;
         memset(&ap, 0, sizeof(ap));
-        memcpy(&ap, last_alt_pkt, last_alt_len);
-        CHECK(ap.inputs == 0x02);
-        CHECK((ap.entry[0].status & ALT_ST_FMT_MASK) == ALT_ST_FMT_RRC3);
-        CHECK(ap.entry[0].alt_4ft == 600 && ap.entry[0].apogee_4ft == 600);
+        memcpy(&ap, last_mx_pkt, last_mx_len);
+        CHECK(ap.alt_inputs == 0x02);
+        CHECK((ap.alt[0].status & ALT_ST_FMT_MASK) == ALT_ST_FMT_RRC3);
+        CHECK(ap.alt[0].apogee_4ft == 600);
 
-        /* The drogue fires: relayed at once, not at the next recap */
-        uint32_t alt1 = type_count(PACKET_TYPE_ALTIMETER);
+        /* The drogue fires: a recap goes out at once, not at the next 15 s */
+        uint32_t mx1 = type_count(PACKET_TYPE_MAXIMA);
         alt_inject(ALT_J5_PA_BIT, "0031.0,+02390,-0012,+070,Dma\r");
         sim_run(300);
-        CHECK(type_count(PACKET_TYPE_ALTIMETER) >= alt1 + 1);
-        memcpy(&ap, last_alt_pkt, last_alt_len);
-        CHECK((ap.entry[0].status & ALT_ST_DROGUE) != 0);
+        CHECK(type_count(PACKET_TYPE_MAXIMA) >= mx1 + 1);
+        memcpy(&ap, last_mx_pkt, last_mx_len);
+        CHECK((ap.alt[0].status & ALT_ST_DROGUE) != 0);
         CHECK((flog_alt_last_status & ALT_ST_DROGUE) != 0);
     }
     CHECK(flog_gps_calls_value() >= 14);          /* GPS rows landing in the flash log */
@@ -657,6 +658,7 @@ int main(void)
      * The landing transition also fires one final maxima copy. */
     CHECK(type_count(PACKET_TYPE_FLIGHT_EVENT) == FLIGHT_EVENT_REPEATS);
     CHECK(type_count(PACKET_TYPE_MAXIMA) >= mxs + 1);
+    CHECK(last_mx_len == MAXIMA_ALT_PACKET_SIZE(1));   /* J5's apogee rides it */
 
     uint32_t fus1 = type_count(PACKET_TYPE_FUSED);
     uint32_t gps1 = type_count(PACKET_TYPE_GPS);
@@ -831,9 +833,52 @@ int main(void)
         CHECK(beacon_state == BEACON_STATE_POST_LAUNCH);
     }
 
+    /* Three commercial altimeters streaming in descent, with real airtime:
+     * their apogee and charges ride the maxima recap, and the fused stream
+     * keeps its 1.5 s grid (a separate relay packet after each recap cost
+     * a position or two per 30 s). */
+    const uint32_t alt_window_s = 30;
+    {
+        uint32_t fus_a0 = type_count(PACKET_TYPE_FUSED);
+        uint32_t mx_a0 = type_count(PACKET_TYPE_MAXIMA);
+        sim_airtime = 1;
+        sim_imu_stream = 1;
+        double desc_alt = SIM_ALT + 300.0;
+        unsigned long window_end = sim_ms + alt_window_s * 1000UL;
+        unsigned long next_rec = sim_ms;
+        int k = 0;
+        while (sim_ms < window_end) {
+            if (sim_ms >= next_rec) {
+                char b[48];
+                script_fix(SIM_LAT, SIM_LON, desc_alt, 9, 1);
+                desc_alt -= 5.0;
+                snprintf(b, sizeof(b), "%d\r\n", 2000 - 15 * k);       /* StratoLogger */
+                alt_inject(ALT_J2_PA_BIT, b);
+                snprintf(b, sizeof(b), "%04d.0,+%05d,-0050,+070,dma\r", 100 + k, 2000 - 15 * k);
+                alt_inject(ALT_J5_PA_BIT, b);                          /* RRC3 */
+                snprintf(b, sizeof(b), "#%04d><%05d>@5>", 100 + k, 2000 - 15 * k);
+                alt_inject(ALT_J6_PA_BIT, b);                          /* Eggtimer */
+                next_rec += 1000;
+                k++;
+            }
+            sim_run(10);
+        }
+        sim_airtime = 0;
+        sim_imu_stream = 0;
+        script_fix(SIM_LAT, SIM_LON, SIM_ALT, 9, 1);
+        uint32_t fus_a = type_count(PACKET_TYPE_FUSED) - fus_a0;
+        printf("  descent with three altimeters: %u positions in %u s\n",
+               (unsigned)fus_a, (unsigned)alt_window_s);
+        CHECK(fus_a >= 19);
+        CHECK(type_count(PACKET_TYPE_MAXIMA) > mx_a0);
+        CHECK(tx_by_type[0x0D] == 0);    /* no separate relay packet */
+        CHECK(last_mx_len == MAXIMA_ALT_PACKET_SIZE(3));
+    }
+
     /* The airframe never goes quiet (stuck in a tree in the wind):
      * landing never latches and POST_LAUNCH ends on its timeout */
-    sim_run_burst((POST_LAUNCH_RECOVERY_DURATION_SEC + 5 - gap_window_s) * 1000UL, 5.0f);
+    sim_run_burst((POST_LAUNCH_RECOVERY_DURATION_SEC + 5 - gap_window_s - alt_window_s) * 1000UL,
+                  5.0f);
     CHECK(launch_detect_has_landed() == false);
     CHECK(beacon_state == BEACON_STATE_BATTERY_SAVE);
     CHECK(flog_kind_count[7] >= 1);             /* battery-save record */

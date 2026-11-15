@@ -108,9 +108,10 @@ Connect the beacon over USB and watch the first seconds of boot:
 ## 4b. Relayed altimeters
 
 - [ ] With an altimeter streaming into the beacon after a shake launch, the
-      ALTIMETERS page (button cycle) shows each jack's format, altitude,
-      apogee and fired charges (`D`/`M`/`A`), and `Heard Ns ago` counts up
-      between relays; LOG.TXT gets an `ALTIM id=...` event row per packet.
+      ALTIMETERS page (button cycle) shows each jack's format, apogee and
+      fired charges (`D`/`M`/`A`), and `Heard Ns ago` counts up between
+      maxima recaps; LOG.TXT gets an `ALTIM id=...` event row next to each
+      `MAXIMA` row that carries altimeters.
 
 ## 5. SD logging round-trip (weekend-before check)
 

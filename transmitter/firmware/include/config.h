@@ -203,8 +203,9 @@
 /* Airtime budget in descent: the fused stream alone keys the PA ~66% of
  * the time (0.99 s per 1.5 s). The inertial trace (0.99 s) at 2 s and the
  * maxima recap (0.73 s) at 5 s scheduled ~130% of the radio, so positions
- * slipped to ~2.1 s. At 6 s / 15 s the total is ~87%, leaving a quiet gap
- * for GPS and IMU servicing (test_flight_cadence pins the budget). */
+ * slipped to ~2.1 s. At 6 s / 15 s the total is ~87% - ~90% with three
+ * commercial altimeters riding the recap (21 B, 1.12 s) - leaving a quiet
+ * gap for GPS and IMU servicing (test_flight_cadence pins the budget). */
 #define POST_LAUNCH_PACKET_INTERVAL_SEC 6
 
 /* Fused-packet transmit cadence in LAUNCH state. Must exceed the fused
@@ -231,7 +232,7 @@
 
 /* Commercial altimeter inputs (altimeter_input.cpp): flight-log record per
  * reporting input at most this often (a new deploy event logs at once),
- * and the earliest repeat of the event-triggered ALTIMETER relay. */
+ * and the earliest repeat of the recap a newly fired charge sends at once. */
 #define ALT_LOG_INTERVAL_MS             1000
 #define ALT_EVENT_TX_MIN_MS             2000
 

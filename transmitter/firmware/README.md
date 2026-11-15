@@ -31,7 +31,7 @@ Production values (`TESTING_MODE 0` in `include/config.h`; intervals live in
 | TURN_ON | boot, for 60 s | heartbeat every 5 s; one full position when the first good fix lands |
 | PRE_LAUNCH | after TURN_ON | heartbeat every 60 s; a position audit copy every 600 s |
 | LAUNCH | launch confirmed (IMU, or GPS-altitude fallback) | continuous TX: inertial trace, fused track every 1.5 s, launch T0 |
-| POST_LAUNCH | 1 s after launch | fused track every 1.5 s, inertial trace every 6 s (1 s during an anomaly), maxima recap every 15 s, flight events - ~87% of the radio's airtime |
+| POST_LAUNCH | 1 s after launch | fused track every 1.5 s, inertial trace every 6 s (1 s during an anomaly), maxima recap every 15 s, flight events - ~87% of the radio's airtime, ~90% with three commercial altimeters riding the recap |
 | BATTERY_SAVE | landing detected, or 600 s after POST_LAUNCH began | position every 60 s, fused track every 30 s (none while the fix is stale); with no usable fix a heartbeat every 5 s for the first 30 min (walk-in, RSSI direction finding), then every 30 s |
 
 The callsign (FCC ID) airs at boot and every 300 s whenever the beacon is
@@ -59,9 +59,8 @@ Layouts are in `include/packet_format.h`. The receiver has its own copy in
 | LAUNCH_T0 | 0x07 | one-shot launch declaration |
 | CMD / ACK | 0x08 / 0x09 | receiver command and the beacon's answer (PING) |
 | FLIGHT_EVENT | 0x0A | apogee, drogue, main, landed, anomalies (repeated) |
-| MAXIMA | 0x0B | running flight maxima |
+| MAXIMA | 0x0B | running flight maxima; the recognised commercial altimeters (format, apogee, fired charges) ride it as a tail |
 | HELLO | 0x0C | boot identity (firmware hash) |
-| ALTIMETER | 0x0D | relayed commercial altimeters: format, altitude, apogee, fired charges |
 | callsign | text | `CALLSIGN-id CHn` |
 
 **IMU trace V3.** Bit 15 of `ts_ms` (`IMU_TS_V3_FLAG`) marks V3 units:
@@ -89,10 +88,12 @@ altimeter works on any jack:
 | Missile Works RRC3 | telemetry on, **all data items**, English units | altitude, fired drogue/main/aux |
 | Eggtimer (Quantum/Quasar/Proton) | telemetry output | `<` altitude, `%` apogee, `~` channels (1 = drogue, 2 = main) |
 
-A format locks after three consistent records. The beacon relays an
-ALTIMETER packet (only the recognised inputs) with every maxima recap
-while airborne, and at once when an altimeter reports a newly fired charge;
-nothing goes on the air while no altimeter is recognised. In flight the
+A format locks after three consistent records. While airborne the
+recognised inputs ride every maxima recap (3 bytes each: format, fired
+charges, stale flag and apogee; 0x0D, a separate relay packet, was retired
+before it flew), and a recap goes out at once when an altimeter reports a
+newly fired charge; with no altimeter recognised the recap is the plain 11
+bytes. In flight the
 flash log keeps a record per reporting input every second and at each new
 event (DUMP kind 11). An unplugged jack is held low by its pull-down and
 produces nothing. D13 is also the ItsyBitsy's red LED, which loads J2's

@@ -214,10 +214,10 @@ TEST(test_inputs_detect_relay_and_log)
     altimeter_init();
     s_idle = 0;
     flog_calls = 0;
-    AltimeterPacket_t p;
+    MaximaAltPacket_t p;
     for (int i = 0; i < 2000; i++) altimeter_sample(0);   /* all unplugged */
     altimeter_poll(1000);
-    CHECK(altimeter_build_packet(&p, 1000) == 0);
+    CHECK(altimeter_fill_maxima(&p, 1000) == 0 && p.alt_inputs == 0);
     altimeter_log_service(1000);
     CHECK(flog_calls == 0);
 
@@ -228,11 +228,11 @@ TEST(test_inputs_detect_relay_and_log)
     inject(ALT_J6_PA_BIT, "#0012><01300>@3>");                         /* Eggtimer */
     altimeter_poll(2000);
     CHECK(altimeter_new_events() == 0);
-    CHECK(altimeter_build_packet(&p, 2000) == ALTIMETER_PACKET_SIZE(3));
-    CHECK(p.packet_type == PACKET_TYPE_ALTIMETER && p.inputs == 0x07);
-    CHECK(p.entry[0].status == ALT_ST_FMT_STRATOLOGGER && p.entry[0].alt_4ft == 300);
-    CHECK(p.entry[1].status == ALT_ST_FMT_RRC3 && p.entry[1].alt_4ft == 350);
-    CHECK(p.entry[2].status == ALT_ST_FMT_EGGTIMER && p.entry[2].alt_4ft == 325);
+    CHECK(altimeter_fill_maxima(&p, 2000) == MAXIMA_ALT_PACKET_SIZE(3) - MAXIMA_PACKET_SIZE);
+    CHECK(p.alt_inputs == 0x07);
+    CHECK(p.alt[0].status == ALT_ST_FMT_STRATOLOGGER && p.alt[0].apogee_4ft == 300);
+    CHECK(p.alt[1].status == ALT_ST_FMT_RRC3 && p.alt[1].apogee_4ft == 350);
+    CHECK(p.alt[2].status == ALT_ST_FMT_EGGTIMER && p.alt[2].apogee_4ft == 325);
 
     altimeter_log_service(2000);                                       /* one per input */
     CHECK(flog_calls == 3);
@@ -247,9 +247,9 @@ TEST(test_inputs_detect_relay_and_log)
     CHECK(flog_calls == 4 && flog_input == 1);
     CHECK(flog_status == (ALT_ST_FMT_RRC3 | ALT_ST_DROGUE));
     CHECK(flog_alt == 2510 && flog_apo == 2510);
-    CHECK(altimeter_build_packet(&p, 2200) == ALTIMETER_PACKET_SIZE(3));
+    CHECK(altimeter_fill_maxima(&p, 2200) == MAXIMA_ALT_PACKET_SIZE(3) - MAXIMA_PACKET_SIZE);
     CHECK(altimeter_new_events() == 0);                                /* relayed */
-    CHECK((p.entry[1].status & ALT_ST_DROGUE) && p.entry[1].apogee_4ft == 628);   /* 2510 / 4, rounded */
+    CHECK((p.alt[1].status & ALT_ST_DROGUE) && p.alt[1].apogee_4ft == 628);   /* 2510 / 4, rounded */
 
     /* New data logs again only after ALT_LOG_INTERVAL_MS */
     inject(ALT_J2_PA_BIT, "1210\r\n");
@@ -260,8 +260,8 @@ TEST(test_inputs_detect_relay_and_log)
     CHECK(flog_calls == 5 && flog_input == 0 && flog_alt == 1210);
 
     /* Silence: entries go stale but stay on the air */
-    CHECK(altimeter_build_packet(&p, 2300 + ALT_STALE_MS + 1) == ALTIMETER_PACKET_SIZE(3));
-    CHECK(p.entry[0].status & ALT_ST_STALE);
+    CHECK(altimeter_fill_maxima(&p, 2300 + ALT_STALE_MS + 1) == MAXIMA_ALT_PACKET_SIZE(3) - MAXIMA_PACKET_SIZE);
+    CHECK(p.alt[0].status & ALT_ST_STALE);
 }
 
 TEST(test_inputs_ring_overflow_recovers)
@@ -275,9 +275,9 @@ TEST(test_inputs_ring_overflow_recovers)
     altimeter_poll(10);                           /* overlong line: rejected */
     inject(ALT_J5_PA_BIT, "\r\n100\r\n101\r\n102\r\n");
     altimeter_poll(20);
-    AltimeterPacket_t p;
-    CHECK(altimeter_build_packet(&p, 20) == ALTIMETER_PACKET_SIZE(1));
-    CHECK(p.inputs == 0x02 && p.entry[0].alt_4ft == 26);   /* 102 ft / 4, rounded */
+    MaximaAltPacket_t p;
+    CHECK(altimeter_fill_maxima(&p, 20) == MAXIMA_ALT_PACKET_SIZE(1) - MAXIMA_PACKET_SIZE);
+    CHECK(p.alt_inputs == 0x02 && p.alt[0].apogee_4ft == 26);   /* 102 ft / 4, rounded */
 }
 
 int main(void)

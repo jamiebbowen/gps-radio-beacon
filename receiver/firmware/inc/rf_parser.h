@@ -37,20 +37,22 @@ uint8_t RF_Parser_Init(void);
 void RF_Parser_NewContext(void);
 
 /**
- * @brief Decode an ALTIMETER packet (packet_format.h): the length must match
- *        the inputs flagged on the air, and the entries are expanded to
- *        out->entry[i] = input i (unflagged inputs zero).
+ * @brief Decode a MAXIMA recap (packet_format.h): the plain 11 bytes, or
+ *        with the commercial altimeters' tail, whose length must match the
+ *        inputs flagged on the air. Tail entries are expanded to
+ *        out->alt[i] = input i (unflagged inputs zero; alt_inputs 0 for a
+ *        plain recap).
  * @retval 1 if valid, 0 otherwise
  */
-uint8_t RF_Parser_DecodeAltimeter(const uint8_t *data, uint16_t len,
-                                  AltimeterPacket_t *out);
+uint8_t RF_Parser_DecodeMaxima(const uint8_t *data, uint16_t len,
+                               MaximaAltPacket_t *out);
 
 /**
- * @brief SD event row for an ALTIMETER packet, e.g.
- *        "ALTIM id=3 J5 RRC3 2512/2512ft D-- J6 EGG 1000/2520ft DM-"
- *        (latest/apogee, fired drogue/main/aux; "(old)" = stale input).
+ * @brief SD event row for a recap's altimeter tail, e.g.
+ *        "ALTIM id=3 J5 RRC3 apo=2512ft D-- J6 EGG apo=2520ft DM-"
+ *        (apogee, fired drogue/main/aux; "(old)" = stale input).
  */
-void RF_Parser_FormatAltimeter(const AltimeterPacket_t *a, char *buf, size_t n);
+void RF_Parser_FormatAltimeter(const MaximaAltPacket_t *a, char *buf, size_t n);
 
 /**
  * @brief Parse ASCII packet into GPS data structure

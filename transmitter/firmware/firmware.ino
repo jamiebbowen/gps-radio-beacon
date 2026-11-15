@@ -704,27 +704,22 @@ void loop() {
     }
 #endif
 
-    /* Maxima recap: every MAXIMA_TX_INTERVAL_MS while airborne. The
-     * landing-latch copy is sent by the landing transition itself. */
+    /* Maxima recap: every MAXIMA_TX_INTERVAL_MS while airborne, carrying the
+     * commercial altimeters. A deploy event an altimeter just reported goes
+     * out at once (at most every ALT_EVENT_TX_MIN_MS) instead of up to 15 s
+     * later, and restarts the cadence. The landing-latch copy is sent by
+     * the landing transition itself. */
     static uint32_t last_maxima_tx_ms = 0;
-    if ((beacon_state == BEACON_STATE_LAUNCH || beacon_state == BEACON_STATE_POST_LAUNCH) &&
-        (now_ms - last_maxima_tx_ms >= MAXIMA_TX_INTERVAL_MS)) {
-        last_maxima_tx_ms = now_ms;
-        gps_poll_between_sends();
-        beacon_transmit_maxima(system_time_seconds, transmit_fast_flag);
-        gps_poll_between_sends();
-        beacon_transmit_altimeter(transmit_fast_flag);
-    }
-
-    /* A deploy event an altimeter just reported goes out at once; the
-     * maxima-cadence copy would carry it up to 15 s later. */
     static uint32_t last_alt_event_tx_ms = 0;
-    if ((beacon_state == BEACON_STATE_LAUNCH || beacon_state == BEACON_STATE_POST_LAUNCH) &&
-        altimeter_new_events() &&
-        (now_ms - last_alt_event_tx_ms >= ALT_EVENT_TX_MIN_MS)) {
-        last_alt_event_tx_ms = now_ms;
-        gps_poll_between_sends();
-        beacon_transmit_altimeter(transmit_fast_flag);
+    if (beacon_state == BEACON_STATE_LAUNCH || beacon_state == BEACON_STATE_POST_LAUNCH) {
+        bool alt_event = altimeter_new_events() &&
+                         (now_ms - last_alt_event_tx_ms >= ALT_EVENT_TX_MIN_MS);
+        if (alt_event || now_ms - last_maxima_tx_ms >= MAXIMA_TX_INTERVAL_MS) {
+            if (alt_event) last_alt_event_tx_ms = now_ms;
+            last_maxima_tx_ms = now_ms;
+            gps_poll_between_sends();
+            beacon_transmit_maxima(system_time_seconds, transmit_fast_flag);
+        }
     }
 
     /* Two-way channel (v2 radios): only in pad/recovery phases the beacon

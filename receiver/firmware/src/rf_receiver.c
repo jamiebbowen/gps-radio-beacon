@@ -156,7 +156,7 @@ static MaximaPacket_t last_maxima;
 static uint8_t maxima_pending = 0;
 static HelloPacket_t last_hello;
 static uint8_t hello_pending = 0;
-static AltimeterPacket_t last_altimeter;   /* entries in input order */
+static MaximaAltPacket_t last_altimeter;   /* recap tail, input order */
 static uint8_t altimeter_pending = 0;
 static uint32_t altimeter_tick = 0;        /* 0 = none from this rocket */
 
@@ -597,26 +597,22 @@ uint8_t RF_Receiver_DataAvailable(void)
         }
         /* V2 only: the 12-byte V1 layout (u16 gyro) never flew, and its
          * low gyro byte would decode nonsense under the u8 x16 scheme. */
-      } else if (last_packet.length == MAXIMA_PACKET_SIZE
+      } else if (last_packet.length >= MAXIMA_PACKET_SIZE
               && last_packet.data[0] == PACKET_TYPE_MAXIMA) {
-        /* Running maxima recap - recurring rows; each copy is standalone. */
-        memset(&last_maxima, 0, sizeof(last_maxima));
-        memcpy(&last_maxima, last_packet.data, sizeof(last_maxima));
-        if (RF_RocketFilter(1, last_maxima.rocket_id)) {
+        /* Running maxima recap - recurring rows; each copy is standalone.
+         * The beacon's commercial altimeters ride it as a tail (expanded to
+         * input order); a malformed length drops the whole packet. */
+        MaximaAltPacket_t mxa;
+        if (RF_Parser_DecodeMaxima(last_packet.data, last_packet.length, &mxa)
+            && RF_RocketFilter(1, mxa.mx.rocket_id)) {
+          memcpy(&last_maxima, &mxa.mx, sizeof(last_maxima));
           maxima_pending = 1;
           last_packet_time = HAL_GetTick();
-        }
-      } else if (last_packet.length >= ALTIMETER_PACKET_HDR
-              && last_packet.data[0] == PACKET_TYPE_ALTIMETER) {
-        /* Commercial altimeter relay: entries for the inputs on the air,
-         * expanded to input order; malformed lengths are dropped. */
-        AltimeterPacket_t alt;
-        if (RF_Parser_DecodeAltimeter(last_packet.data, last_packet.length, &alt)
-            && RF_RocketFilter(1, alt.rocket_id)) {
-          memcpy(&last_altimeter, &alt, sizeof(alt));
-          altimeter_pending = 1;
-          altimeter_tick = HAL_GetTick();
-          last_packet_time = HAL_GetTick();
+          if (mxa.alt_inputs != 0) {
+            memcpy(&last_altimeter, &mxa, sizeof(mxa));
+            altimeter_pending = 1;
+            altimeter_tick = HAL_GetTick();
+          }
         }
       } else if ((last_packet.length == HELLO_PACKET_SIZE
                || last_packet.length == HELLO_PACKET_SIZE_V1)
@@ -1056,7 +1052,7 @@ uint8_t RF_Receiver_GetMaxima(MaximaPacket_t *mx)
   return 1;
 }
 
-uint8_t RF_Receiver_GetAltimeter(AltimeterPacket_t *alt)
+uint8_t RF_Receiver_GetAltimeter(MaximaAltPacket_t *alt)
 {
   if (!altimeter_pending || alt == NULL) return 0;
   memcpy(alt, &last_altimeter, sizeof(*alt));
@@ -1064,7 +1060,7 @@ uint8_t RF_Receiver_GetAltimeter(AltimeterPacket_t *alt)
   return 1;
 }
 
-uint8_t RF_Receiver_PeekAltimeter(AltimeterPacket_t *alt, uint32_t *age_ms)
+uint8_t RF_Receiver_PeekAltimeter(MaximaAltPacket_t *alt, uint32_t *age_ms)
 {
   if (altimeter_tick == 0 || alt == NULL) return 0;
   memcpy(alt, &last_altimeter, sizeof(*alt));
