@@ -15,13 +15,14 @@ landing), the maxima and the record counts.
 Row format (transmitter/firmware/flight_log.cpp, flog_print_record):
     ms,kind,...   ms since boot; kind 1 IMU, 2 GPS, 3 LAUNCH, 4 LANDED,
     5 FLIGHT_EVENT, 6 POST_LAUNCH, 7 BATTERY_SAVE, 8 BOOT, 9 FUSED,
-    10 STATE (flight-state marker: 1 FLYING, 2 LANDED)
+    10 STATE (flight-state marker: 1 FLYING, 2 LANDED),
+    11 ALTIMETER (input 0=J2 1=J5 2=J6, status ALT_ST_*, alt ft, apogee ft)
 """
 import sys
 
 KIND_NAMES = {1: "IMU", 2: "GPS", 3: "LAUNCH", 4: "LANDED", 5: "FLIGHT_EVENT",
               6: "POST_LAUNCH", 7: "BATTERY_SAVE", 8: "BOOT", 9: "FUSED",
-              10: "STATE"}
+              10: "STATE", 11: "ALTIMETER"}
 EVENT_NAMES = {0x01: "APOGEE", 0x02: "DROGUE", 0x03: "MAIN", 0x04: "LANDED",
                0x10: "ANOMALY ballistic (no drogue)", 0x11: "ANOMALY tumble",
                0x12: "ANOMALY IMU lost", 0x13: "ANOMALY GPS outage",
@@ -33,6 +34,14 @@ RESET_BITS = [(0x20, "watchdog"), (0x02, "brown-out (core)"),
               (0x01, "power-on"), (0x40, "system reset"), (0x08, "NVM"),
               (0x80, "backup")]
 FUS_FLAGS = [(0x01, "GPS fresh"), (0x02, "dead reckoning"), (0x04, "IMU ok")]
+# Commercial altimeter inputs (packet_format.h ALT_ST_*)
+ALT_JACKS = {0: "J2", 1: "J5", 2: "J6"}
+ALT_FORMATS = {1: "StratoLogger CF", 2: "RRC3", 3: "Eggtimer"}
+ALT_EVENTS = [(0x04, "drogue"), (0x08, "main"), (0x10, "aux")]
+
+
+def alt_name(vals):
+    return f"{ALT_JACKS.get(vals[0], '?')} ({ALT_FORMATS.get(vals[1] & 0x03, '?')})"
 
 
 def parse(lines):
@@ -84,6 +93,7 @@ def summarise(recs):
     out.append("")
     out.append("TIMELINE")
     state = None
+    alt_fired = {}
     for ms, kind, vals in recs:
         if kind == 8:
             cause = reset_cause(vals[0]) if vals else "?"
@@ -97,6 +107,13 @@ def summarise(recs):
             out.append(f"  {t_s(ms)}  {name}{extra}")
         elif kind == 10 and vals:
             state = STATE_NAMES.get(vals[0], f"0x{vals[0]:02X}")
+        elif kind == 11 and len(vals) >= 4:
+            new = vals[1] & ~alt_fired.get(vals[0], 0)
+            alt_fired[vals[0]] = alt_fired.get(vals[0], 0) | vals[1]
+            for bit, name in ALT_EVENTS:
+                if new & bit:
+                    out.append(f"  {t_s(ms)}  ALTIMETER {alt_name(vals)}: {name} fired"
+                               f" at {vals[2]} ft")
     if state:
         note = {"FLYING": " - the log was still armed: landing never latched "
                           "(lost, stuck, or still in the air when powered off)",
@@ -120,6 +137,17 @@ def summarise(recs):
     if len(v3) < len(imu):
         out.append(f"  {len(imu) - len(v3)} IMU record(s) from pre-V3 firmware "
                    "(cm/s^2 units that may have wrapped) - not used above")
+
+    alt = [r for r in recs if r[1] == 11 and len(r[2]) >= 4]
+    if alt:
+        out.append("")
+        out.append("ALTIMETERS")
+        for jack in sorted({r[2][0] for r in alt}):
+            mine = [r[2] for r in alt if r[2][0] == jack]
+            last = mine[-1]
+            fired = ", ".join(n for b, n in ALT_EVENTS if last[1] & b) or "nothing"
+            out.append(f"  {alt_name(last)}: apogee {max(v[3] for v in mine)} ft, "
+                       f"last {last[2]} ft, fired {fired} ({len(mine)} records)")
 
     out.append("")
     counts = {}

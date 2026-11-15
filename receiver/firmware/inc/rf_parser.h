@@ -13,7 +13,9 @@ extern "C" {
 
 #include "stm32f4xx_hal.h"
 #include "gps.h"
+#include "packet_format.h"
 #include <stdint.h>
+#include <stddef.h>
 
 /* Parser Constants */
 #define RF_PARSER_BUFFER_SIZE   128
@@ -33,6 +35,22 @@ uint8_t RF_Parser_Init(void);
  *        fused metadata and the last callsign. Diagnostic counters stay.
  */
 void RF_Parser_NewContext(void);
+
+/**
+ * @brief Decode an ALTIMETER packet (packet_format.h): the length must match
+ *        the inputs flagged on the air, and the entries are expanded to
+ *        out->entry[i] = input i (unflagged inputs zero).
+ * @retval 1 if valid, 0 otherwise
+ */
+uint8_t RF_Parser_DecodeAltimeter(const uint8_t *data, uint16_t len,
+                                  AltimeterPacket_t *out);
+
+/**
+ * @brief SD event row for an ALTIMETER packet, e.g.
+ *        "ALTIM id=3 J5 RRC3 2512/2512ft D-- J6 EGG 1000/2520ft DM-"
+ *        (latest/apogee, fired drogue/main/aux; "(old)" = stale input).
+ */
+void RF_Parser_FormatAltimeter(const AltimeterPacket_t *a, char *buf, size_t n);
 
 /**
  * @brief Parse ASCII packet into GPS data structure

@@ -30,7 +30,7 @@ BINS     := $(BUILD)/test_ekf $(BUILD)/test_nmea_fields $(BUILD)/test_beacon \
             $(BUILD)/test_flight_events $(BUILD)/test_flight_maxima \
             $(BUILD)/test_airlink_roundtrip $(BUILD)/test_mainloop \
             $(BUILD)/test_flight_log $(BUILD)/test_fuzz_nmea \
-            $(BUILD)/test_fixed_point
+            $(BUILD)/test_fixed_point $(BUILD)/test_altimeter
 
 .PHONY: all test coverage sanitize clean
 
@@ -112,6 +112,15 @@ $(BUILD)/test_flight_events: test_flight_events.cpp ../firmware/flight_events.cp
 $(BUILD)/test_fixed_point: test_fixed_point.cpp ../firmware/include/fixed_point.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -o $@ $(filter %.cpp,$^) $(LDFLAGS)
 
+# altimeter.cpp + altimeter_input.cpp are #included by the test; the TC3
+# sampler itself is target-only (__SAMD51__).
+$(BUILD)/test_altimeter: test_altimeter.cpp ../firmware/altimeter.cpp \
+                         ../firmware/altimeter_input.cpp \
+                         ../firmware/include/altimeter.h \
+                         ../firmware/include/altimeter_input.h \
+                         stubs/Arduino.h | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< $(LDFLAGS)
+
 # Running maxima tracker: pure logic module, no Arduino deps.
 $(BUILD)/test_flight_maxima: test_flight_maxima.cpp ../firmware/flight_maxima.cpp \
                              stubs/Arduino.h | $(BUILD)
@@ -125,6 +134,7 @@ $(BUILD)/rf_parser_rx.o: ../../receiver/firmware/src/rf_parser.c | $(BUILD)
 
 $(BUILD)/test_airlink_roundtrip: test_airlink_roundtrip.cpp \
             ../firmware/beacon.cpp ../firmware/flight_maxima.cpp \
+            ../firmware/altimeter.cpp ../firmware/altimeter_input.cpp \
             ../firmware/nmea_fields.c \
             $(BUILD)/rf_parser_rx.o stubs/Arduino.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -I../../receiver/tests/stubs \
@@ -137,11 +147,13 @@ $(BUILD)/test_mainloop: test_mainloop.cpp ../firmware/flight_cadence.cpp \
             ../firmware/firmware.ino ../firmware/launch_detect.cpp \
             ../firmware/nav.cpp ../firmware/ekf.cpp ../firmware/beacon.cpp \
             ../firmware/flight_events.cpp ../firmware/flight_maxima.cpp \
-            ../firmware/nmea_fields.c \
+            ../firmware/nmea_fields.c ../firmware/altimeter.cpp \
+            ../firmware/altimeter_input.cpp \
             stubs/Arduino.h stubs/Wire.h stubs/Adafruit_BNO08x.h | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COVFLAGS) -Istubs -o $@ $< \
 	    ../firmware/flight_cadence.cpp ../firmware/flight_events.cpp \
-	    ../firmware/flight_maxima.cpp ../firmware/nmea_fields.c $(LDFLAGS)
+	    ../firmware/flight_maxima.cpp ../firmware/nmea_fields.c \
+	    ../firmware/altimeter.cpp ../firmware/altimeter_input.cpp $(LDFLAGS)
 
 # On-chip flight recorder: file #included by the test; the NVMCTRL register
 # block and the FLOG_BASE flash region are faked in the test file.
@@ -180,7 +192,8 @@ COV_PAIRS := ekf:ekf.cpp nmea_fields:nmea_fields.c beacon:beacon.cpp \
              launch_detect:launch_detect.cpp uart:uart.cpp \
              flight_log:flight_log.cpp flight_cadence:flight_cadence.cpp \
              flight_events:flight_events.cpp flight_maxima:flight_maxima.cpp \
-             mainloop:firmware.ino
+             mainloop:firmware.ino altimeter:altimeter.cpp \
+             altimeter:altimeter_input.cpp
 
 coverage: COVFLAGS := --coverage
 coverage: clean $(BINS)

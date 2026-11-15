@@ -14,6 +14,7 @@
 #include "include/flight_events.h"
 #include "include/flight_maxima.h"
 #include "include/flight_log.h"
+#include "include/altimeter_input.h"
 #include "include/watchdog.h"
 
 /**
@@ -118,6 +119,7 @@ void yield(void)
     in_hook = true;
     launch_detect_update(system_time_seconds);
     nav_predict();
+    altimeter_poll(now);          /* their 128-byte rings last ~133 ms */
     in_hook = false;
 }
 uint32_t last_transmission_time = 0;
@@ -235,6 +237,7 @@ void setup() {
     flight_events_init();
 
     flight_maxima_init();
+    altimeter_init();
 
     flight_log_init();
 
@@ -311,6 +314,9 @@ void loop() {
     
     // Update launch detection system (also drains IMU samples)
     launch_detect_update(system_time_seconds);
+
+    // Commercial altimeter inputs: decode what the TC3 sampler received
+    altimeter_poll(millis());
 
     // Run the EKF predict step against whatever IMU data just arrived.
     // Safe to call every loop iteration; dt is computed internally.
@@ -406,6 +412,11 @@ void loop() {
         mx.gyro_mag_rads = pass_peak_gyro;
         mx.uptime_s      = system_time_seconds;
         flight_maxima_feed(&mx);
+
+        /* Commercial altimeters: flight-log records while the log is armed */
+        if (beacon_state == BEACON_STATE_LAUNCH || beacon_state == BEACON_STATE_POST_LAUNCH) {
+            altimeter_log_service(millis());
+        }
 
         uint32_t now_evt_ms = millis();
         int16_t ev_value = 0;
@@ -684,6 +695,17 @@ void loop() {
         (now_ms - last_maxima_tx_ms >= MAXIMA_TX_INTERVAL_MS)) {
         last_maxima_tx_ms = now_ms;
         beacon_transmit_maxima(system_time_seconds, transmit_fast_flag);
+        beacon_transmit_altimeter(transmit_fast_flag);
+    }
+
+    /* A deploy event an altimeter just reported goes out at once; the
+     * maxima-cadence copy would carry it up to 15 s later. */
+    static uint32_t last_alt_event_tx_ms = 0;
+    if ((beacon_state == BEACON_STATE_LAUNCH || beacon_state == BEACON_STATE_POST_LAUNCH) &&
+        altimeter_new_events() &&
+        (now_ms - last_alt_event_tx_ms >= ALT_EVENT_TX_MIN_MS)) {
+        last_alt_event_tx_ms = now_ms;
+        beacon_transmit_altimeter(transmit_fast_flag);
     }
 
     /* Two-way channel (v2 radios): only in pad/recovery phases the beacon

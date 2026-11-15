@@ -96,6 +96,11 @@ uint8_t RF_Receiver_GetFlightEvent(FlightEventPacket_t *evt);
  * snapshot so every row stands alone) and the beacon's boot-time firmware
  * identity. One-shot reads; main.c logs both. */
 uint8_t RF_Receiver_GetMaxima(MaximaPacket_t *mx);
+/* Commercial altimeter relay (ALTIMETER packets, entries in input order):
+ * Get = one-shot per packet (the SD row), Peek = the latest for display
+ * with its age; both 0 before any from this rocket / after a channel pick. */
+uint8_t RF_Receiver_GetAltimeter(AltimeterPacket_t *alt);
+uint8_t RF_Receiver_PeekAltimeter(AltimeterPacket_t *alt, uint32_t *age_ms);
 uint8_t RF_Receiver_GetHello(HelloPacket_t *hello);
 
 /* Two-way command uplink. RequestPing() queues a PING to the bound

@@ -105,6 +105,13 @@ Connect the beacon over USB and watch the first seconds of boot:
       (until the receiver's own GPS fixes, the Denver-area default applies;
       after that the WMM2025 site grid in `compass.c` does).
 
+## 4b. Relayed altimeters
+
+- [ ] With an altimeter streaming into the beacon after a shake launch, the
+      ALTIMETERS page (button cycle) shows each jack's format, altitude,
+      apogee and fired charges (`D`/`M`/`A`), and `Heard Ns ago` counts up
+      between relays; LOG.TXT gets an `ALTIM id=...` event row per packet.
+
 ## 5. SD logging round-trip (weekend-before check)
 
 - [ ] Receive ≥10 packets from the beacon, power off, pull the card.

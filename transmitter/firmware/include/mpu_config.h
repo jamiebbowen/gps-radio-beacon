@@ -33,6 +33,17 @@
 // GPS UART uses Hardware Serial1
 #define GPS_SERIAL Serial1
 
+// Commercial altimeter serial inputs (carrier J2/J5/J6: 5 V TTL through
+// 10k/20k dividers), 9600 8N1, receive only, all on PORT group A and read
+// by the TC3 sampling interrupt (altimeter_input.cpp). D13 is also the
+// ItsyBitsy's red LED, which loads J2's divider - bench-check its level.
+#define ALT_J2_PIN          13          // D13 = PA22
+#define ALT_J5_PIN          12          // D12 = PA23
+#define ALT_J6_PIN          11          // D11 = PA21
+#define ALT_J2_PA_BIT       22
+#define ALT_J5_PA_BIT       23
+#define ALT_J6_PA_BIT       21
+
 // BNO085 IMU Configuration
 #define IMU_I2C_ADDR        0x4A        // I2C address (0x4A or 0x4B depending on SA0 pin)
 #define LAUNCH_ACCEL_THRESHOLD  20.0    // Launch detection threshold in m/s² (~2g)

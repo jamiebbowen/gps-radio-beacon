@@ -721,6 +721,54 @@ static void inject_hello(uint8_t rocket_id, uint32_t fw_hash)
     fake_pkt_pending = 1;
 }
 
+static void inject_altimeter(uint8_t rocket_id, uint8_t inputs, uint8_t len)
+{
+    AltimeterEntry_t e = { ALT_ST_FMT_RRC3 | ALT_ST_DROGUE, 628, 628 };
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    fake_pkt.data[0] = PACKET_TYPE_ALTIMETER;
+    fake_pkt.data[1] = rocket_id;
+    fake_pkt.data[2] = inputs;
+    for (uint8_t k = 0; k < ALTIMETER_INPUTS; k++)
+        memcpy(fake_pkt.data + ALTIMETER_PACKET_HDR + k * ALTIMETER_ENTRY_SIZE,
+               &e, sizeof(e));
+    fake_pkt.length = len;
+    fake_pkt.rssi = -90;
+    fake_pkt.snr = 5;
+    fake_pkt_pending = 1;
+}
+
+TEST(test_altimeter_dispatch)
+{
+    AltimeterPacket_t a;
+    uint32_t age = 0;
+    CHECK(RF_Receiver_PeekAltimeter(&a, &age) == 0);      /* nothing yet */
+
+    inject_altimeter(OUR_ROCKET_ID, 0x02, ALTIMETER_PACKET_SIZE(1));
+    run_for(500, 250);
+    CHECK(RF_Receiver_GetAltimeter(&a) == 1);
+    CHECK(a.inputs == 0x02 && a.entry[0].status == 0);
+    CHECK(a.entry[1].status == (ALT_ST_FMT_RRC3 | ALT_ST_DROGUE) && a.entry[1].alt_4ft == 628);
+    CHECK(RF_Receiver_GetAltimeter(&a) == 0);              /* one SD row per packet */
+    run_for(2000, 250);
+    CHECK(RF_Receiver_PeekAltimeter(&a, &age) == 1);        /* still on the page */
+    CHECK(age >= 2000 && a.entry[1].apogee_4ft == 628);
+
+    /* Malformed (flags vs length) and foreign packets are dropped */
+    inject_altimeter(OUR_ROCKET_ID, 0x03, ALTIMETER_PACKET_SIZE(1));
+    run_for(500, 250);
+    CHECK(RF_Receiver_GetAltimeter(&a) == 0);
+    inject_altimeter(FOREIGN_ROCKET_ID, 0x02, ALTIMETER_PACKET_SIZE(1));
+    run_for(500, 250);
+    CHECK(RF_Receiver_GetAltimeter(&a) == 0);
+
+    /* A manual channel pick forgets the previous rocket's altimeters */
+    RF_Receiver_StopScan();
+    (void)RF_Receiver_NextChannel();
+    CHECK(RF_Receiver_PeekAltimeter(&a, &age) == 0);
+    RF_Receiver_StopScan();
+    CHECK(RF_Receiver_SetChannel(0) == RF_OK);
+}
+
 TEST(test_maxima_and_hello_dispatch)
 {
     /* Running maxima: fields land, one-shot consume, foreign dropped */
@@ -2671,6 +2719,7 @@ int main(void)
     run_test_launch_t0_one_shot();
     run_test_flight_event_one_shot_and_foreign_drop();
     run_test_maxima_and_hello_dispatch();
+    run_test_altimeter_dispatch();
     run_test_flight_contact_latch_blocks_auto_rescan();
     run_test_flight_contact_latch_sources();
     run_test_crc_dump_captures_corrupt_head();

@@ -420,3 +420,54 @@ void RF_Parser_GetDetailedFailures(uint32_t *null_packet)
     *null_packet = parse_failures_null_packet;
   }
 }
+
+uint8_t RF_Parser_DecodeAltimeter(const uint8_t *data, uint16_t len,
+                                  AltimeterPacket_t *out)
+{
+  if (data == NULL || out == NULL || len < ALTIMETER_PACKET_HDR ||
+      data[0] != PACKET_TYPE_ALTIMETER) {
+    return 0;
+  }
+  uint8_t inputs = data[2];
+  if (inputs == 0 || (inputs & (uint8_t)~((1u << ALTIMETER_INPUTS) - 1u))) {
+    return 0;
+  }
+  uint8_t n = 0;
+  for (uint8_t i = 0; i < ALTIMETER_INPUTS; i++) {
+    if (inputs & (1u << i)) n++;
+  }
+  if (len != ALTIMETER_PACKET_SIZE(n)) {
+    return 0;
+  }
+  memset(out, 0, sizeof(*out));
+  out->packet_type = data[0];
+  out->rocket_id = data[1];
+  out->inputs = inputs;
+  const uint8_t *e = data + ALTIMETER_PACKET_HDR;
+  for (uint8_t i = 0; i < ALTIMETER_INPUTS; i++) {
+    if (!(inputs & (1u << i))) continue;
+    memcpy(&out->entry[i], e, ALTIMETER_ENTRY_SIZE);
+    e += ALTIMETER_ENTRY_SIZE;
+  }
+  return 1;
+}
+
+void RF_Parser_FormatAltimeter(const AltimeterPacket_t *a, char *buf, size_t n)
+{
+  static const char *jack[ALTIMETER_INPUTS] = { "J2", "J5", "J6" };
+  static const char *fmt[4] = { "?", "SLCF", "RRC3", "EGG" };
+  if (buf == NULL || n == 0) return;
+  int len = snprintf(buf, n, "ALTIM id=%u", (unsigned)a->rocket_id);
+  for (uint8_t i = 0; i < ALTIMETER_INPUTS; i++) {
+    if (!(a->inputs & (1u << i)) || len < 0 || (size_t)len >= n) continue;
+    const AltimeterEntry_t *e = &a->entry[i];
+    len += snprintf(buf + len, n - (size_t)len, " %s %s %ld/%ldft %c%c%c%s",
+                    jack[i], fmt[e->status & ALT_ST_FMT_MASK],
+                    (long)e->alt_4ft * ALT_FT_PER_UNIT,
+                    (long)e->apogee_4ft * ALT_FT_PER_UNIT,
+                    (e->status & ALT_ST_DROGUE) ? 'D' : '-',
+                    (e->status & ALT_ST_MAIN) ? 'M' : '-',
+                    (e->status & ALT_ST_AUX) ? 'A' : '-',
+                    (e->status & ALT_ST_STALE) ? "(old)" : "");
+  }
+}

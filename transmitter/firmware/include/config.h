@@ -229,6 +229,12 @@
  * 100 Hz; 5 ms keeps its batch buffer from overflowing). */
 #define IMU_TX_SERVICE_MS               5
 
+/* Commercial altimeter inputs (altimeter_input.cpp): flight-log record per
+ * reporting input at most this often (a new deploy event logs at once),
+ * and the earliest repeat of the event-triggered ALTIMETER relay. */
+#define ALT_LOG_INTERVAL_MS             1000
+#define ALT_EVENT_TX_MIN_MS             2000
+
 #if TESTING_MODE
     // Testing Configuration - Fast intervals for development/testing
     #define POST_LAUNCH_DURATION_SEC        10    // 10 seconds in LAUNCH state before POST_LAUNCH

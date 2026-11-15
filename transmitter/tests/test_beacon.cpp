@@ -156,6 +156,20 @@ uint32_t nav_get_gps_rejects(void) { return fake_gps_rejects; }
  * hardware firmware.ino captures RSTC->RCAUSE into this global. */
 uint8_t g_boot_rcause = 0;
 
+/* Commercial altimeter relay: altimeter_input's packet builder, scripted */
+static uint8_t fake_alt_len = 0;
+uint8_t altimeter_build_packet(AltimeterPacket_t *p, uint32_t now_ms)
+{
+    (void)now_ms;
+    memset(p, 0, sizeof(*p));
+    p->packet_type = PACKET_TYPE_ALTIMETER;
+    p->rocket_id = 7;
+    p->inputs = 0x02;
+    p->entry[0].status = ALT_ST_FMT_RRC3 | ALT_ST_DROGUE;
+    p->entry[0].alt_4ft = 600;
+    return fake_alt_len;
+}
+
 /* Include the module under test AFTER the fakes (it only needs their
  * declarations from the headers; definitions resolve at link within
  * this translation unit). */
@@ -527,6 +541,24 @@ TEST(test_hello_packet_contents)
      * documented 0x00000000 fallback (dirty bit clear). */
     CHECK(h->fw_hash == 0);
     CHECK(radio_enables == 1 && radio_disables == 1);   /* non-fast cycles */
+}
+
+TEST(test_altimeter_relay)
+{
+    /* No input recognised: nothing on the air */
+    reset_tx();
+    fake_alt_len = 0;
+    CHECK(beacon_transmit_altimeter(0) == 0);
+    CHECK(tx_count == 0);
+
+    /* One altimeter: exactly the builder's bytes, radio up and down */
+    reset_tx();
+    fake_alt_len = ALTIMETER_PACKET_SIZE(1);
+    CHECK(beacon_transmit_altimeter(0) == 1);
+    CHECK(tx_count == 1 && tx_len == ALTIMETER_PACKET_SIZE(1));
+    CHECK(tx_buf[0] == PACKET_TYPE_ALTIMETER && tx_buf[2] == 0x02);
+    CHECK(tx_buf[3] == (ALT_ST_FMT_RRC3 | ALT_ST_DROGUE));
+    fake_alt_len = 0;
 }
 
 TEST(test_maxima_packet_contents)
@@ -1108,6 +1140,7 @@ int main(void)
     run_test_flight_event_queue_overflow_counted();
     run_test_hello_packet_contents();
     run_test_maxima_packet_contents();
+    run_test_altimeter_relay();
     run_test_imu_trace_packet_contents();
     run_test_imu_trace_saturates_never_wraps();
     run_test_fused_not_anchored_no_tx();

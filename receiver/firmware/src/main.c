@@ -68,6 +68,7 @@ typedef enum {
   DISPLAY_MODE_CHANNEL = 6,     /* Rocket select: long press cycles channel */
   DISPLAY_MODE_RF_STATS = 7,    /* Full radio statistics */
   DISPLAY_MODE_PREFLIGHT = 8,   /* Pad-side go/no-go checklist */
+  DISPLAY_MODE_ALTIMETER = 9,   /* Commercial altimeters the beacon relays */
   DISPLAY_MODE_COUNT            /* Keep last - used for button cycling */
 } DisplayMode_t;
 /* USER CODE END PTD */
@@ -999,6 +1000,14 @@ int main(void)
         SD_Card_EnsureLogFile();
         SD_Card_LogEvent(mx_msg);
       }
+      /* Commercial altimeter relay: one row per packet, all its inputs */
+      AltimeterPacket_t alt_pkt;
+      if (RF_Receiver_GetAltimeter(&alt_pkt)) {
+        char alt_msg[128];
+        RF_Parser_FormatAltimeter(&alt_pkt, alt_msg, sizeof(alt_msg));
+        SD_Card_EnsureLogFile();
+        SD_Card_LogEvent(alt_msg);
+      }
       /* Beacon boot identity: which TX firmware flew (MSB = dirty tree). */
       HelloPacket_t hello;
       if (RF_Receiver_GetHello(&hello)) {
@@ -1617,6 +1626,10 @@ int main(void)
       
     case DISPLAY_MODE_RF_STATS:
       DisplayMode_RFStats();
+      break;
+
+    case DISPLAY_MODE_ALTIMETER:
+      DisplayMode_Altimeter();
       break;
 
     case DISPLAY_MODE_PREFLIGHT: {

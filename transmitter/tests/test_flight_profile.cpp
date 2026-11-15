@@ -117,6 +117,15 @@ uint8_t g_boot_rcause = 0;
 #include "../firmware/launch_detect.cpp"
 #include "../firmware/nav.cpp"
 #include "../firmware/ekf.cpp"
+/* No commercial altimeter on the inputs in these profiles: the real
+ * builder returns 0 then, and nothing goes on the air. */
+#include "../firmware/include/altimeter_input.h"
+uint8_t altimeter_build_packet(AltimeterPacket_t *p, uint32_t now_ms)
+{
+    (void)p;
+    (void)now_ms;
+    return 0;
+}
 #include "../firmware/beacon.cpp"
 
 /* ------------------------------------------------------------------ */
