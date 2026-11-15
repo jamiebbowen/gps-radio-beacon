@@ -39,6 +39,7 @@ void    Eink_DrawText(uint16_t x, uint16_t y, uint8_t scale,
 
 uint8_t Eink_RequestRefresh(void);       /* 1 = started/transferred; 0 = busy or uninit */
 uint8_t Eink_IsBusy(void);               /* physical refresh in progress */
+uint8_t Eink_BusyUnwired(void);          /* 1 = BUSY never rose: fixed-time refreshes */
 void    Eink_Service(void);              /* call every main-loop iteration */
 
 #endif /* EINK_H */

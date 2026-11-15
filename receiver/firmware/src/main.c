@@ -1688,6 +1688,14 @@ int main(void)
 
   /* eInk: poll refresh completion + the 60 s persistent summary push. */
   Eink_Service();
+  static uint8_t eink_unwired_logged = 0;
+  if (!eink_unwired_logged && Eink_BusyUnwired()) {
+    /* BUSY never rose: the hand-wired PA1 link is missing; refreshes run
+     * on a fixed time instead of the panel's own done signal */
+    eink_unwired_logged = 1;
+    SD_Card_EnsureLogFile();
+    SD_Card_LogError("EINK BUSY not wired - fixed-time refresh");
+  }
   Eink_MaybeRefreshSummary(current_time);
   SEG_TOC(disp);
   
