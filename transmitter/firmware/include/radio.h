@@ -37,7 +37,7 @@ int  radio_poll_rx(uint8_t *out, size_t max_len, uint16_t timeout_ms);
 int  radio_transmit_ack(uint8_t rocket_id, uint8_t cmd_code,
                         uint8_t seq_hi, uint8_t seq_lo, uint8_t echo);
 
-// Active rocket channel after backup-jumper resolution (see mpu_config.h)
+// Active rocket channel: CHANNEL_DEFAULT (the carrier has no channel jumper)
 uint8_t radio_get_channel(void);
 
 #endif // RADIO_H

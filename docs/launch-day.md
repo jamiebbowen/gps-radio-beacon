@@ -44,7 +44,7 @@ to repopulate the target.
    sends one packet a minute, so a receiver booted later starts on the
    channel it last locked and catches the beacon there within ~62 s - on
    any other channel, pick it on Rocket Select. Confirm `<id>` and
-   `<n>` match the labels on the airframe and the jumper you mean to fly.
+   `<n>` match the labels on the airframe and the channel it was built for.
 4. **PRE-FLIGHT page** — every row means something you can fix now:
    - `TX LINK OK Ns` counts every packet from the beacon. On the quiet pad
      that is mostly its once-a-minute heartbeat (a position goes out only

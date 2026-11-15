@@ -1,7 +1,7 @@
 /**
  * @file altimeter_input.h
  * @brief The carrier's three commercial-altimeter serial inputs: J2 (D13),
- *        J5 (D12), J6 (D11), 5 V TTL through 10k/20k dividers, 9600 8N1,
+ *        J5 (D12), J6 (D11), 5 V or 3.3 V logic through 10k/20k dividers, 9600 8N1,
  *        receive only. A 38.4 kHz TC3 interrupt samples all three lines
  *        (software UARTs - SERCOM3, the only other SERCOM on these pins
  *        besides SERCOM5, runs the GPS); the main loop and the radio-wait

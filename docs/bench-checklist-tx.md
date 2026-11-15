@@ -118,6 +118,10 @@ runbook is `launch-day.md`.
       `[Alt] Jn: <format>` within a few records of the stream starting.
 - [ ] J2 shares D13 with the red LED: scope the D13 level while an altimeter
       idles (needs > 1.8 V high, < 1.0 V low); if marginal, use J5/J6.
+- [ ] Levels: with a 3.3 V altimeter (StratoLogger CF, Eggtimer) idling,
+      scope the pin side of each divider: J5/J6 read ~2.2 V (the SAMD51's
+      VIH is ~1.82 V). If J2 (shared with the D13 LED) reads below ~1.9 V,
+      don't use J2 for a 3.3 V altimeter.
 - [ ] An unplugged jack produces nothing (no `[Alt]` line). A connected
       one prints `[Alt] Jn <format> rec=N err=N drop=N` every 10 s while it
       streams: `err` and `drop` stay at 0 on a clean link.

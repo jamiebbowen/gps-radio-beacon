@@ -14,7 +14,8 @@ and keeps a crash-survivable flight log in the MCU's own flash.
 | E22-400M33S (SX1268) LoRa | SPI | pins below |
 
 Radio pins (`include/mpu_config.h`): CS 5, DIO1 9, BUSY 7, NRST 2, RF switch
-TXEN A4 / RXEN A5 (MCU-driven), backup-channel jumper A1.
+TXEN A4 / RXEN A5 (MCU-driven). The channel is `CHANNEL_DEFAULT`; the
+carrier has no channel jumper.
 
 Radio settings: channel `ch` = 433.000 + 0.25 x ch MHz (8 channels), SF10,
 62.5 kHz bandwidth, CR 4/8, private sync word 0x12, 22 dBm, 8-symbol
@@ -76,8 +77,10 @@ always lands inside it.
 ## Commercial altimeter inputs
 
 The carrier's J2, J5 and J6 (D13, D12, D11) take the serial telemetry of
-commercial altimeters: 5 V TTL through 10k/20k dividers, 9600 8N1, receive
-only. A 38.4 kHz TC3 interrupt samples all three lines (software UARTs:
+commercial altimeters through 10k/20k dividers, 9600 8N1, receive only. The
+dividers are sized for 5 V TTL; the StratoLogger CF and Eggtimer drive 3.3 V
+CMOS, which reaches only ~2.2 V at the pin (the SAMD51's VIH is ~1.82 V) - use
+J5/J6 for those, since the onboard LED on D13 loads J2's divider further. A 38.4 kHz TC3 interrupt samples all three lines (software UARTs:
 SERCOM3, the only other SERCOM on these pins besides SERCOM5, runs the
 GPS), and each input recognises its altimeter from the data, so any
 altimeter works on any jack:

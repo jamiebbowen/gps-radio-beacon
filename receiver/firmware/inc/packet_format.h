@@ -62,7 +62,7 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) {
     uint8_t  packet_type;   // PACKET_TYPE_HEARTBEAT
     uint8_t  rocket_id;     // ROCKET_ID of the airframe
-    uint8_t  channel;       // Active (jumper-resolved) channel
+    uint8_t  channel;       // Active channel (CHANNEL_DEFAULT)
     uint8_t  satellites;    // Satellites currently tracked
     uint8_t  fix_quality;   // GGA fix quality (0 = none)
     uint16_t uptime_s;      // Seconds since beacon boot (saturates at 65535)

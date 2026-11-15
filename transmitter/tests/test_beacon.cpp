@@ -1076,7 +1076,7 @@ TEST(test_poll_commands_ack_powers_the_radio)
 TEST(test_poll_commands_unsupported_and_unknown_echo)
 {
     reset_tx();
-    /* TUNE_NEXT_CH: beacon channels are jumper-set, so the RX must learn
+    /* TUNE_NEXT_CH: a beacon's channel is set at build time, so the RX must learn
      * "unsupported" (0xFF) rather than silently succeeding. */
     uint8_t tune[6] = { PACKET_TYPE_CMD, (uint8_t)ROCKET_ID, CMD_TUNE_NEXT_CH, 0, 1, 0 };
     memcpy(fake_rx_pkt, tune, 6); fake_rx_len = 6;

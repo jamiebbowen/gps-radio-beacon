@@ -112,7 +112,7 @@ void radio_init(void) {
     Serial.print(LORA_TCXO_VOLTAGE);
     Serial.println("V");
     int state = radio.begin(
-        freq_mhz,           // Frequency in MHz (jumper-resolved channel)
+        freq_mhz,           // Frequency in MHz (the active channel)
         LORA_BANDWIDTH,     // Bandwidth in kHz
         LORA_SPREADING,     // Spreading factor
         LORA_CODING_RATE,   // Coding rate
@@ -175,7 +175,7 @@ void radio_init(void) {
 }
 
 /**
- * Get the active rocket channel (after backup-jumper resolution)
+ * Get the active rocket channel (CHANNEL_DEFAULT; no channel jumper)
  */
 uint8_t radio_get_channel(void) {
     return active_channel;

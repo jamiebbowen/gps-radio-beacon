@@ -68,7 +68,7 @@ explicit `make -C receiver/firmware flash` or `make -C transmitter/firmware uplo
   D11/D12/D13 are the J6/J5/J2 serial inputs). Its 48 MHz source runs open
   loop in flight: keep `alt_rx_sample`'s edge re-sync (the window is pinned
   by test_altimeter's clock-tolerance sweep). Don't reuse TC3 or those pins;
-  TC2 belongs to `tone()`, which the sketch must keep not using.
+  the core's `tone()` takes TC0 on the SAMD51, and the sketch must keep not using it.
 
 ## Testing conventions
 
