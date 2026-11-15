@@ -19,6 +19,11 @@ static alt_ring_t  s_ring[ALTIMETER_INPUTS];
 static alt_state_t s_dec[ALTIMETER_INPUTS];
 
 static uint8_t  s_events_unsent = 0;
+#define ALT_REPORT_MS 10000u
+static uint32_t s_rep_records[ALTIMETER_INPUTS];
+static uint32_t s_rep_errors[ALTIMETER_INPUTS];
+static uint8_t  s_rep_dropped[ALTIMETER_INPUTS];
+static uint32_t s_last_report_ms = 0;
 static uint8_t  s_logged_events[ALTIMETER_INPUTS];
 static uint32_t s_logged_records[ALTIMETER_INPUTS];
 static uint32_t s_last_log_ms[ALTIMETER_INPUTS];
@@ -61,6 +66,10 @@ void altimeter_init(void)
     memset(s_logged_events, 0, sizeof(s_logged_events));
     memset(s_logged_records, 0, sizeof(s_logged_records));
     memset(s_last_log_ms, 0, sizeof(s_last_log_ms));
+    memset(s_rep_records, 0, sizeof(s_rep_records));
+    memset(s_rep_errors, 0, sizeof(s_rep_errors));
+    memset(s_rep_dropped, 0, sizeof(s_rep_dropped));
+    s_last_report_ms = 0;
     s_events_unsent = 0;
     /* Plain inputs: the carrier's 20k pull-downs hold an unplugged jack
      * low (no edges, no bytes); a connected altimeter idles high. */
@@ -114,6 +123,31 @@ void altimeter_poll(uint32_t now_ms)
                 Serial.println();
             }
         }
+    }
+}
+
+void altimeter_report(uint32_t now_ms)
+{
+    if (now_ms - s_last_report_ms < ALT_REPORT_MS) return;
+    s_last_report_ms = now_ms;
+    for (uint8_t i = 0; i < ALTIMETER_INPUTS; i++) {
+        const alt_state_t *d = &s_dec[i];
+        uint8_t drop = s_ring[i].dropped;
+        if (d->records == s_rep_records[i] && d->errors == s_rep_errors[i] &&
+            drop == s_rep_dropped[i]) continue;
+        s_rep_records[i] = d->records;
+        s_rep_errors[i] = d->errors;
+        s_rep_dropped[i] = drop;
+        Serial.print(F("[Alt] "));
+        Serial.print(k_jack[i]);
+        Serial.print(' ');
+        Serial.print(fmt_name(d->format));
+        Serial.print(F(" rec="));
+        Serial.print(d->records);
+        Serial.print(F(" err="));
+        Serial.print(d->errors);
+        Serial.print(F(" drop="));
+        Serial.println(drop);
     }
 }
 

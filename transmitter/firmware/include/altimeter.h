@@ -92,7 +92,8 @@ int16_t alt_rx_sample(alt_rx_t *rx, uint8_t level);
 
 typedef struct {
     volatile uint8_t head, tail;   /* free-running, masked on access     */
-    volatile uint8_t dropped;      /* bytes lost to a full ring (sticky) */
+    volatile uint8_t dropped;      /* bytes lost to a full ring (count,
+                                    * saturating at 255)                  */
     uint8_t buf[ALT_RING_SIZE];
 } alt_ring_t;
 

@@ -118,7 +118,9 @@ runbook is `launch-day.md`.
       `[Alt] Jn: <format>` within a few records of the stream starting.
 - [ ] J2 shares D13 with the red LED: scope the D13 level while an altimeter
       idles (needs > 1.8 V high, < 1.0 V low); if marginal, use J5/J6.
-- [ ] An unplugged jack produces nothing (no `[Alt]` line, no errors).
+- [ ] An unplugged jack produces nothing (no `[Alt]` line). A connected
+      one prints `[Alt] Jn <format> rec=N err=N drop=N` every 10 s while it
+      streams: `err` and `drop` stay at 0 on a clean link.
 - [ ] After a shake launch with an altimeter streaming, the receiver shows
       it on the ALTIMETERS page within 15 s (it rides the maxima recap); a
       fired charge (RRC3 `D`, Eggtimer `~1`) prints `[Alt] Jn events

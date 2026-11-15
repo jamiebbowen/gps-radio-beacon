@@ -393,6 +393,34 @@ TEST(test_flight_start_drops_pad_history)
     CHECK(flog_calls == 1 && flog_alt == 1000 && flog_status == ALT_ST_FMT_EGGTIMER);
 }
 
+TEST(test_report_counters)
+{
+    altimeter_init();
+    s_idle = 0;
+    Serial.clear();
+    for (int i = 0; i < 2000; i++) altimeter_sample(0);    /* all unplugged */
+    altimeter_poll(100);
+    altimeter_report(20000);
+    CHECK(strstr(Serial.log, "[Alt]") == NULL);
+
+    /* A garbled line, one record, then a burst nobody drains: 199 bytes
+     * into the 128-byte ring - 71 dropped */
+    inject(ALT_J5_PA_BIT, "12x4\r\n0012.5,+01200,+0410,+072,dma\r");
+    char burst[200];
+    memset(burst, '9', sizeof(burst) - 1);
+    burst[sizeof(burst) - 1] = 0;
+    altimeter_poll(20050);
+    inject(ALT_J5_PA_BIT, burst);
+    altimeter_poll(20100);
+    altimeter_report(25000);                            /* within 10 s: quiet */
+    CHECK(strstr(Serial.log, "[Alt]") == NULL);
+    altimeter_report(30100);
+    CHECK(strstr(Serial.log, "[Alt] J5 ? rec=1 err=1 drop=71") != NULL);
+    Serial.clear();
+    altimeter_report(40200);                            /* nothing moved */
+    CHECK(strstr(Serial.log, "[Alt]") == NULL);
+}
+
 int main(void)
 {
     run_test_stratologger_lines();
@@ -410,5 +438,6 @@ int main(void)
     run_test_status_encoding();
     run_test_inputs_detect_relay_and_log();
     run_test_inputs_ring_overflow_recovers();
+    run_test_report_counters();
     return TEST_SUMMARY();
 }

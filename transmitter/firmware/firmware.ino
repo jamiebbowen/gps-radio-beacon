@@ -331,6 +331,7 @@ void loop() {
 
     // Commercial altimeter inputs: decode what the TC3 sampler received
     altimeter_poll(millis());
+    altimeter_report(millis());
 
     // Run the EKF predict step against whatever IMU data just arrived.
     // Safe to call every loop iteration; dt is computed internally.
