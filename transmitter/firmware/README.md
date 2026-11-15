@@ -86,7 +86,7 @@ altimeter works on any jack:
 |-----------|-------|------------------------|
 | PerfectFlite StratoLogger CF | telemetry enabled (DT2/DataCast) | one altitude per line, ft |
 | Missile Works RRC3 | telemetry on, **all data items**, English units | altitude, fired drogue/main/aux |
-| Eggtimer (Quantum/Quasar/Proton) | telemetry output | `<` altitude, `%` apogee, `~` channels (1 = drogue, 2 = main) |
+| Eggtimer (Quantum/Quasar/Proton) | telemetry output | `{` altitude/100 ft (`<` feet on the Quark pre-D3), `%` apogee after nose-over, `~` channels (1 = drogue, 2 = main) |
 
 A format locks after three consistent records. While airborne the
 recognised inputs ride every maxima recap (3 bytes each: format, fired

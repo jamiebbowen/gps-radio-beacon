@@ -80,11 +80,14 @@ static uint8_t decode_egg(alt_state_t *s)
     if (s->len < 1 || !strchr("#{<(\\@~!=?%^[", s->buf[0])) return 0;
     const char *d = s->buf + 1, *e = s->buf + s->len;
     int32_t v;
-    if (s->buf[0] == '<' || s->buf[0] == '%') {
+    if (s->buf[0] == '{' || s->buf[0] == '<' || s->buf[0] == '%') {
         if (!parse_int(d, e, &v)) return 0;
     }
     if (!accept(s, ALT_FMT_EGGTIMER)) return 0;
-    if (s->buf[0] == '<') altitude(s, v);
+    /* '{' altitude/100 ft (Quark D3+, ION, Quantum, Proton); '<' feet
+     * (Quark pre-D3 only) */
+    if (s->buf[0] == '{') altitude(s, v * 100);
+    else if (s->buf[0] == '<') altitude(s, v);
     else if (s->buf[0] == '%') s->apogee_ft = v;
     else if (s->buf[0] == '~') {
         for (const char *p = d; p < e; p++) {
