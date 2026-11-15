@@ -69,6 +69,41 @@ TEST(test_eggtimer_elements)
     CHECK(s.events == (ALT_EVT_DROGUE | ALT_EVT_MAIN) && s.alt_ft == 700);
 }
 
+TEST(test_rrc3_firmware_versions)
+{
+    /* RRC3+/RRC3 User Manual v1.71 p.16-17. v1.60+ firmware adds a sixth
+     * data item (battery "X.X" volts): all items on is a six-field line. */
+    alt_state_t s; alt_init(&s);
+    CHECK(feed(&s, "0012.5,+01200,+0410,+072,dma,9.1\r"
+                   "0013.0,+01380,+0300,+071,dma,9.1\r"
+                   "0013.5,+01400,+0290,+071,dma,9.0\r", 10) == 3);
+    CHECK(s.format == ALT_FMT_RRC3 && s.alt_ft == 1400 && s.events == 0);
+    CHECK(feed(&s, "0018.0,+02510,+0001,+070,Dma,9.0\r", 20) == 1);
+    CHECK(s.events == ALT_EVT_DROGUE);
+    CHECK(feed(&s, "0018.5,+02500,+0001,+070,dma,9.x\r", 30) == 0);   /* bad volts */
+
+    /* v1.5x events: '-' before activation, UPPERCASE only while the output
+     * is active (a 1 s pulse), lowercase after: a fired channel is
+     * lowercase once its one uppercase record has been missed. */
+    alt_init(&s);
+    feed(&s, "0010.0,+02400,+0050,+070,---\r0011.0,+02450,+0010,+070,---\r"
+             "0012.0,+02460,-0005,+070,---\r", 10);
+    CHECK(s.format == ALT_FMT_RRC3 && s.events == 0);
+    feed(&s, "0014.0,+02420,-0040,+070,d--\r", 20);     /* the 'D' record lost */
+    CHECK(s.events == ALT_EVT_DROGUE);
+    feed(&s, "0090.0,+00700,-0020,+070,dM-\r0091.0,+00680,-0020,+070,dm-\r", 30);
+    CHECK(s.events == (ALT_EVT_DROGUE | ALT_EVT_MAIN));
+
+    /* v1.6x events: '?' no continuity, lowercase = continuity (not fired),
+     * uppercase = fired */
+    alt_init(&s);
+    feed(&s, "0010.0,+02400,+0050,+070,dma\r0011.0,+02450,+0010,+070,dma\r"
+             "0012.0,+02460,-0005,+070,dma\r0013.0,+02440,-0020,+070,?ma\r", 10);
+    CHECK(s.format == ALT_FMT_RRC3 && s.events == 0);
+    feed(&s, "0014.0,+02420,-0040,+070,Dma\r", 20);
+    CHECK(s.events == ALT_EVT_DROGUE);
+}
+
 TEST(test_eggtimer_spec_stream)
 {
     /* The Proton example transmission from the Eggtimer Telemetry Data
@@ -304,6 +339,7 @@ int main(void)
     run_test_stratologger_lines();
     run_test_rrc3_all_items();
     run_test_eggtimer_elements();
+    run_test_rrc3_firmware_versions();
     run_test_eggtimer_spec_stream();
     run_test_noise_overflow_and_format_lock();
     run_test_rx_every_byte_any_phase();
