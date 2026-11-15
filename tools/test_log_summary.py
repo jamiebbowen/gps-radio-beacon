@@ -166,6 +166,24 @@ for _p in _prefixes:
     if not _ok:
         FAILURES.append(f"log_summary keys on {_p!r}, but no receiver firmware message starts with it")
 
+# Beacon clock vs receiver: a beacon 2% slow counts 60 s of uptime per
+# 61.22 s of receiver time; a reboot (up= drops) starts a new run.
+_clk = ["%.3f,EVENT,HEARTBEAT id=5 CH1 sats=0 fix=0 up=%ds rssi=-70 gps=acq rst=0"
+        % (100.0 + k * 60.0 / 0.98, 120 + 60 * k) for k in range(31)]
+_clk += ["%.3f,EVENT,HEARTBEAT id=5 CH1 sats=0 fix=0 up=%ds rssi=-70 gps=acq rst=0"
+         % (2000.0 + k * 60.0, 5 + 60 * k) for k in range(3)]
+clk_out = run_report("\n".join(_clk) + "\n")
+expect("Beacon clock vs receiver: -2.00% over 31 min (31 heartbeats)", clk_out)
+CHECKED += 1
+if "altimeter inputs at risk" in clk_out:
+    FAILURES.append("a -2% beacon clock is inside the altimeter inputs' tolerance")
+_fast = ["%.3f,EVENT,HEARTBEAT id=5 CH1 sats=0 fix=0 up=%ds rssi=-70 gps=acq rst=0"
+         % (100.0 + k * 60.0 / 1.04, 120 + 60 * k) for k in range(20)]
+expect("<-- outside -5..+3%: altimeter inputs at risk", run_report("\n".join(_fast) + "\n"))
+CHECKED += 1
+if "Beacon clock vs receiver" in run_report("\n".join(_clk[:5]) + "\n"):
+    FAILURES.append("a 4-minute heartbeat run must not produce a clock estimate")
+
 if FAILURES:
     for f in FAILURES:
         print(f"FAIL: {f}")

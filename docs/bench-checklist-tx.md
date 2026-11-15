@@ -124,6 +124,14 @@ runbook is `launch-day.md`.
       fired charge (RRC3 `D`, Eggtimer `~1`) prints `[Alt] Jn events
       drogue` and an immediate recap carries it to the receiver within ~2 s.
 - [ ] DUMP after the flight lists kind 11 rows (`ms,11,input,status,alt_ft,apogee_ft`).
+- [ ] Beacon clock on battery: with USB unplugged, leave the beacon at
+      least 30 min in PRE_LAUNCH while the receiver logs, then run
+      `python3 tools/log_summary.py` on the card. Its `Beacon clock vs
+      receiver` line must read within -5%..+3% (expect about 0.1%): in
+      flight the 48 MHz clock runs open loop, and the altimeter inputs'
+      software UARTs decode only inside that window.
+- [ ] Run the shake-launch check above with USB unplugged too (on USB the
+      clock and the USB interrupts differ from flight).
 
 ## 5. Landing + descent evidence (post-flight review)
 

@@ -65,7 +65,9 @@ explicit `make -C receiver/firmware flash` or `make -C transmitter/firmware uplo
   and one airborne pass can block for several seconds of SF10 airtime: a new
   send in `loop()` while airborne gets a GPS read in front of it.
 - **TC3 is the altimeter-input sampler** (38.4 kHz, `altimeter_input.cpp`;
-  D11/D12/D13 are the J6/J5/J2 serial inputs). Don't reuse TC3 or those pins;
+  D11/D12/D13 are the J6/J5/J2 serial inputs). Its 48 MHz source runs open
+  loop in flight: keep `alt_rx_sample`'s edge re-sync (the window is pinned
+  by test_altimeter's clock-tolerance sweep). Don't reuse TC3 or those pins;
   TC2 belongs to `tone()`, which the sketch must keep not using.
 
 ## Testing conventions
