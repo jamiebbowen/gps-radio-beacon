@@ -22,6 +22,11 @@ void    altimeter_sample(uint32_t port_in);
 /** Decode what the inputs received (loop() and the radio-wait yield()). */
 void    altimeter_poll(uint32_t now_ms);
 
+/** USB diagnostics, loop() only: per jack whose counters moved, its format,
+ *  records, rejected records and ring drops - at most every 10 s. An
+ *  unplugged jack prints nothing. */
+void    altimeter_report(uint32_t now_ms);
+
 /** Flight-log records: per recognised input at most every
  *  ALT_LOG_INTERVAL_MS while it reports, at once on a new deploy event. */
 void    altimeter_log_service(uint32_t now_ms);

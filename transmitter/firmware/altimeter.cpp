@@ -187,7 +187,7 @@ void alt_ring_put(alt_ring_t *r, uint8_t b)
 {
     uint8_t h = r->head;
     if ((uint8_t)(h - r->tail) >= ALT_RING_SIZE) {
-        r->dropped = 1;
+        if (r->dropped < 255) r->dropped++;
         return;
     }
     r->buf[h % ALT_RING_SIZE] = b;
