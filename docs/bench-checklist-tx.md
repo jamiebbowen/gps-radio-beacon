@@ -66,6 +66,13 @@ runbook is `launch-day.md`.
       fix (cold start, indoors). Their reasons are self-describing:
       `insufficient satellites`, `no fix`, `bad coords`, `unreasonable
       altitude`.
+- [ ] **GPS read between transmits**: after a shake launch (POST_LAUNCH,
+      the radio busy most of the time) watch the USB log for 2 minutes.
+      The `[GPS] ... | Csum errs:` count printed every 5 s stays where it
+      was on the pad, and `[GPS] ✓ Fix:` lines keep coming about once a
+      second, also right after each 15 s maxima recap. A count that rises
+      only in the airborne cadence means NMEA is overrunning Serial1's
+      350-byte ring between sends (`gps_poll_between_sends()`).
 
 ## 3. GPS watchdog (deliberate fault - bench only)
 
