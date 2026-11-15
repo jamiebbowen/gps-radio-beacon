@@ -583,13 +583,33 @@ TEST(test_heartbeat_v3_reset_cause)
     };
     memset(&fake_pkt, 0, sizeof(fake_pkt));
     memcpy(fake_pkt.data, &hb, sizeof(hb));
-    fake_pkt.length = HEARTBEAT_PACKET_SIZE;   /* = 9 */
+    fake_pkt.length = HEARTBEAT_PACKET_SIZE_V3;   /* = 9 */
+    fake_pkt.data[HEARTBEAT_PACKET_SIZE_V3] = 0x55;   /* not on the air */
     fake_pkt_pending = 1;
     run_for(250, 250);
 
     HeartbeatPacket_t out;
     CHECK(RF_Receiver_GetHeartbeat(&out, NULL) == 1);
     CHECK(out.reset_info == HB_RESET_WDT);
+    CHECK(out.alt_inputs == 0);                   /* pre-V4: no altimeter */
+
+    /* V4 (10-byte): the altimeters recognised on the pad (J5 RRC3) */
+    hb.alt_inputs = (uint8_t)(ALT_ST_FMT_RRC3 << 2);
+    memset(&fake_pkt, 0, sizeof(fake_pkt));
+    memcpy(fake_pkt.data, &hb, sizeof(hb));
+    fake_pkt.length = HEARTBEAT_PACKET_SIZE;      /* = 10 */
+    fake_pkt_pending = 1;
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&out, NULL) == 1);
+    CHECK(HB_ALT_FMT(out.alt_inputs, 1) == ALT_ST_FMT_RRC3);
+    uint32_t hb_age = 0;
+    CHECK(RF_Receiver_GetLastHeartbeat(&out, &hb_age) == 1);
+    CHECK(out.alt_inputs == (uint8_t)(ALT_ST_FMT_RRC3 << 2));
+    /* 11 bytes is no heartbeat layout: dropped */
+    fake_pkt.length = HEARTBEAT_PACKET_SIZE + 1;
+    fake_pkt_pending = 1;
+    run_for(250, 250);
+    CHECK(RF_Receiver_GetHeartbeat(&out, NULL) == 0);
     CHECK(strcmp(HB_RESET_NAME(HB_RESET_WDT),     "WDT")   == 0);
     CHECK(strcmp(HB_RESET_NAME(HB_RESET_BODVDD),  "BOD-v") == 0);
     CHECK(strcmp(HB_RESET_NAME(HB_RESET_POR),     "POR")   == 0);

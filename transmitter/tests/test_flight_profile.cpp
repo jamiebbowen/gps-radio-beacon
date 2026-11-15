@@ -120,6 +120,7 @@ uint8_t g_boot_rcause = 0;
 /* No commercial altimeter on the inputs in these profiles: the real tail
  * is empty then, and the recap stays the plain 11 bytes. */
 #include "../firmware/include/altimeter_input.h"
+uint8_t altimeter_heartbeat_byte(uint32_t now_ms) { (void)now_ms; return 0; }
 uint8_t altimeter_fill_maxima(MaximaAltPacket_t *p, uint32_t now_ms)
 {
     (void)now_ms;

@@ -645,6 +645,7 @@ uint8_t RF_Receiver_DataAvailable(void)
           last_packet_time = HAL_GetTick();
         }
       } else if ((last_packet.length == HEARTBEAT_PACKET_SIZE
+               || last_packet.length == HEARTBEAT_PACKET_SIZE_V3
                || last_packet.length == HEARTBEAT_PACKET_SIZE_V2
                || last_packet.length == HEARTBEAT_PACKET_SIZE_V1)
               && last_packet.data[0] == PACKET_TYPE_HEARTBEAT) {
@@ -653,7 +654,8 @@ uint8_t RF_Receiver_DataAvailable(void)
          * position data is fresh. It still counts toward
          * rf_lora_packets_received, which is what locks the channel scan.
          * V1 (7-byte) heartbeats from older beacons lack the trailing
-         * gps_health byte; zero-fill decodes it as HB_GPS_UNKNOWN.
+         * gps_health byte; zero-fill decodes it as HB_GPS_UNKNOWN (and a
+         * pre-V4 beacon's alt_inputs as "no altimeter").
          * Foreign heartbeats are still recorded (they are useful "someone
          * else is on this channel" intel) - they just can't steal the
          * binding, never touch position state, and never feed the pages'

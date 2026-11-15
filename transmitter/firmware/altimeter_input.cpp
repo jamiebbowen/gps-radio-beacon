@@ -178,6 +178,17 @@ void altimeter_flight_start(uint32_t now_ms)
     s_events_unsent = 0;
 }
 
+uint8_t altimeter_heartbeat_byte(uint32_t now_ms)
+{
+    uint8_t b = 0;
+    for (uint8_t i = 0; i < ALTIMETER_INPUTS; i++) {
+        uint8_t st = alt_status(&s_dec[i], now_ms);
+        b |= (uint8_t)((st & ALT_ST_FMT_MASK) << (2 * i));
+        if (st & ALT_ST_STALE) b |= HB_ALT_STALE;
+    }
+    return b;
+}
+
 uint8_t altimeter_new_events(void)
 {
     return s_events_unsent;

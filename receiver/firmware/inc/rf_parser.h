@@ -55,6 +55,14 @@ uint8_t RF_Parser_DecodeMaxima(const uint8_t *data, uint16_t len,
 void RF_Parser_FormatAltimeter(const MaximaAltPacket_t *a, char *buf, size_t n);
 
 /**
+ * @brief SD event row for the altimeters a heartbeat says the beacon has
+ *        recognised on the pad (its alt_inputs byte), e.g.
+ *        "ALTIM pad id=3 J5 RRC3 J6 EGG" ("none"; " quiet" = one went quiet).
+ */
+void RF_Parser_FormatPadAltimeters(uint8_t rocket_id, uint8_t alt_hb,
+                                   char *buf, size_t n);
+
+/**
  * @brief Parse ASCII packet into GPS data structure
  * @param packet ASCII packet string to parse
  * @retval Status code (RF_PARSER_OK if successful, RF_PARSER_ERROR otherwise)

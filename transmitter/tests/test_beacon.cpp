@@ -156,6 +156,10 @@ uint32_t nav_get_gps_rejects(void) { return fake_gps_rejects; }
  * hardware firmware.ino captures RSTC->RCAUSE into this global. */
 uint8_t g_boot_rcause = 0;
 
+/* The heartbeat's altimeter byte: altimeter_input's summary, scripted */
+static uint8_t fake_hb_alt = 0;
+uint8_t altimeter_heartbeat_byte(uint32_t now_ms) { (void)now_ms; return fake_hb_alt; }
+
 /* Commercial altimeters riding the recap: altimeter_input's tail, scripted */
 static uint8_t fake_alt_inputs = 0;
 uint8_t altimeter_fill_maxima(MaximaAltPacket_t *p, uint32_t now_ms)
@@ -368,7 +372,7 @@ TEST(test_heartbeat_contents_and_rate_limit)
 
     CHECK(beacon_transmit_heartbeat(&c, 42, HEARTBEAT_INTERVAL_SEC, 0) == 1);
     CHECK(tx_len == sizeof(HeartbeatPacket_t));
-    CHECK(sizeof(HeartbeatPacket_t) == HEARTBEAT_PACKET_SIZE);  /* =9 */
+    CHECK(sizeof(HeartbeatPacket_t) == HEARTBEAT_PACKET_SIZE);  /* =10 */
     const HeartbeatPacket_t *hb = (const HeartbeatPacket_t *)tx_buf;
     CHECK(hb->packet_type == PACKET_TYPE_HEARTBEAT);
     CHECK(hb->rocket_id   == ROCKET_ID);
@@ -383,7 +387,17 @@ TEST(test_heartbeat_contents_and_rate_limit)
     CHECK(beacon_transmit_heartbeat(&c, 50, HEARTBEAT_INTERVAL_SEC, 0) == 1);
     hb = (const HeartbeatPacket_t *)tx_buf;
     CHECK(hb->reset_info  == HB_RESET_WDT);
+    CHECK(hb->alt_inputs  == 0);
     g_boot_rcause = 0;
+    /* V4: the jacks with a recognised altimeter (J5 RRC3, J6 Eggtimer) */
+    fake_hb_alt = (uint8_t)((ALT_ST_FMT_RRC3 << 2) | (ALT_ST_FMT_EGGTIMER << 4));
+    now_ms += HEARTBEAT_INTERVAL_SEC * 1000UL + 1;
+    CHECK(beacon_transmit_heartbeat(&c, 58, HEARTBEAT_INTERVAL_SEC, 0) == 1);
+    hb = (const HeartbeatPacket_t *)tx_buf;
+    CHECK(HB_ALT_FMT(hb->alt_inputs, 0) == 0);
+    CHECK(HB_ALT_FMT(hb->alt_inputs, 1) == ALT_ST_FMT_RRC3);
+    CHECK(HB_ALT_FMT(hb->alt_inputs, 2) == ALT_ST_FMT_EGGTIMER);
+    fake_hb_alt = 0;
 
     /* Within the caller's interval: rate limited, no TX */
     uint32_t count_before = tx_count;

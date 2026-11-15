@@ -807,6 +807,21 @@ TEST(test_altimeter_decode_and_row)
     CHECK(RF_Parser_DecodeMaxima(pkt, 2, &a) == 0);
 }
 
+TEST(test_pad_altimeter_row)
+{
+    char row[64];
+    RF_Parser_FormatPadAltimeters(3, (uint8_t)((ALT_ST_FMT_RRC3 << 2) | (ALT_ST_FMT_EGGTIMER << 4)),
+                                  row, sizeof(row));
+    CHECK(strcmp(row, "ALTIM pad id=3 J5 RRC3 J6 EGG") == 0);
+    RF_Parser_FormatPadAltimeters(3, (uint8_t)(ALT_ST_FMT_STRATOLOGGER | HB_ALT_STALE), row, sizeof(row));
+    CHECK(strcmp(row, "ALTIM pad id=3 J2 SLCF quiet") == 0);
+    RF_Parser_FormatPadAltimeters(3, 0, row, sizeof(row));
+    CHECK(strcmp(row, "ALTIM pad id=3 none") == 0);
+    char small[12];
+    RF_Parser_FormatPadAltimeters(3, 0x3F, small, sizeof(small));    /* truncates */
+    CHECK(strlen(small) < sizeof(small));
+}
+
 int main(void) {
     run_test_init_resets_diagnostics_and_marks_packet();
     run_test_ascii_null_and_empty_rejected();
@@ -836,6 +851,7 @@ int main(void) {
     run_test_fused_does_not_clobber_gps_fix();
     run_test_gps_does_not_clobber_fused_velocity();
     run_test_altimeter_decode_and_row();
+    run_test_pad_altimeter_row();
 
     return TEST_SUMMARY();
 }

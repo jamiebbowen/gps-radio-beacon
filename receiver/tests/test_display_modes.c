@@ -198,6 +198,16 @@ uint16_t RF_Receiver_GetLastPacketASCII(char *buf, uint16_t max_len)
 }
 uint8_t  RF_Receiver_TestingBuildSuspect(void) { return fake_testing; }
 
+static uint8_t fake_hb_have = 0;
+static HeartbeatPacket_t fake_hb;
+uint8_t RF_Receiver_GetLastHeartbeat(HeartbeatPacket_t *hb, uint32_t *age_ms)
+{
+    if (!fake_hb_have) return 0;
+    if (hb) *hb = fake_hb;
+    if (age_ms) *age_ms = 7000;
+    return 1;
+}
+
 static uint8_t fake_alt_have = 0;
 static MaximaAltPacket_t fake_alt;
 static uint32_t fake_alt_age = 0;
@@ -555,6 +565,18 @@ TEST(altimeter_page)
     DisplayMode_Altimeter();
     CHECK(strstr(row(0), "ALTIMETERS") != NULL);
     CHECK(strstr(row(2), "None relayed yet") != NULL);
+    CHECK(row(3)[0] == '\0');                           /* no heartbeat */
+
+    /* On the pad: the heartbeat's recognised jacks (J5 RRC3, J6 quiet) */
+    memset(&fake_hb, 0, sizeof(fake_hb));
+    fake_hb.alt_inputs = (uint8_t)((ALT_ST_FMT_RRC3 << 2) | (ALT_ST_FMT_EGGTIMER << 4) | HB_ALT_STALE);
+    fake_hb_have = 1;
+    cap_clear();
+    DisplayMode_Altimeter();
+    CHECK(strcmp(row(3), "Pad, 7s ago (quiet)") == 0);
+    CHECK(strcmp(row(4), "J5 RRC3") == 0);
+    CHECK(strcmp(row(5), "J6 EGG") == 0);
+    fake_hb_have = 0;
 
     memset(&fake_alt, 0, sizeof(fake_alt));
     fake_alt.alt_inputs = 0x06;                          /* J5 + J6 */

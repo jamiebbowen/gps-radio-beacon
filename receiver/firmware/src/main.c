@@ -900,6 +900,16 @@ int main(void)
       HeartbeatPacket_t hb;
       RF_HbInfo_t hbi;
       if (RF_Receiver_GetHeartbeat(&hb, &hbi)) {
+        /* The altimeters our beacon recognised on the pad (V4 heartbeat):
+         * one row whenever that changes, so the card shows they were wired */
+        static uint8_t logged_alt_hb = 0;
+        if (!hbi.foreign && hb.alt_inputs != logged_alt_hb) {
+          char a_msg[64];
+          RF_Parser_FormatPadAltimeters(hb.rocket_id, hb.alt_inputs, a_msg, sizeof(a_msg));
+          SD_Card_EnsureLogFile();
+          SD_Card_LogEvent(a_msg);
+          logged_alt_hb = hb.alt_inputs;
+        }
         /* Beacon-side resets are otherwise indistinguishable from a LOST
          * window at review time: the heartbeat uptime field regresses, and
          * V3 heartbeats add the boot's RCAUSE so we know WHAT. POR alone
@@ -1641,8 +1651,10 @@ int main(void)
        * once position packets flow it goes quiet by design. Same gate as
        * the link: one 60 s pad heartbeat plus margin. */
       uint8_t pf_hb_state = 0xFF;
+      uint8_t pf_alt_hb = 0xFF;          /* altimeters seen on the pad */
       if (own_hb_valid && own_hb_age_ms <= PF_LINK_FRESH_S * 1000u) {
         pf_hb_state = HB_GPS_STATE(own_hb.gps_health);
+        pf_alt_hb = own_hb.alt_inputs;
       }
 
       DisplayMode_Preflight(pf_result.link_ok, pf_in.link_age_s, pf_rssi,
@@ -1651,7 +1663,7 @@ int main(void)
                             beacon.current.fused_sensor_degraded,
                             has_valid_local_gps, (uint8_t)local_gps_data.satellites,
                             compass_data.heading_valid && !compass_data.heading_stale,
-                            sd_card_ok, (uint16_t)sys_vdd_mv, &pf_result);
+                            sd_card_ok, pf_alt_hb, (uint16_t)sys_vdd_mv, &pf_result);
       break;
     }
       
