@@ -65,6 +65,7 @@ class Session:
         self.hb_states = {}         # gps state -> count
         self.hb_max_rst = 0
         self.hb_times = []          # t of each heartbeat
+        self.hb_up = []             # (t, up_s, rocket id) of each heartbeat
         self.base_times = []        # t of each BASE (operator position) row
         self.nav = {"GPS": [], "FUS": []}   # (t, rssi, snr, flags_hex)
         self.nav_gaps = {"GPS": [], "FUS": []}
@@ -116,6 +117,7 @@ class Session:
         self.hb_states[state] = self.hb_states.get(state, 0) + 1
         self.hb_max_rst = max(self.hb_max_rst, rst)
         self.hb_times.append(t)
+        self.hb_up.append((t, int(m.group(5)), int(m.group(1))))
 
 
 def parse_file(path, sess):
@@ -180,6 +182,26 @@ def fused_dr(flags_hex):
         return False
 
 
+def beacon_clock(hb_up, min_span_s=600.0):
+    """The beacon's clock rate against the receiver's: over the longest run
+    of one beacon's heartbeats whose up= never decreases (no reboot), the
+    uptime it counted vs the receiver time that passed. None under
+    min_span_s. Returns (percent, span_s, heartbeats)."""
+    best = None
+    runs = {}
+    for t, up, rid in hb_up:
+        run = runs.get(rid)
+        if run and up >= run[-1][1]:
+            run.append((t, up))
+        else:
+            run = runs[rid] = [(t, up)]
+        span = run[-1][0] - run[0][0]
+        if span >= min_span_s and (best is None or span > best[1]):
+            pct = ((run[-1][1] - run[0][1]) - span) / span * 100.0
+            best = (pct, span, len(run))
+    return best
+
+
 def print_section(title, lines, empty="OK"):
     print(f"\n== {title} ==")
     if not lines:
@@ -236,6 +258,15 @@ def report(sess, label):
         hb_lines.append(f"TX GPS watchdog resets: max rst={sess.hb_max_rst}"
                         + ("  <-- TX GPS watchdog had to recover it (reset ladder)"
                            if sess.hb_max_rst else ""))
+        clk = beacon_clock(sess.hb_up)
+        if clk:
+            # The altimeter inputs' software UARTs run off this clock in
+            # flight (open-loop DFLL): they decode from -5% to +3% error.
+            pct, span, n = clk
+            hb_lines.append(f"Beacon clock vs receiver: {pct:+.2f}% over {span / 60:.0f} min"
+                            f" ({n} heartbeats)"
+                            + ("  <-- outside -5..+3%: altimeter inputs at risk"
+                               if not -5.0 <= pct <= 3.0 else ""))
     print_section("TX GPS health (heartbeats)", hb_lines,
                   empty="no heartbeats (beacon had a fix the whole time)")
 

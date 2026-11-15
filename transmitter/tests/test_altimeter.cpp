@@ -188,6 +188,28 @@ TEST(test_rx_sender_clock_error)
     }
 }
 
+TEST(test_rx_clock_tolerance)
+{
+    /* In flight the beacon's 48 MHz clock runs open loop (no USB; the SAM
+     * D5x datasheet allows 45.5-49 MHz at 25 C), and the altimeter's own
+     * oscillator adds its error: every printable byte, CR and LF must
+     * decode from a sender 5% fast to 3% slow, at every start phase. */
+    uint8_t text[100], out[160];
+    int n = 0;
+    for (int c = 0x20; c <= 0x7E; c++) text[n++] = (uint8_t)c;
+    text[n++] = '\r';
+    text[n++] = '\n';
+    int bad = 0;
+    for (int pc = -50; pc <= 30; pc += 5) {
+        for (int ph = 0; ph < 8; ph++) {
+            int got = rx_run(text, n, 1.0 + pc / 1000.0, ph * 0.125, out);
+            if (got != n || memcmp(out, text, n) != 0) bad++;
+        }
+    }
+    printf("  clock error -5%%..+3%%: %d of 136 runs garbled\n", bad);
+    CHECK(bad == 0);
+}
+
 TEST(test_rx_unplugged_glitch_and_break)
 {
     alt_rx_t rx;
@@ -382,6 +404,7 @@ int main(void)
     run_test_noise_overflow_and_format_lock();
     run_test_rx_every_byte_any_phase();
     run_test_rx_sender_clock_error();
+    run_test_rx_clock_tolerance();
     run_test_rx_unplugged_glitch_and_break();
     run_test_ring_order_and_overflow();
     run_test_status_encoding();

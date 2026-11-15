@@ -157,8 +157,15 @@ int16_t alt_rx_sample(alt_rx_t *rx, uint8_t level)
             rx->active = 1;
             rx->bit = 0;
             rx->shift = 0;
-            rx->count = ALT_RX_OVERSAMPLE / 2;   /* to the start bit centre */
+            rx->count = 1;                    /* next sample: 25-50% in */
         }
+    } else if (rx->bit >= 1 && level != rx->prev) {
+        /* Every edge inside the frame is a bit boundary: re-sync, so the
+         * clock error builds up only from the last edge, not from the
+         * start bit. Sampling one tick after an edge favours a slow
+         * receiver clock (the open-loop DFLL errs low): printable ASCII
+         * decodes from -7.3% to +3.6% sender error (was -2.5%/+5.5%). */
+        rx->count = 1;
     } else if (--rx->count == 0) {
         rx->count = ALT_RX_OVERSAMPLE;
         if (rx->bit == 0) {
