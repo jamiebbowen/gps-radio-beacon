@@ -291,7 +291,9 @@ int main(void)
                         rng() & 1, rng() & 1, rng() & 1, rng() & 1);
     }
     fake_landed = false;
-    CHECK(tx_buf[19] == (uint8_t)ROCKET_ID);
+    /* rocket_id is the fused packet's last byte (index 18): index 19 read
+     * whatever a longer, earlier packet had left in the capture buffer */
+    CHECK(tx_buf[FUSED_PACKET_SIZE - 1] == (uint8_t)ROCKET_ID);
 
     /* ---------- Raw GPS sweep ---------- */
     for (int i = 0; i < 600; i++) {
