@@ -60,6 +60,10 @@ explicit `make -C receiver/firmware flash` or `make -C transmitter/firmware uplo
   + `nav_predict()`. Keep it re-entrancy-guarded and rate-limited, never touch
   the radio or SPI from it, and build with the Arduino USB stack (TinyUSB
   defines its own `yield()`; the sketch `#error`s on it).
+- **Read the GPS between in-flight transmits** (`gps_poll_between_sends()` in
+  `firmware.ino`). Serial1's receive ring is 350 bytes, ~2.3 s of GGA+RMC,
+  and one airborne pass can block for several seconds of SF10 airtime: a new
+  send in `loop()` while airborne gets a GPS read in front of it.
 - **TC3 is the altimeter-input sampler** (38.4 kHz, `altimeter_input.cpp`;
   D11/D12/D13 are the J6/J5/J2 serial inputs). Don't reuse TC3 or those pins;
   TC2 belongs to `tone()`, which the sketch must keep not using.

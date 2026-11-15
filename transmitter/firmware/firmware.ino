@@ -298,6 +298,20 @@ void setup() {
     watchdog_init();
 }
 
+/* Read the GPS between in-flight transmits. One airborne pass can stack the
+ * inertial trace, a fused slot, the maxima recap, a flight event and the
+ * callsign - seconds of blocking SF10 airtime - while Serial1's 350-byte
+ * receive ring holds only ~2.3 s of GGA+RMC: sentences arriving while it is
+ * full are dropped, and the queued ones reach the EKF seconds late as if
+ * they were current. The pad states send one packet per pass and keep the
+ * single read at the top of loop(). */
+static void gps_poll_between_sends(void)
+{
+    if (beacon_state == BEACON_STATE_LAUNCH || beacon_state == BEACON_STATE_POST_LAUNCH) {
+        gps_poll_rx();
+    }
+}
+
 void loop() {
     watchdog_feed();
 
@@ -652,6 +666,7 @@ void loop() {
     }
 
     if (system_time_seconds - last_callsign_tx_s >= flight_cadence_callsign_interval_s() && !transmit_fast_flag) {
+        gps_poll_between_sends();
         beacon_transmit_callsign(transmit_fast_flag);
         last_callsign_tx_s = system_time_seconds;
     }
@@ -677,6 +692,7 @@ void loop() {
         NavFused_t fs;
         nav_get_fused(&fs);
         if (flight_cadence_fused_allowed(beacon_state, fs.dead_reckoning)) {
+            gps_poll_between_sends();
             beacon_transmit_fused_data(system_time_seconds, transmit_fast_flag);
         }
         /* Keep the slot grid: a slot delayed by another packet's ~1 s
@@ -694,7 +710,9 @@ void loop() {
     if ((beacon_state == BEACON_STATE_LAUNCH || beacon_state == BEACON_STATE_POST_LAUNCH) &&
         (now_ms - last_maxima_tx_ms >= MAXIMA_TX_INTERVAL_MS)) {
         last_maxima_tx_ms = now_ms;
+        gps_poll_between_sends();
         beacon_transmit_maxima(system_time_seconds, transmit_fast_flag);
+        gps_poll_between_sends();
         beacon_transmit_altimeter(transmit_fast_flag);
     }
 
@@ -705,6 +723,7 @@ void loop() {
         altimeter_new_events() &&
         (now_ms - last_alt_event_tx_ms >= ALT_EVENT_TX_MIN_MS)) {
         last_alt_event_tx_ms = now_ms;
+        gps_poll_between_sends();
         beacon_transmit_altimeter(transmit_fast_flag);
     }
 
@@ -722,6 +741,7 @@ void loop() {
 
     /* Queued certified-event transmissions: one packet per loop pass max,
      * FLIGHT_EVENT_SPACING_MS between copies of the same edge. */
+    gps_poll_between_sends();
     beacon_service_flight_events(now_ms, system_time_seconds, transmit_fast_flag);
 
     /* USB command channel: 'DUMP' + Enter prints the on-chip flight log
