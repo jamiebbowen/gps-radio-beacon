@@ -234,8 +234,17 @@ void    gps_init(void) {}
  * microseconds to tens of ms (a sentence mid-burst), so sends land at
  * varying offsets from their 1 Hz tick. Deterministic LCG. */
 static uint8_t gps_jitter_on = 0;
+/* The longest stretch of sim time between two GPS reads while tracking is
+ * on: the real Serial1 ring holds 350 bytes, ~2.3 s of GGA+RMC, and drops
+ * what arrives while it is full. */
+static uint8_t gps_gap_track = 0;
+static unsigned long gps_last_poll_ms = 0, gps_max_gap_ms = 0;
 uint16_t gps_poll_rx(void)
 {
+    if (gps_gap_track && sim_ms - gps_last_poll_ms > gps_max_gap_ms) {
+        gps_max_gap_ms = sim_ms - gps_last_poll_ms;
+    }
+    gps_last_poll_ms = sim_ms;
     if (gps_jitter_on) {
         static uint32_t lcg = 12345u;
         lcg = lcg * 1103515245u + 12345u;
@@ -785,9 +794,46 @@ int main(void)
     CHECK(flog_dump_calls == dumps_pl);
     CHECK(strstr(Serial.log, "airborne") != NULL);
 
+    /* Descent with real airtime: one pass can stack the inertial trace, a
+     * fused slot and the maxima recap, ~2.7 s of blocking transmits. The
+     * beacon must read the GPS between them, or the 350-byte UART ring
+     * (~2.3 s) drops whole sentences and the rest reach the EKF late. The
+     * altitude keeps descending so the landing latch stays open. */
+    const uint32_t gap_window_s = 120;
+    {
+        uint32_t fus_g0 = type_count(PACKET_TYPE_FUSED);
+        sim_airtime = 1;
+        sim_imu_stream = 1;
+        gps_gap_track = 1;
+        gps_last_poll_ms = sim_ms;
+        gps_max_gap_ms = 0;
+        double desc_alt = SIM_ALT + 800.0;
+        unsigned long window_end = sim_ms + gap_window_s * 1000UL;
+        unsigned long next_fix = sim_ms;
+        while (sim_ms < window_end) {
+            if (sim_ms >= next_fix) {
+                script_fix(SIM_LAT, SIM_LON, desc_alt, 9, 1);
+                desc_alt -= 5.0;
+                next_fix += 1000;
+            }
+            sim_run(10);
+        }
+        gps_gap_track = 0;
+        sim_airtime = 0;
+        sim_imu_stream = 0;
+        script_fix(SIM_LAT, SIM_LON, SIM_ALT, 9, 1);
+        uint32_t fus_g = type_count(PACKET_TYPE_FUSED) - fus_g0;
+        printf("  descent: longest stretch without a GPS read %lu ms, %u positions in %u s\n",
+               gps_max_gap_ms, (unsigned)fus_g, (unsigned)gap_window_s);
+        CHECK(gps_max_gap_ms <= 1300);   /* one packet's airtime + slack */
+        CHECK(fus_g >= 78);              /* 1.5 s grid: 80 less the slots a
+                                          * three-packet pass pushes off */
+        CHECK(beacon_state == BEACON_STATE_POST_LAUNCH);
+    }
+
     /* The airframe never goes quiet (stuck in a tree in the wind):
      * landing never latches and POST_LAUNCH ends on its timeout */
-    sim_run_burst((POST_LAUNCH_RECOVERY_DURATION_SEC + 5) * 1000UL, 5.0f);
+    sim_run_burst((POST_LAUNCH_RECOVERY_DURATION_SEC + 5 - gap_window_s) * 1000UL, 5.0f);
     CHECK(launch_detect_has_landed() == false);
     CHECK(beacon_state == BEACON_STATE_BATTERY_SAVE);
     CHECK(flog_kind_count[7] >= 1);             /* battery-save record */
