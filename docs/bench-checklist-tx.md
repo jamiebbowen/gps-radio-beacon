@@ -111,6 +111,20 @@ runbook is `launch-day.md`.
       like this without a watchdog reset (`[Boot]` banner) or a radio
       failure streak.
 
+## 4b. Commercial altimeter inputs (J2/J5/J6)
+
+- [ ] With an altimeter's telemetry wired to each jack in turn (StratoLogger
+      CF, RRC3 with all data items, Eggtimer), the USB log prints
+      `[Alt] Jn: <format>` within a few records of the stream starting.
+- [ ] J2 shares D13 with the red LED: scope the D13 level while an altimeter
+      idles (needs > 1.8 V high, < 1.0 V low); if marginal, use J5/J6.
+- [ ] An unplugged jack produces nothing (no `[Alt]` line, no errors).
+- [ ] After a shake launch with an altimeter streaming, the receiver shows
+      it on the ALTIMETERS page within 15 s; a fired charge (RRC3 `D`,
+      Eggtimer `~1`) prints `[Alt] Jn events drogue` and reaches the
+      receiver within ~2 s.
+- [ ] DUMP after the flight lists kind 11 rows (`ms,11,input,status,alt_ft,apogee_ft`).
+
 ## 5. Landing + descent evidence (post-flight review)
 
 These can't be forced on the bench, but know what the log will show:

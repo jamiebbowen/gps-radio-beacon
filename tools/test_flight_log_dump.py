@@ -30,9 +30,10 @@ def check(cond, what):
 # 1. firmware contract
 src = (ROOT / "transmitter" / "tests" / "test_flight_log.cpp").read_text()
 pinned = dict(re.findall(r'LOG_CONTRACT dump-(\w+)[^\n]*\n\s*CHECK\(strstr\(Serial\.log, "([^"]+)\\n"\)', src))
-check(set(pinned) == {"header", "imu", "gps", "launch", "event", "fused", "state"},
+check(set(pinned) == {"header", "imu", "gps", "launch", "event", "fused", "altimeter", "state"},
       f"pinned dump rows found: {sorted(pinned)}")
-recs = fld.parse([pinned.get(k, "") for k in ("header", "imu", "gps", "launch", "event", "fused", "state")])
+recs = fld.parse([pinned.get(k, "") for k in ("header", "imu", "gps", "launch", "event", "fused",
+                                               "altimeter", "state")])
 by_kind = {k: (ms, v) for ms, k, v in recs}
 check(by_kind.get(1) == (1234, [100, -200, 300, 4000, -5000, 6000, 5000, 3]), f"IMU row {by_kind.get(1)}")
 check(by_kind.get(2) == (1235, [398900000, -1048851712, 1655, 8, 1]), f"GPS row {by_kind.get(2)}")
@@ -40,12 +41,16 @@ check(by_kind.get(3) == (1236, []), f"LAUNCH row {by_kind.get(3)}")
 check(by_kind.get(5) == (1237, [9, -550]), f"event row {by_kind.get(5)}")
 check(by_kind.get(9) == (1238, [398812345, -1048987654, 1655, 123, -45, -2200, 7]), f"fused row {by_kind.get(9)}")
 check(by_kind.get(10) == (0, [1, 0]), f"state row {by_kind.get(10)}")
+check(by_kind.get(11) == (1239, [1, 6, 2510, 2510]), f"altimeter row {by_kind.get(11)}")
 out = fld.summarise(recs)
 check("GPS    39.8900000, -104.8851712  alt 1655 m  8 sats" in out, "GPS last position line")
 check("fused  39.8812345, -104.8987654  alt 1655 m  (GPS fresh, dead reckoning, IMU ok)" in out,
       "fused last position line")
 check("max IMU peak acceleration 5.00 g" in out, "IMU peak")
 check("flight-state marker: FLYING" in out, "state marker")
+check("ALTIMETER J5 (RRC3): drogue fired at 2510 ft" in out, "altimeter event in the timeline")
+check("J5 (RRC3): apogee 2510 ft, last 2510 ft, fired drogue (1 records)" in out,
+      "altimeter summary line")
 
 # 2. a synthetic recovery dump, with serial chatter around it
 DUMP = """[FLOG] previous flight data present

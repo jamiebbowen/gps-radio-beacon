@@ -7,6 +7,7 @@
 #include "include/packet_format.h"
 #include "include/nav.h"
 #include "include/flight_maxima.h"
+#include "include/altimeter_input.h"
 #include "include/nmea_fields.h"
 #include <Arduino.h>
 #include <string.h>
@@ -507,6 +508,26 @@ uint8_t beacon_transmit_maxima(uint32_t system_time_seconds, uint8_t transmit_fa
         radio_disable();
     }
     (void)system_time_seconds;
+    return (result == 0) ? 1 : 0;
+}
+
+uint8_t beacon_transmit_altimeter(uint8_t transmit_fast) {
+    AltimeterPacket_t p;
+    uint8_t len = altimeter_build_packet(&p, millis());
+    if (len == 0) return 0;
+
+    if (!transmit_fast) {
+        radio_enable();
+        delay(10);
+    }
+    Serial.print(F("[Beacon] Altimeters inputs=0x"));
+    Serial.println(p.inputs, HEX);
+
+    int result = transmit_packet((uint8_t*)&p, len);
+    if (!transmit_fast) {
+        delay(1);
+        radio_disable();
+    }
     return (result == 0) ? 1 : 0;
 }
 

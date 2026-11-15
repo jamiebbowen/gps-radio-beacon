@@ -61,6 +61,7 @@ Layouts are in `include/packet_format.h`. The receiver has its own copy in
 | FLIGHT_EVENT | 0x0A | apogee, drogue, main, landed, anomalies (repeated) |
 | MAXIMA | 0x0B | running flight maxima |
 | HELLO | 0x0C | boot identity (firmware hash) |
+| ALTIMETER | 0x0D | relayed commercial altimeters: format, altitude, apogee, fired charges |
 | callsign | text | `CALLSIGN-id CHn` |
 
 **IMU trace V3.** Bit 15 of `ts_ms` (`IMU_TS_V3_FLAG`) marks V3 units:
@@ -72,6 +73,30 @@ receiver logs an `ImuFmt` column so both decode correctly.
 for 40 ms, and keeps listening up to 2.2 s once a preamble is detected. The
 receiver sends its bind-time PING with a long preamble so a listen window
 always lands inside it.
+
+## Commercial altimeter inputs
+
+The carrier's J2, J5 and J6 (D13, D12, D11) take the serial telemetry of
+commercial altimeters: 5 V TTL through 10k/20k dividers, 9600 8N1, receive
+only. A 38.4 kHz TC3 interrupt samples all three lines (software UARTs:
+SERCOM3, the only other SERCOM on these pins besides SERCOM5, runs the
+GPS), and each input recognises its altimeter from the data, so any
+altimeter works on any jack:
+
+| Altimeter | Setup | What the beacon reads |
+|-----------|-------|------------------------|
+| PerfectFlite StratoLogger CF | telemetry enabled (DT2/DataCast) | one altitude per line, ft |
+| Missile Works RRC3 | telemetry on, **all data items**, English units | altitude, fired drogue/main/aux |
+| Eggtimer (Quantum/Quasar/Proton) | telemetry output | `<` altitude, `%` apogee, `~` channels (1 = drogue, 2 = main) |
+
+A format locks after three consistent records. The beacon relays an
+ALTIMETER packet (only the recognised inputs) with every maxima recap
+while airborne, and at once when an altimeter reports a newly fired charge;
+nothing goes on the air while no altimeter is recognised. In flight the
+flash log keeps a record per reporting input every second and at each new
+event (DUMP kind 11). An unplugged jack is held low by its pull-down and
+produces nothing. D13 is also the ItsyBitsy's red LED, which loads J2's
+divider: check the signal level on the bench before relying on J2.
 
 ## Build and flash
 

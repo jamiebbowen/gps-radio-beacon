@@ -96,6 +96,12 @@ typedef union {
                 int16_t  vn_cms, ve_cms, vd_cms;
                 uint8_t  flags;
             } fus;                                    /* 15 B, kind 9      */
+            struct {
+                uint8_t  input;                       /* 0=J2 1=J5 2=J6    */
+                uint8_t  status;                      /* ALT_ST_*          */
+                uint16_t rsv;
+                int32_t  alt_ft, apogee_ft;
+            } alt;                                    /* 12 B, kind 11     */
         } p;
     } f;
 } flog_rec_t;
@@ -358,6 +364,21 @@ void flight_log_fused(uint32_t ms, int32_t lat_e7, int32_t lon_e7,
     flog_append_record(&r);
 }
 
+void flight_log_altimeter(uint32_t ms, uint8_t input, uint8_t status,
+                          int32_t alt_ft, int32_t apogee_ft)
+{
+    flog_rec_t r;
+    memset(&r, 0, sizeof(r));
+    r.f.magic = FLOG_MAGIC;
+    r.f.ms = ms;
+    r.f.kind = FLOG_KIND_ALTIMETER;
+    r.f.p.alt.input = input;
+    r.f.p.alt.status = status;
+    r.f.p.alt.alt_ft = alt_ft;
+    r.f.p.alt.apogee_ft = apogee_ft;
+    flog_append_record(&r);
+}
+
 static void flog_print_record(const flog_rec_t *r)
 {
     Serial.print(r->f.ms);         Serial.print(',');
@@ -385,6 +406,11 @@ static void flog_print_record(const flog_rec_t *r)
         Serial.print(r->f.p.fus.ve_cms); Serial.print(',');
         Serial.print(r->f.p.fus.vd_cms); Serial.print(',');
         Serial.print(r->f.p.fus.flags);
+    } else if (r->f.kind == FLOG_KIND_ALTIMETER) {
+        Serial.print(r->f.p.alt.input);     Serial.print(',');
+        Serial.print(r->f.p.alt.status);    Serial.print(',');
+        Serial.print(r->f.p.alt.alt_ft);    Serial.print(',');
+        Serial.print(r->f.p.alt.apogee_ft);
     } else if (r->f.kind == FLOG_KIND_FLIGHT_EVENT ||
                r->f.kind == FLOG_KIND_BOOT ||
                r->f.kind == FLOG_KIND_STATE) {

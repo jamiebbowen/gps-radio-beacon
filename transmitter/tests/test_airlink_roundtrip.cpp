@@ -134,7 +134,55 @@ uint32_t nav_get_gps_rejects(void) { return fake_gps_rejects; }
  * owns the global. Host builds stand it up here. */
 uint8_t g_boot_rcause = 0;
 
+/* The real altimeter inputs feed the relay; their flash records go nowhere. */
+void pinMode(int pin, int mode) { (void)pin; (void)mode; }
+void flight_log_altimeter(uint32_t ms, uint8_t input, uint8_t status,
+                          int32_t alt_ft, int32_t apogee_ft)
+{ (void)ms; (void)input; (void)status; (void)alt_ft; (void)apogee_ft; }
+#include "../firmware/altimeter.cpp"
+#include "../firmware/altimeter_input.cpp"
+
 #include "../firmware/beacon.cpp"
+
+/* What the TC3 sampler sees for `text` on PORT A bit `pa_bit` (8N1, idle
+ * high around it) while the other jacks in `idle` idle high too. */
+static void alt_wave(uint32_t idle, uint8_t pa_bit, const char *text)
+{
+    for (int k = 0; k < 8; k++) altimeter_sample(idle);
+    for (const char *c = text; *c; c++) {
+        uint16_t frame = (uint16_t)(((uint8_t)*c << 1) | 0x200);
+        for (int b = 0; b < 10; b++)
+            for (unsigned k = 0; k < ALT_RX_OVERSAMPLE; k++)
+                altimeter_sample((idle & ~(1u << pa_bit)) |
+                                 ((uint32_t)((frame >> b) & 1u) << pa_bit));
+    }
+    for (int k = 0; k < 8; k++) altimeter_sample(idle);
+}
+
+/* Altimeter relay: built by the TX from what its inputs decoded, expanded
+ * back to input order by the RX parser. */
+static void altimeter_roundtrip(void)
+{
+    altimeter_init();
+    const uint32_t idle = (1u << ALT_J5_PA_BIT) | (1u << ALT_J6_PA_BIT);
+    alt_wave(idle, ALT_J5_PA_BIT, "0012.5,+01200,+0410,+072,dma\r"
+                                  "0013.0,+01380,+0300,+071,dma\r"
+                                  "0018.0,+02510,+0001,+070,Dma\r");
+    alt_wave(idle, ALT_J6_PA_BIT, "<01000>%02520>~12---->");
+    altimeter_poll(millis());
+    tx_len = 0;
+    CHECK(beacon_transmit_altimeter(0) == 1);
+    CHECK(tx_len == ALTIMETER_PACKET_SIZE(2));
+    AltimeterPacket_t rx;
+    CHECK(RF_Parser_DecodeAltimeter(tx_buf, (uint16_t)tx_len, &rx) == 1);
+    CHECK(rx.packet_type == PACKET_TYPE_ALTIMETER && rx.rocket_id == (uint8_t)ROCKET_ID);
+    CHECK(rx.inputs == 0x06 && rx.entry[0].status == 0);          /* J2 not on air */
+    CHECK(rx.entry[1].status == (ALT_ST_FMT_RRC3 | ALT_ST_DROGUE));
+    CHECK(rx.entry[1].alt_4ft == 628 && rx.entry[1].apogee_4ft == 628);
+    CHECK(rx.entry[2].status == (ALT_ST_FMT_EGGTIMER | ALT_ST_DROGUE | ALT_ST_MAIN));
+    CHECK(rx.entry[2].alt_4ft == 250 && rx.entry[2].apogee_4ft == 630);
+    CHECK(RF_Parser_DecodeAltimeter(tx_buf, (uint16_t)(tx_len - 1), &rx) == 0);
+}
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -219,6 +267,7 @@ static void check_fused_row(double lat, double lon, float alt, float vn,
 int main(void)
 {
     RF_Parser_Init();
+    altimeter_roundtrip();
 
     /* ---------- Fused sweep: envelope edges + random interior ---------- */
     const double lats_edge[] = { -89.9, -45.0, 0.0, 39.89, 45.0, 89.9 };

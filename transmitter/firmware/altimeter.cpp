@@ -12,6 +12,7 @@ static uint8_t parse_int(const char *p, const char *end, int32_t *out)
 {
     int32_t sign = 1, v = 0;
     uint8_t digits = 0;
+    while (p < end && *p == ' ') p++;
     if (p < end && (*p == '+' || *p == '-')) { if (*p == '-') sign = -1; p++; }
     while (p < end && *p == ' ') p++;
     for (; p < end && *p >= '0' && *p <= '9'; p++) {
@@ -114,4 +115,62 @@ uint8_t alt_feed(alt_state_t *s, char c, uint32_t now_ms)
     if (s->len < ALT_LINE_MAX - 1) s->buf[s->len++] = c;
     else s->overflow = 1;
     return 0;
+}
+
+uint8_t alt_status(const alt_state_t *s, uint32_t now_ms)
+{
+    if (s->format == ALT_FMT_UNKNOWN) return 0;
+    uint8_t st = (uint8_t)s->format | s->events;
+    if (now_ms - s->last_ms > ALT_STALE_MS) st |= ALT_ST_STALE;
+    return st;
+}
+
+int16_t alt_rx_sample(alt_rx_t *rx, uint8_t level)
+{
+    int16_t out = -1;
+    level = level ? 1 : 0;
+    if (rx->wait_idle) {
+        if (level) rx->wait_idle = 0;
+    } else if (!rx->active) {
+        if (rx->prev && !level) {             /* falling edge: start bit */
+            rx->active = 1;
+            rx->bit = 0;
+            rx->shift = 0;
+            rx->count = ALT_RX_OVERSAMPLE / 2;   /* to the start bit centre */
+        }
+    } else if (--rx->count == 0) {
+        rx->count = ALT_RX_OVERSAMPLE;
+        if (rx->bit == 0) {
+            if (level) rx->active = 0;        /* glitch, not a start bit */
+        } else if (rx->bit <= 8) {
+            rx->shift = (uint8_t)((rx->shift >> 1) | (level ? 0x80 : 0));
+        } else {
+            rx->active = 0;
+            if (level) out = rx->shift;       /* stop bit high: a byte  */
+            else rx->wait_idle = 1;           /* framing error / break  */
+        }
+        rx->bit++;
+    }
+    rx->prev = level;
+    return out;
+}
+
+void alt_ring_put(alt_ring_t *r, uint8_t b)
+{
+    uint8_t h = r->head;
+    if ((uint8_t)(h - r->tail) >= ALT_RING_SIZE) {
+        r->dropped = 1;
+        return;
+    }
+    r->buf[h % ALT_RING_SIZE] = b;
+    r->head = (uint8_t)(h + 1);
+}
+
+int16_t alt_ring_get(alt_ring_t *r)
+{
+    uint8_t t = r->tail;
+    if (t == r->head) return -1;
+    int16_t b = r->buf[t % ALT_RING_SIZE];
+    r->tail = (uint8_t)(t + 1);
+    return b;
 }

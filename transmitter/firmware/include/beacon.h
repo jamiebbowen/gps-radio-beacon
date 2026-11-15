@@ -52,4 +52,9 @@ uint8_t beacon_transmit_hello(uint32_t system_time_seconds, uint8_t transmit_fas
  * once at the landing latch. Values come from flight_maxima. */
 uint8_t beacon_transmit_maxima(uint32_t system_time_seconds, uint8_t transmit_fast_flag);
 
+/* Commercial altimeter relay (ALTIMETER packet): with each maxima recap and
+ * when an altimeter reports a new deploy event. Sends nothing (no airtime)
+ * while no input has a recognised altimeter. @retval 1 if sent */
+uint8_t beacon_transmit_altimeter(uint8_t transmit_fast_flag);
+
 #endif // BEACON_H

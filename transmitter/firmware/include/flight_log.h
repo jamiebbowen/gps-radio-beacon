@@ -14,6 +14,7 @@
 #define FLOG_KIND_BOOT          8
 #define FLOG_KIND_FUSED         9
 #define FLOG_KIND_STATE        10   /* persistent flight-state marker    */
+#define FLOG_KIND_ALTIMETER    11   /* commercial altimeter input record */
 
 /* Fused-record flags byte */
 #define FLOG_FUS_GPS_FRESH   0x01
@@ -49,6 +50,9 @@
  *   9 fused        lat/lon/alt + vn/ve/vd + flags (EKF snapshot taken
  *                  while GPS is stale - the only position data the
  *                  beacon has during a fix hole)
+ *  11 altimeter    input (0=J2 1=J5 2=J6), status (ALT_ST_*: format,
+ *                  fired events, stale), altitude and apogee in feet as
+ *                  the altimeter reported them
  *  10 state        flight-state marker on the RESERVED last 8KB row:
  *                  code 1=FLYING (written at arm), 2=LANDED (landing
  *                  latch). This is the mid-flight reboot-resume evidence:
@@ -109,6 +113,9 @@ void flight_log_event_ex(uint32_t ms, uint8_t kind, uint8_t code, int16_t value)
 void flight_log_fused(uint32_t ms, int32_t lat_e7, int32_t lon_e7,
                       int16_t alt_m, int16_t vn_cms, int16_t ve_cms,
                       int16_t vd_cms, uint8_t flags);
+/** Commercial altimeter input record (kind 11), see altimeter_input.h. */
+void flight_log_altimeter(uint32_t ms, uint8_t input, uint8_t status,
+                          int32_t alt_ft, int32_t apogee_ft);
 
 /** Serial dump over USB while powered (post-recovery forensics):
  * Emits CSV: ms,1,ax_cg,ay_cg,az_cg,gx_cds,gy_cds,gz_cds,peak_mg   (imu)
@@ -116,6 +123,7 @@ void flight_log_fused(uint32_t ms, int32_t lat_e7, int32_t lon_e7,
  *            ms,kind                                              (3/4/6/7/8, code/value 0)
  *            ms,kind,code,value                                  (events 5/8)
  *            ms,9,lat_e7,lon_e7,alt_m,vn,ve,vd,flags             (fused)
+ *            ms,11,input,status,alt_ft,apogee_ft                 (altimeter)
  * via Serial.print. Holds the loop; call on command. */
 void flight_log_dump_serial(void);
 

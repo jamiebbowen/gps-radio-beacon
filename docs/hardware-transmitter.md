@@ -120,9 +120,9 @@
 | 7 | 7 | LoRa BUSY | ❌ | LoRa status (pin 6 does not exist on ItsyBitsy M4) |
 | 9 | 9 | LoRa DIO1 | ❌ | LoRa interrupt |
 | 10 | 10 | IMU Reset | ❌ | BNO085 reset (optional) |
-| 11 | 11 | **Available** | ✅ | Digital I/O |
-| 12 | 12 | **Available** | ✅ | Digital I/O |
-| 13 (LED) | 13 | Onboard LED | ⚠️ | Free for status use again |
+| 11 | 11 | Altimeter input J6 | ⚠️ | PA21, 9600 8N1 from a commercial altimeter (10k/20k divider); sampled by TC3 |
+| 12 | 12 | Altimeter input J5 | ⚠️ | PA23, 9600 8N1 from a commercial altimeter (10k/20k divider); sampled by TC3 |
+| 13 (LED) | 13 | Altimeter input J2 | ⚠️ | PA22, 9600 8N1 (10k/20k divider); also the red LED, which loads the divider - check the level |
 | SCK | SCK | LoRa SPI CLK | ❌ | Hardware SPI |
 | MOSI | MOSI | LoRa SPI MOSI | ❌ | Hardware SPI |
 | MISO | MISO | LoRa SPI MISO | ❌ | Hardware SPI |

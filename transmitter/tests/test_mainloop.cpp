@@ -91,6 +91,8 @@ static struct { struct { uint8_t reg; } RCAUSE; } fake_rstc;
 /* ------------------------------------------------------------------ */
 
 static uint32_t tx_by_type[16];   /* indexed by packet_type byte */
+static uint8_t  last_alt_pkt[ALTIMETER_PACKET_MAX_SIZE];
+static size_t   last_alt_len = 0;
 static uint32_t fev_code_count[256]; /* FLIGHT_EVENT_* code histogram   */
 static uint32_t tx_callsigns = 0;
 static uint32_t tx_other = 0;
@@ -148,8 +150,12 @@ int transmit_packet(const uint8_t *data, size_t length)
     }
     if (sim_ms - last_id_ms > max_unid_ms) max_unid_ms = sim_ms - last_id_ms;
     if (t >= 0x20 && t <= 0x7E) last_id_ms = sim_ms;
-    if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_HELLO) {
+    if (t >= PACKET_TYPE_GPS && t <= PACKET_TYPE_ALTIMETER) {
         tx_by_type[t]++;
+        if (t == PACKET_TYPE_ALTIMETER && length <= sizeof(last_alt_pkt)) {
+            memcpy(last_alt_pkt, data, length);
+            last_alt_len = length;
+        }
         if (t == PACKET_TYPE_FLIGHT_EVENT && length >= 3)
             fev_code_count[data[2]]++;      /* code field, offset 2 */
         if (t == PACKET_TYPE_IMU && length == sizeof(last_imu_pkt)) {
@@ -289,6 +295,15 @@ void     flight_log_event_ex(uint32_t ms, uint8_t kind, uint8_t code, int16_t va
 static uint32_t flog_fused_calls = 0;
 void     flight_log_fused(uint32_t ms, int32_t, int32_t, int16_t, int16_t, int16_t, int16_t, uint8_t)
          { (void)ms; flog_fused_calls++; }
+static uint32_t flog_alt_calls = 0;
+static uint8_t  flog_alt_last_status = 0;
+void     flight_log_altimeter(uint32_t ms, uint8_t input, uint8_t status,
+                              int32_t alt_ft, int32_t apogee_ft)
+{
+    (void)ms; (void)input; (void)alt_ft; (void)apogee_ft;
+    flog_alt_calls++;
+    flog_alt_last_status = status;
+}
 static uint32_t flog_dump_calls = 0;
 void     flight_log_dump_serial(void) { flog_dump_calls++; }
 /* Reboot-resume seam: the host can't fake NVM rows, so the test scripts
@@ -360,6 +375,23 @@ void uart_init(void) {}
 #include "../firmware/ekf.cpp"
 #include "../firmware/beacon.cpp"
 #include "../firmware/firmware.ino"   /* the sketch under test - AFTER fakes */
+
+#include "../firmware/include/altimeter.h"   /* ALT_RX_OVERSAMPLE */
+
+/* What the TC3 sampler sees for `text` on PORT A bit `pa_bit`: 8N1 at
+ * ALT_RX_OVERSAMPLE samples per bit, idle high around it (the other jacks
+ * stay low - unplugged). */
+static void alt_inject(uint8_t pa_bit, const char *text)
+{
+    for (int k = 0; k < 8; k++) altimeter_sample(1u << pa_bit);
+    for (const char *p = text; *p; p++) {
+        uint16_t frame = (uint16_t)(((uint8_t)*p << 1) | 0x200);
+        for (int bit = 0; bit < 10; bit++)
+            for (unsigned s = 0; s < ALT_RX_OVERSAMPLE; s++)
+                altimeter_sample((uint32_t)((frame >> bit) & 1u) << pa_bit);
+    }
+    for (int k = 0; k < 8; k++) altimeter_sample(1u << pa_bit);
+}
 
 /* ------------------------------------------------------------------ */
 /* Sim driver                                                          */
@@ -541,6 +573,37 @@ int main(void)
               flog_imu_last[6] == onair.peak_accel_mg);
     }
     CHECK(mxs >= 1 && mxs <= 3);                  /* 15 s maxima recap cadence */
+
+    /* ---------- A commercial altimeter on J5 (RRC3, all data items) --- */
+    {
+        uint32_t alt0 = type_count(PACKET_TYPE_ALTIMETER);
+        uint32_t mxa = type_count(PACKET_TYPE_MAXIMA);
+        uint32_t logs0 = flog_alt_calls;
+        for (int k = 0; k < 3; k++) {
+            alt_inject(ALT_J5_PA_BIT, "0030.0,+02400,-0010,+070,dma\r");
+            sim_run(500);
+        }
+        CHECK(flog_alt_calls > logs0);                /* in the flight log */
+        sim_run(16000);                               /* one maxima recap */
+        CHECK(type_count(PACKET_TYPE_MAXIMA) > mxa);
+        CHECK(type_count(PACKET_TYPE_ALTIMETER) > alt0);   /* rides with it */
+        CHECK(last_alt_len == ALTIMETER_PACKET_SIZE(1));
+        AltimeterPacket_t ap;
+        memset(&ap, 0, sizeof(ap));
+        memcpy(&ap, last_alt_pkt, last_alt_len);
+        CHECK(ap.inputs == 0x02);
+        CHECK((ap.entry[0].status & ALT_ST_FMT_MASK) == ALT_ST_FMT_RRC3);
+        CHECK(ap.entry[0].alt_4ft == 600 && ap.entry[0].apogee_4ft == 600);
+
+        /* The drogue fires: relayed at once, not at the next recap */
+        uint32_t alt1 = type_count(PACKET_TYPE_ALTIMETER);
+        alt_inject(ALT_J5_PA_BIT, "0031.0,+02390,-0012,+070,Dma\r");
+        sim_run(300);
+        CHECK(type_count(PACKET_TYPE_ALTIMETER) >= alt1 + 1);
+        memcpy(&ap, last_alt_pkt, last_alt_len);
+        CHECK((ap.entry[0].status & ALT_ST_DROGUE) != 0);
+        CHECK((flog_alt_last_status & ALT_ST_DROGUE) != 0);
+    }
     CHECK(flog_gps_calls_value() >= 14);          /* GPS rows landing in the flash log */
     /* Raw GPS position packets stop on air - fused+IMU carry the invade */
 

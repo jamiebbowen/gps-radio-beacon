@@ -569,6 +569,8 @@ TEST(dump_emits_csv_for_flushed_records_only)
         else if (i == 4)
             flight_log_fused(1238, 398812345, -1048987654, 1655,
                              123, -45, (int16_t)-2200, 0x07);
+        else if (i == 5)
+            flight_log_altimeter(1239, 1, 0x06, 2510, 2510);   /* J5 RRC3, drogue */
         else
             flight_log_gps(1236 + i, 1, 1, 1, 1, 1);
     }
@@ -604,6 +606,8 @@ TEST(dump_emits_csv_for_flushed_records_only)
     CHECK(strstr(Serial.log, "1237,5,9,-550\n") != nullptr);
     /* LOG_CONTRACT dump-fused */
     CHECK(strstr(Serial.log, "1238,9,398812345,-1048987654,1655,123,-45,-2200,7\n") != nullptr);
+    /* LOG_CONTRACT dump-altimeter */
+    CHECK(strstr(Serial.log, "1239,11,1,6,2510,2510\n") != nullptr);
     /* LOG_CONTRACT dump-state */
     CHECK(strstr(Serial.log, "0,10,1,0\n") != nullptr);
     /* exactly the 3-line units note + header + the 17 records + the
