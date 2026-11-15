@@ -1,6 +1,6 @@
 /**
  * @file altimeter_mode.h
- * @brief Commercial altimeters the beacon relays (ALTIMETER packets)
+ * @brief Commercial altimeters riding the beacon's maxima recap
  */
 #ifndef ALTIMETER_MODE_H
 #define ALTIMETER_MODE_H

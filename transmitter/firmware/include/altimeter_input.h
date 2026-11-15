@@ -29,8 +29,9 @@ void    altimeter_log_service(uint32_t now_ms);
 /** 1 while an input reported a deploy event not yet relayed. */
 uint8_t altimeter_new_events(void);
 
-/** Fill the relay packet (type, rocket id, recognised inputs only).
- *  @retval bytes to send, 0 if no input has a recognised format */
-uint8_t altimeter_build_packet(AltimeterPacket_t *p, uint32_t now_ms);
+/** The maxima recap's altimeter tail (packet_format.h): alt_inputs and one
+ *  entry per recognised input, ascending. @retval bytes the tail adds to
+ *  the 11-byte recap, 0 if no input has a recognised format */
+uint8_t altimeter_fill_maxima(MaximaAltPacket_t *p, uint32_t now_ms);
 
 #endif /* ALTIMETER_INPUT_H */

@@ -753,43 +753,58 @@ TEST(test_init_resets_diagnostics_and_marks_packet) {
 
 TEST(test_altimeter_decode_and_row)
 {
-    /* Two altimeters on the air (J5, J6): expanded to input order */
-    uint8_t pkt[ALTIMETER_PACKET_SIZE(2)];
-    AltimeterEntry_t e5 = { ALT_ST_FMT_RRC3 | ALT_ST_DROGUE, 628, 628 };
-    AltimeterEntry_t e6 = { ALT_ST_FMT_EGGTIMER | ALT_ST_DROGUE | ALT_ST_MAIN | ALT_ST_STALE,
-                            250, 630 };
-    pkt[0] = PACKET_TYPE_ALTIMETER;
+    /* A recap carrying two altimeters (J5, J6): expanded to input order */
+    uint8_t pkt[MAXIMA_ALT_PACKET_SIZE(2)];
+    memset(pkt, 0, sizeof(pkt));
+    MaximaAltEntry_t e5 = { ALT_ST_FMT_RRC3 | ALT_ST_DROGUE, 628 };
+    MaximaAltEntry_t e6 = { ALT_ST_FMT_EGGTIMER | ALT_ST_DROGUE | ALT_ST_MAIN | ALT_ST_STALE, 630 };
+    pkt[0] = PACKET_TYPE_MAXIMA;
     pkt[1] = 3;
-    pkt[2] = 0x06;
-    memcpy(pkt + ALTIMETER_PACKET_HDR, &e5, ALTIMETER_ENTRY_SIZE);
-    memcpy(pkt + ALTIMETER_PACKET_HDR + ALTIMETER_ENTRY_SIZE, &e6, ALTIMETER_ENTRY_SIZE);
-    AltimeterPacket_t a;
-    CHECK(RF_Parser_DecodeAltimeter(pkt, sizeof(pkt), &a) == 1);
-    CHECK(a.packet_type == PACKET_TYPE_ALTIMETER && a.rocket_id == 3 && a.inputs == 0x06);
-    CHECK(a.entry[0].status == 0 && a.entry[0].alt_4ft == 0);
-    CHECK(a.entry[1].status == (ALT_ST_FMT_RRC3 | ALT_ST_DROGUE) && a.entry[1].alt_4ft == 628);
-    CHECK(a.entry[2].apogee_4ft == 630);
+    pkt[2] = 0x34;                                     /* max_alt_m low byte */
+    pkt[MAXIMA_PACKET_SIZE] = 0x06;
+    memcpy(pkt + MAXIMA_PACKET_SIZE + 1, &e5, MAXIMA_ALT_ENTRY_SIZE);
+    memcpy(pkt + MAXIMA_PACKET_SIZE + 1 + MAXIMA_ALT_ENTRY_SIZE, &e6, MAXIMA_ALT_ENTRY_SIZE);
+    MaximaAltPacket_t a;
+    CHECK(RF_Parser_DecodeMaxima(pkt, sizeof(pkt), &a) == 1);
+    CHECK(a.mx.packet_type == PACKET_TYPE_MAXIMA && a.mx.rocket_id == 3);
+    CHECK(a.mx.max_alt_m == 0x34 && a.alt_inputs == 0x06);
+    CHECK(a.alt[0].status == 0 && a.alt[0].apogee_4ft == 0);
+    CHECK(a.alt[1].status == (ALT_ST_FMT_RRC3 | ALT_ST_DROGUE) && a.alt[1].apogee_4ft == 628);
+    CHECK(a.alt[2].apogee_4ft == 630);
 
     char row[128];
     RF_Parser_FormatAltimeter(&a, row, sizeof(row));
-    CHECK(strcmp(row, "ALTIM id=3 J5 RRC3 2512/2512ft D-- J6 EGG 1000/2520ft DM-(old)") == 0);
+    CHECK(strcmp(row, "ALTIM id=3 J5 RRC3 apo=2512ft D-- J6 EGG apo=2520ft DM-(old)") == 0);
     char small[20];
     RF_Parser_FormatAltimeter(&a, small, sizeof(small));    /* truncates */
     CHECK(strlen(small) < sizeof(small));
 
-    /* Rejected: length vs flags, no inputs, a fourth input, other types */
-    CHECK(RF_Parser_DecodeAltimeter(pkt, sizeof(pkt) - 1, &a) == 0);
-    pkt[2] = 0x07;
-    CHECK(RF_Parser_DecodeAltimeter(pkt, sizeof(pkt), &a) == 0);
-    pkt[2] = 0x00;
-    CHECK(RF_Parser_DecodeAltimeter(pkt, ALTIMETER_PACKET_HDR, &a) == 0);
-    pkt[2] = 0x0A;
-    CHECK(RF_Parser_DecodeAltimeter(pkt, sizeof(pkt), &a) == 0);
-    pkt[2] = 0x06;
-    pkt[0] = PACKET_TYPE_MAXIMA;
-    CHECK(RF_Parser_DecodeAltimeter(pkt, sizeof(pkt), &a) == 0);
-    CHECK(RF_Parser_DecodeAltimeter(NULL, 8, &a) == 0);
-    CHECK(RF_Parser_DecodeAltimeter(pkt, 2, &a) == 0);
+    /* The plain recap (no altimeter recognised) and all three inputs */
+    CHECK(RF_Parser_DecodeMaxima(pkt, MAXIMA_PACKET_SIZE, &a) == 1);
+    CHECK(a.alt_inputs == 0 && a.mx.rocket_id == 3);
+    uint8_t three[MAXIMA_ALT_PACKET_SIZE(3)];
+    memset(three, 0, sizeof(three));
+    memcpy(three, pkt, MAXIMA_PACKET_SIZE);
+    three[MAXIMA_PACKET_SIZE] = 0x07;
+    CHECK(RF_Parser_DecodeMaxima(three, sizeof(three), &a) == 1 && a.alt_inputs == 0x07);
+    CHECK(MAXIMA_ALT_PACKET_SIZE(1) == 15 && sizeof(three) == 21);
+
+    /* Rejected: length vs flags, no inputs, a fourth input, other types,
+     * the 12-byte V1 layout that never flew */
+    CHECK(RF_Parser_DecodeMaxima(pkt, sizeof(pkt) - 1, &a) == 0);
+    CHECK(RF_Parser_DecodeMaxima(pkt, MAXIMA_PACKET_SIZE + 1, &a) == 0);
+    CHECK(RF_Parser_DecodeMaxima(pkt, MAXIMA_PACKET_SIZE_V1, &a) == 0);
+    pkt[MAXIMA_PACKET_SIZE] = 0x07;
+    CHECK(RF_Parser_DecodeMaxima(pkt, sizeof(pkt), &a) == 0);
+    pkt[MAXIMA_PACKET_SIZE] = 0x00;
+    CHECK(RF_Parser_DecodeMaxima(pkt, sizeof(pkt), &a) == 0);
+    pkt[MAXIMA_PACKET_SIZE] = 0x0A;
+    CHECK(RF_Parser_DecodeMaxima(pkt, sizeof(pkt), &a) == 0);
+    pkt[MAXIMA_PACKET_SIZE] = 0x06;
+    pkt[0] = PACKET_TYPE_FLIGHT_EVENT;
+    CHECK(RF_Parser_DecodeMaxima(pkt, sizeof(pkt), &a) == 0);
+    CHECK(RF_Parser_DecodeMaxima(NULL, 11, &a) == 0);
+    CHECK(RF_Parser_DecodeMaxima(pkt, 2, &a) == 0);
 }
 
 int main(void) {

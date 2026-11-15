@@ -103,7 +103,8 @@ void altimeter_poll(uint32_t now_ms)
                 Serial.println(fmt_name(d->format));
             }
             if (d->events & ~ev0) {
-                s_events_unsent = 1;
+                /* relayed once the format is recognised (only those ride) */
+                if (d->format != ALT_FMT_UNKNOWN) s_events_unsent = 1;
                 Serial.print(F("[Alt] "));
                 Serial.print(k_jack[i]);
                 Serial.print(F(" events"));
@@ -137,22 +138,20 @@ uint8_t altimeter_new_events(void)
     return s_events_unsent;
 }
 
-uint8_t altimeter_build_packet(AltimeterPacket_t *p, uint32_t now_ms)
+uint8_t altimeter_fill_maxima(MaximaAltPacket_t *p, uint32_t now_ms)
 {
-    memset(p, 0, sizeof(*p));
-    p->packet_type = PACKET_TYPE_ALTIMETER;
-    p->rocket_id = (uint8_t)ROCKET_ID;
+    p->alt_inputs = 0;
+    memset(p->alt, 0, sizeof(p->alt));
     uint8_t n = 0;
     for (uint8_t i = 0; i < ALTIMETER_INPUTS; i++) {
         const alt_state_t *d = &s_dec[i];
         if (d->format == ALT_FMT_UNKNOWN) continue;
-        p->inputs |= (uint8_t)(1u << i);
-        p->entry[n].status = alt_status(d, now_ms);
-        p->entry[n].alt_4ft = sat_i16((float)d->alt_ft / ALT_FT_PER_UNIT);
-        p->entry[n].apogee_4ft = sat_i16((float)d->apogee_ft / ALT_FT_PER_UNIT);
+        p->alt_inputs |= (uint8_t)(1u << i);
+        p->alt[n].status = alt_status(d, now_ms);
+        p->alt[n].apogee_4ft = sat_i16((float)d->apogee_ft / ALT_FT_PER_UNIT);
         n++;
     }
     if (n == 0) return 0;
     s_events_unsent = 0;
-    return (uint8_t)ALTIMETER_PACKET_SIZE(n);
+    return (uint8_t)(MAXIMA_ALT_PACKET_SIZE(n) - MAXIMA_PACKET_SIZE);
 }

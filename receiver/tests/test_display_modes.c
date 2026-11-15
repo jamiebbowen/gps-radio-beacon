@@ -199,9 +199,9 @@ uint16_t RF_Receiver_GetLastPacketASCII(char *buf, uint16_t max_len)
 uint8_t  RF_Receiver_TestingBuildSuspect(void) { return fake_testing; }
 
 static uint8_t fake_alt_have = 0;
-static AltimeterPacket_t fake_alt;
+static MaximaAltPacket_t fake_alt;
 static uint32_t fake_alt_age = 0;
-uint8_t RF_Receiver_PeekAltimeter(AltimeterPacket_t *alt, uint32_t *age_ms)
+uint8_t RF_Receiver_PeekAltimeter(MaximaAltPacket_t *alt, uint32_t *age_ms)
 {
     if (!fake_alt_have) return 0;
     *alt = fake_alt;
@@ -557,21 +557,19 @@ TEST(altimeter_page)
     CHECK(strstr(row(2), "None relayed yet") != NULL);
 
     memset(&fake_alt, 0, sizeof(fake_alt));
-    fake_alt.inputs = 0x06;                              /* J5 + J6 */
-    fake_alt.entry[1].status = ALT_ST_FMT_RRC3 | ALT_ST_DROGUE;
-    fake_alt.entry[1].alt_4ft = 628;
-    fake_alt.entry[1].apogee_4ft = 628;
-    fake_alt.entry[2].status = ALT_ST_FMT_EGGTIMER | ALT_ST_DROGUE | ALT_ST_MAIN | ALT_ST_STALE;
-    fake_alt.entry[2].alt_4ft = 250;
-    fake_alt.entry[2].apogee_4ft = 630;
+    fake_alt.alt_inputs = 0x06;                          /* J5 + J6 */
+    fake_alt.alt[1].status = ALT_ST_FMT_RRC3 | ALT_ST_DROGUE;
+    fake_alt.alt[1].apogee_4ft = 628;
+    fake_alt.alt[2].status = ALT_ST_FMT_EGGTIMER | ALT_ST_DROGUE | ALT_ST_MAIN | ALT_ST_STALE;
+    fake_alt.alt[2].apogee_4ft = 630;
     fake_alt_have = 1;
     fake_alt_age = 12500;
     cap_clear();
     DisplayMode_Altimeter();
     CHECK(strstr(row(1), "Heard 12s ago") != NULL);
-    CHECK(strcmp(row(2), "J5 RRC3 2512ft") == 0);
+    CHECK(strcmp(row(2), "J5 RRC3") == 0);
     CHECK(strcmp(row(3), " Apo 2512ft D--") == 0);
-    CHECK(strcmp(row(4), "J6 EGG 1000ft old") == 0);
+    CHECK(strcmp(row(4), "J6 EGG old") == 0);
     CHECK(strcmp(row(5), " Apo 2520ft DM-") == 0);
     CHECK(cap_max_text_len < 32);
     fake_alt_have = 0;

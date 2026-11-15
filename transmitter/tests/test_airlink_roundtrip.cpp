@@ -159,29 +159,46 @@ static void alt_wave(uint32_t idle, uint8_t pa_bit, const char *text)
     for (int k = 0; k < 8; k++) altimeter_sample(idle);
 }
 
-/* Altimeter relay: built by the TX from what its inputs decoded, expanded
- * back to input order by the RX parser. */
+/* Altimeters riding the maxima recap: built by the TX from what its inputs
+ * decoded, expanded back to input order by the RX parser - none
+ * recognised (the plain recap), then two jacks, then all three. */
 static void altimeter_roundtrip(void)
 {
     altimeter_init();
-    const uint32_t idle = (1u << ALT_J5_PA_BIT) | (1u << ALT_J6_PA_BIT);
+    MaximaAltPacket_t rx;
+    tx_len = 0;
+    CHECK(beacon_transmit_maxima(0, 0) == 1);
+    CHECK(tx_len == MAXIMA_PACKET_SIZE);
+    CHECK(RF_Parser_DecodeMaxima(tx_buf, (uint16_t)tx_len, &rx) == 1);
+    CHECK(rx.alt_inputs == 0);
+
+    uint32_t idle = (1u << ALT_J5_PA_BIT) | (1u << ALT_J6_PA_BIT);
     alt_wave(idle, ALT_J5_PA_BIT, "0012.5,+01200,+0410,+072,dma\r"
                                   "0013.0,+01380,+0300,+071,dma\r"
                                   "0018.0,+02510,+0001,+070,Dma\r");
     alt_wave(idle, ALT_J6_PA_BIT, "<01000>%02520>~12---->");
     altimeter_poll(millis());
     tx_len = 0;
-    CHECK(beacon_transmit_altimeter(0) == 1);
-    CHECK(tx_len == ALTIMETER_PACKET_SIZE(2));
-    AltimeterPacket_t rx;
-    CHECK(RF_Parser_DecodeAltimeter(tx_buf, (uint16_t)tx_len, &rx) == 1);
-    CHECK(rx.packet_type == PACKET_TYPE_ALTIMETER && rx.rocket_id == (uint8_t)ROCKET_ID);
-    CHECK(rx.inputs == 0x06 && rx.entry[0].status == 0);          /* J2 not on air */
-    CHECK(rx.entry[1].status == (ALT_ST_FMT_RRC3 | ALT_ST_DROGUE));
-    CHECK(rx.entry[1].alt_4ft == 628 && rx.entry[1].apogee_4ft == 628);
-    CHECK(rx.entry[2].status == (ALT_ST_FMT_EGGTIMER | ALT_ST_DROGUE | ALT_ST_MAIN));
-    CHECK(rx.entry[2].alt_4ft == 250 && rx.entry[2].apogee_4ft == 630);
-    CHECK(RF_Parser_DecodeAltimeter(tx_buf, (uint16_t)(tx_len - 1), &rx) == 0);
+    CHECK(beacon_transmit_maxima(0, 0) == 1);
+    CHECK(tx_len == MAXIMA_ALT_PACKET_SIZE(2));
+    CHECK(RF_Parser_DecodeMaxima(tx_buf, (uint16_t)tx_len, &rx) == 1);
+    CHECK(rx.mx.packet_type == PACKET_TYPE_MAXIMA && rx.mx.rocket_id == (uint8_t)ROCKET_ID);
+    CHECK(rx.alt_inputs == 0x06 && rx.alt[0].status == 0);          /* J2 not on air */
+    CHECK(rx.alt[1].status == (ALT_ST_FMT_RRC3 | ALT_ST_DROGUE));
+    CHECK(rx.alt[1].apogee_4ft == 628);
+    CHECK(rx.alt[2].status == (ALT_ST_FMT_EGGTIMER | ALT_ST_DROGUE | ALT_ST_MAIN));
+    CHECK(rx.alt[2].apogee_4ft == 630);
+    CHECK(RF_Parser_DecodeMaxima(tx_buf, (uint16_t)(tx_len - 1), &rx) == 0);
+
+    idle |= 1u << ALT_J2_PA_BIT;
+    alt_wave(idle, ALT_J2_PA_BIT, "1180\r\n1190\r\n1200\r\n");
+    altimeter_poll(millis());
+    tx_len = 0;
+    CHECK(beacon_transmit_maxima(0, 0) == 1);
+    CHECK(tx_len == MAXIMA_ALT_PACKET_SIZE(3));                    /* 21 B, 1.12 s */
+    CHECK(RF_Parser_DecodeMaxima(tx_buf, (uint16_t)tx_len, &rx) == 1);
+    CHECK(rx.alt_inputs == 0x07 && rx.alt[0].status == ALT_ST_FMT_STRATOLOGGER);
+    CHECK(rx.alt[0].apogee_4ft == 300 && rx.alt[2].apogee_4ft == 630);
 }
 
 /* ------------------------------------------------------------------ */
@@ -291,7 +308,9 @@ int main(void)
                         rng() & 1, rng() & 1, rng() & 1, rng() & 1);
     }
     fake_landed = false;
-    CHECK(tx_buf[19] == (uint8_t)ROCKET_ID);
+    /* rocket_id is the fused packet's last byte (index 18): index 19 read
+     * whatever a longer, earlier packet had left in the capture buffer */
+    CHECK(tx_buf[FUSED_PACKET_SIZE - 1] == (uint8_t)ROCKET_ID);
 
     /* ---------- Raw GPS sweep ---------- */
     for (int i = 0; i < 600; i++) {

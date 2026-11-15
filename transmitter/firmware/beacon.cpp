@@ -484,10 +484,15 @@ uint8_t beacon_transmit_hello(uint32_t system_time_seconds, uint8_t transmit_fas
  * trips, so the ground's last-heard row is the flight's whole envelope.
  */
 uint8_t beacon_transmit_maxima(uint32_t system_time_seconds, uint8_t transmit_fast) {
-    MaximaPacket_t p;
-    flight_maxima_get(&p);
-    p.packet_type = PACKET_TYPE_MAXIMA;
-    p.rocket_id   = (uint8_t)ROCKET_ID;
+    MaximaPacket_t mx;
+    flight_maxima_get(&mx);
+    mx.packet_type = PACKET_TYPE_MAXIMA;
+    mx.rocket_id   = (uint8_t)ROCKET_ID;
+    /* The commercial altimeters ride the recap (packet_format.h): one
+     * preamble instead of a second ~1 s packet in the descent budget. */
+    MaximaAltPacket_t p;
+    p.mx = mx;
+    uint8_t len = (uint8_t)(MAXIMA_PACKET_SIZE + altimeter_fill_maxima(&p, millis()));
 
     if (!transmit_fast) {
         radio_enable();
@@ -495,39 +500,20 @@ uint8_t beacon_transmit_maxima(uint32_t system_time_seconds, uint8_t transmit_fa
     }
 
     Serial.print(F("[Beacon] Maxima alt="));
-    Serial.print(p.max_alt_m);
+    Serial.print(mx.max_alt_m);
     Serial.print(F("m@"));
-    Serial.print(p.t_maxalt_s);
+    Serial.print(mx.t_maxalt_s);
     Serial.print(F("s v="));
-    Serial.print(p.max_speed_cms / 100.0f, 1);
-    Serial.println(F("m/s"));
-
-    int result = transmit_packet((uint8_t*)&p, sizeof(p));
-    if (!transmit_fast) {
-        delay(1);
-        radio_disable();
-    }
-    (void)system_time_seconds;
-    return (result == 0) ? 1 : 0;
-}
-
-uint8_t beacon_transmit_altimeter(uint8_t transmit_fast) {
-    AltimeterPacket_t p;
-    uint8_t len = altimeter_build_packet(&p, millis());
-    if (len == 0) return 0;
-
-    if (!transmit_fast) {
-        radio_enable();
-        delay(10);
-    }
-    Serial.print(F("[Beacon] Altimeters inputs=0x"));
-    Serial.println(p.inputs, HEX);
+    Serial.print(mx.max_speed_cms / 100.0f, 1);
+    Serial.print(F("m/s altimeters=0x"));
+    Serial.println(p.alt_inputs, HEX);
 
     int result = transmit_packet((uint8_t*)&p, len);
     if (!transmit_fast) {
         delay(1);
         radio_disable();
     }
+    (void)system_time_seconds;
     return (result == 0) ? 1 : 0;
 }
 

@@ -123,12 +123,14 @@ TEST(test_cadence_phase_exits)
 TEST(test_descent_airtime_budget)
 {
     /* Every stream scheduled in POST_LAUNCH must fit the radio with room
-     * to spare: fused + inertial trace + maxima recap. At 2 s / 5 s the
+     * to spare: fused + inertial trace + maxima recap, the recap at its
+     * largest (three commercial altimeters riding it). At 2 s / 5 s the
      * trace and recap scheduled ~130% of the airtime and the positions
-     * slipped; the quiet remainder is when GPS and IMU get serviced. */
+     * slipped; a separate altimeter packet after each recap made ~94%. The
+     * quiet remainder is when GPS and IMU get serviced. */
     double duty = lora_airtime_ms(FUSED_PACKET_SIZE) / (double)FUSED_TX_INTERVAL_MS
                 + lora_airtime_ms(IMU_TRACE_PACKET_SIZE) / (POST_LAUNCH_PACKET_INTERVAL_SEC * 1000.0)
-                + lora_airtime_ms(MAXIMA_PACKET_SIZE) / (double)MAXIMA_TX_INTERVAL_MS;
+                + lora_airtime_ms(MAXIMA_ALT_PACKET_MAX_SIZE) / (double)MAXIMA_TX_INTERVAL_MS;
     printf("  descent airtime budget: %.0f%%\n", duty * 100.0);
     CHECK(duty < 0.90);
 }

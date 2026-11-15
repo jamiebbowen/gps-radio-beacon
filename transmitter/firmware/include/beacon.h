@@ -48,13 +48,10 @@ uint8_t beacon_transmit_flight_event(uint8_t code, int16_t value,
  * names exactly which beacon firmware flew. Call once from setup. */
 uint8_t beacon_transmit_hello(uint32_t system_time_seconds, uint8_t transmit_fast_flag);
 
-/* Running maxima recap: call at MAXIMA_TX_INTERVAL_MS while airborne and
- * once at the landing latch. Values come from flight_maxima. */
+/* Running maxima recap: call at MAXIMA_TX_INTERVAL_MS while airborne, at
+ * once when a commercial altimeter reports a newly fired charge, and once
+ * at the landing latch. Values come from flight_maxima; the recognised
+ * altimeters ride it as a tail (packet_format.h). */
 uint8_t beacon_transmit_maxima(uint32_t system_time_seconds, uint8_t transmit_fast_flag);
-
-/* Commercial altimeter relay (ALTIMETER packet): with each maxima recap and
- * when an altimeter reports a new deploy event. Sends nothing (no airtime)
- * while no input has a recognised altimeter. @retval 1 if sent */
-uint8_t beacon_transmit_altimeter(uint8_t transmit_fast_flag);
 
 #endif // BEACON_H
