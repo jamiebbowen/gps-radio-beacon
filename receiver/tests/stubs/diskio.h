@@ -16,11 +16,13 @@ extern "C" {
 
 #include <stdint.h>
 
-/* These types must match the real FatFs integer.h */
+/* These types must match the target's FatFs integer.h (inc/integer.h,
+ * which inc/diskio.h pulls in on the firmware build) at the ARM widths:
+ * UINT is a 32-bit unsigned int there, DWORD a 32-bit unsigned long. */
 typedef uint8_t  BYTE;
 typedef uint16_t WORD;
 typedef uint32_t DWORD;
-typedef uint16_t UINT;
+typedef unsigned int UINT;
 typedef uint32_t LBA_t;
 
 typedef BYTE DSTATUS;

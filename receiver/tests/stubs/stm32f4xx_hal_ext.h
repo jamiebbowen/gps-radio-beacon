@@ -50,6 +50,7 @@ typedef struct {
 #define GPIO_MODE_OUTPUT_PP        0u
 #define GPIO_MODE_IT_FALLING       0u
 #define GPIO_MODE_IT_RISING        0u
+#define GPIO_MODE_ANALOG           0u
 #define GPIO_NOPULL                0u
 #define GPIO_PULLUP                0u
 #define GPIO_PULLDOWN              0u
@@ -57,6 +58,7 @@ typedef struct {
 #define GPIO_SPEED_FREQ_HIGH       0u
 #define GPIO_SPEED_FREQ_VERY_HIGH  0u
 #define GPIO_AF4_I2C1              0u
+#define GPIO_AF5_SPI1              0u
 #define GPIO_AF5_SPI2              0u
 #define GPIO_AF7_USART2            0u
 
@@ -152,6 +154,9 @@ typedef struct {
 #define SPI_FIRSTBIT_MSB           0u
 #define SPI_TIMODE_DISABLE         0u
 #define SPI_CRCCALCULATION_DISABLE 0u
+/* Legacy names (stm32_hal_legacy.h) main.c's CubeMX-era init still uses */
+#define SPI_TIMODE_DISABLED          SPI_TIMODE_DISABLE
+#define SPI_CRCCALCULATION_DISABLED  SPI_CRCCALCULATION_DISABLE
 
 HAL_StatusTypeDef HAL_SPI_Init(SPI_HandleTypeDef *hspi);
 HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *hspi, uint8_t *data,
@@ -223,6 +228,9 @@ void HAL_Delay(uint32_t ms);
 #define __HAL_RCC_SPI2_CLK_ENABLE()   do {} while (0)
 #define __HAL_RCC_GPIOA_CLK_ENABLE()  do {} while (0)
 #define __HAL_RCC_GPIOB_CLK_ENABLE()  do {} while (0)
+#define __HAL_RCC_GPIOC_CLK_ENABLE()  do {} while (0)
+#define __HAL_RCC_GPIOH_CLK_ENABLE()  do {} while (0)
+#define __HAL_RCC_SPI1_CLK_ENABLE()   do {} while (0)
 #define __HAL_RCC_I2C1_CLK_ENABLE()   do {} while (0)
 #define __HAL_RCC_USART2_CLK_ENABLE() do {} while (0)
 #define __HAL_LINKDMA(handle, field, dma) ((handle)->field = &(dma))

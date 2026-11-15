@@ -37,10 +37,11 @@ SRC_DIR  := ../firmware/src
 HEADERS := $(wildcard ../firmware/inc/*.h ../firmware/inc/display_modes/*.h test_harness.h stubs/*.h) Makefile
 
 # Modules with a matching test_<module>.c and $(SRC_DIR)/<module>.c
-MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass i2c_bus jogpad eink sd_diskio preflight_eval log_policy beacon_track rx_channel eink_summary
+MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass i2c_bus jogpad eink sd_diskio preflight_eval log_policy beacon_track rx_channel eink_summary lfs_sd_bd
 BINS     := $(addprefix $(BUILD)/test_,$(MODULES)) \
             $(BUILD)/test_navigation_mode $(BUILD)/test_preflight_mode \
-            $(BUILD)/test_display_modes $(BUILD)/test_fuzz_parsers
+            $(BUILD)/test_display_modes $(BUILD)/test_fuzz_parsers \
+            $(BUILD)/test_main
 
 # navigation_mode.c lives in display_modes/ and needs the real math_utils
 $(BUILD)/test_navigation_mode: test_navigation_mode.c \
@@ -111,6 +112,30 @@ $(BUILD)/test_sd_card: test_sd_card.c $(SRC_DIR)/sd_card.c \
 	$(CC) $(CFLAGS) $(COVFLAGS) $(LFS_CFLAGS) \
 	    -o $@ $< $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(LDFLAGS)
 
+# main.c itself: boot and main loop over the real sd_card.c/lfs_sd_bd.c/
+# LittleFS on a RAM card and the real logic modules it composes; the
+# hardware-facing modules are faked at their API inside test_main.c.
+# -pthread: the firmware runs on its own thread (see test_main.c).
+# GIT_HASH_STR as the firmware Makefile defines it, so the BOOT row's
+# branch compiles. -Wno-pointer-to-int-cast: Error_Handler stores its
+# return address in a uint32_t - exact on the 32-bit target, a narrowing
+# cast on a 64-bit host.
+MAIN_SRCS := $(addprefix $(SRC_DIR)/, sd_card.c lfs_sd_bd.c rx_channel.c \
+    beacon_track.c eink_summary.c log_policy.c preflight_eval.c \
+    math_utils.c rf_parser.c)
+$(BUILD)/test_main: test_main.c $(SRC_DIR)/main.c $(MAIN_SRCS) \
+                    $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(HEADERS) | $(BUILD)
+	$(CC) $(CFLAGS) $(COVFLAGS) $(LFS_CFLAGS) -pthread -DGIT_HASH_STR=\"test\" \
+	    -Wno-pointer-to-int-cast -o $@ $< $(MAIN_SRCS) \
+	    $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(LDFLAGS)
+
+# lfs_sd_bd.c: the real block device under the real LittleFS, with the
+# card faked at the sd_diskio sector API (see test_lfs_sd_bd.c)
+$(BUILD)/test_lfs_sd_bd: test_lfs_sd_bd.c $(SRC_DIR)/lfs_sd_bd.c \
+                         $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(HEADERS) | $(BUILD)
+	$(CC) $(CFLAGS) $(COVFLAGS) $(LFS_CFLAGS) \
+	    -o $@ $< $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(LDFLAGS)
+
 .PHONY: all test coverage sanitize clean
 
 # Default goal must be the suite, not the first binary rule below.
@@ -131,7 +156,7 @@ test: $(BINS)
 
 # Every firmware source paired with the test binary that exercises it
 # (test:path-under-src). Each pair prints line, branch and call coverage.
-COV_PAIRS := $(foreach m,$(MODULES),$(m):$(m).c) compass:bno085.c \
+COV_PAIRS := $(foreach m,$(MODULES),$(m):$(m).c) compass:bno085.c main:main.c \
              navigation_mode:display_modes/navigation_mode.c \
              preflight_mode:display_modes/preflight_mode.c \
              $(addprefix display_modes:display_modes/,$(notdir $(MODE_SRCS)))
