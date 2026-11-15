@@ -134,7 +134,7 @@
 | Physical Pin | Arduino Pin | Current Use | Available? | Notes |
 |--------------|-------------|-------------|------------|-------|
 | A0 | A0 | **Available** | ✅ | Analog input, 12-bit ADC (battery divider lands here on the PCB; not yet read by firmware) |
-| A1 | A1 | Backup channel jumper | ⚠️ | Short to GND at power-on = backup LoRa channel (read once, then free) |
+| A1 | A1 | **Available** | ✅ | Unrouted on the carrier (the old backup-channel jumper is gone; the channel is `LORA_CHANNEL`) |
 | A2 | A2 | **Available** | ✅ | Analog input, 12-bit ADC |
 | A3 | A3 | LoRa DIO2 | ⚠️ | Input-only: module drives this pin; never an output |
 | A4 | A4 | LoRa TXEN | ❌ | RF switch TX enable |

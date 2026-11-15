@@ -18,8 +18,8 @@ TXEN A4 / RXEN A5 (MCU-driven), backup-channel jumper A1.
 
 Radio settings: channel `ch` = 433.000 + 0.25 x ch MHz (8 channels), SF10,
 62.5 kHz bandwidth, CR 4/8, private sync word 0x12, 22 dBm, 8-symbol
-preamble. Grounding the A1 jumper moves the beacon to the backup channel
-(ch + 4) mod 8.
+preamble. The channel is set at build time (`LORA_CHANNEL`); the carrier
+board has no channel-select hardware.
 
 ## Flight states and cadence
 

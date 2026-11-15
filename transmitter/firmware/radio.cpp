@@ -96,16 +96,13 @@ void radio_init(void) {
     rf_switch_idle();
     Serial.println("[Radio] RF switch parked (RXEN=0 TXEN=0)");
     
-    // Resolve the active channel from the backup-channel jumper:
-    // open (pull-up reads HIGH) = primary, shorted to GND = backup.
-    pinMode(CHANNEL_JUMPER_PIN, INPUT_PULLUP);
-    delay(1);  // Let the pull-up settle before sampling
-    bool backup_jumper = (digitalRead(CHANNEL_JUMPER_PIN) == LOW);
-    active_channel = backup_jumper ? LORA_CHANNEL_BACKUP : LORA_CHANNEL;
+    // The channel is fixed at build time (LORA_CHANNEL): the carrier board
+    // has no channel-select hardware.
+    active_channel = LORA_CHANNEL;
     float freq_mhz = LORA_CHANNEL_FREQ(active_channel);
     Serial.print("[Radio] Channel: CH");
     Serial.print(active_channel);
-    Serial.print(backup_jumper ? " (backup jumper) " : " (primary) ");
+    Serial.print(" ");
     Serial.print(freq_mhz);
     Serial.println(" MHz");
     

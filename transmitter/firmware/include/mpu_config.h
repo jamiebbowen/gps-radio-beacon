@@ -119,18 +119,6 @@
 #define ROCKET_ID           0
 #endif
 
-// Backup channel jumper: short CHANNEL_JUMPER_PIN to GND before power-on to
-// transmit on LORA_CHANNEL_BACKUP instead of LORA_CHANNEL. Lets you move a
-// rocket off a channel that is occupied at the pad without reflashing.
-// The pin is read once in radio_init() with the internal pull-up enabled:
-// open = primary channel, jumpered to GND = backup channel.
-// Default backup = +4 channels (1 MHz away, wraps), far enough that a noisy
-// primary won't also cover the backup.
-// Pin is A1: free on the ItsyBitsy M4 and unrouted on the carrier (pin 2 was
-// taken by E22 NRST on the PCB). Jumper wire goes directly to the ItsyBitsy
-// A1 pad and GND.
-#define CHANNEL_JUMPER_PIN  A1                          // Free GPIO on ItsyBitsy M4
-#define LORA_CHANNEL_BACKUP ((LORA_CHANNEL + 4) % LORA_CHANNEL_COUNT)
 
 #define LORA_BANDWIDTH      62.5        // 62.5 kHz: half BW = +3 dB sensitivity, 2x airtime.
                                         // Both ends are TCXO so frequency offset stays tiny
