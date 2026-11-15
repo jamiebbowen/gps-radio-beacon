@@ -261,7 +261,7 @@ uint8_t beacon_transmit_heartbeat(const GPSCoordinates_t* coords, uint32_t syste
 
 /* Listen-at-most 40 ms per cadence gap, only outside flight windows.
  * PING echoes; TUNE_NEXT_CH is answered with echo=0xFF (unsupported on
- * beacon channels set by jumper) so the RX side learns the truth. */
+ * a beacon's build-time channel) so the RX side learns the truth. */
 void beacon_poll_commands(uint8_t in_flight)
 {
     if (in_flight) return;   /* flight windows are TX-dense; don't listen */
@@ -532,8 +532,8 @@ void beacon_transmit_callsign(uint8_t transmit_fast) {
     
     /* "CALLSIGN-<rocket id> CH<active channel>". No commas, so the receiver
      * parser classifies it as a callsign packet (must stay under its
-     * 16-char callsign limit: "KE0MZS-2 CH3" = 12). The channel reflects the
-     * backup jumper, letting the operator confirm airframe AND frequency. */
+     * 16-char callsign limit: "KE0MZS-2 CH3" = 12). The channel lets the
+     * operator confirm airframe AND frequency. */
     char callsign_msg[24];
     snprintf(callsign_msg, sizeof(callsign_msg), "%s-%u CH%u",
              BEACON_CALLSIGN, (unsigned)ROCKET_ID, (unsigned)radio_get_channel());

@@ -3,7 +3,8 @@
  * @brief Host-side unit tests for the transmitter LoRa radio glue
  *        (radio.cpp) with a stubbed RadioLib.
  *
- * Verifies jumper-based channel resolution (primary vs backup),
+ * Verifies the channel stays CHANNEL_DEFAULT (no backup jumper on the
+ * carrier, whatever A1 reads),
  * init success/failure bookkeeping, the radio_enable() re-init retry
  * ladder (3 attempts, then gives up), transmit plumbing + payload
  * capture, TXEN driving, and the uninitialized guards.

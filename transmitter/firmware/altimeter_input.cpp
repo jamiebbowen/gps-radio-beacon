@@ -31,7 +31,8 @@ static uint32_t s_last_log_ms[ALTIMETER_INPUTS];
 #if defined(__SAMD51__)
 /* TC3 off the core's 48 MHz generator (GCLK1), match-frequency mode at
  * ALT_RX_OVERSAMPLE x ALT_BAUD = 38.4 kHz. TC3_Handler is a weak alias in
- * the core; TC2 belongs to tone(), which this firmware never uses. */
+ * the core; the core's tone() takes TC0 on the SAMD51, and this firmware
+ * never uses it. */
 static void altimeter_timer_start(void)
 {
     GCLK->PCHCTRL[TC3_GCLK_ID].reg = GCLK_PCHCTRL_GEN_GCLK1 | GCLK_PCHCTRL_CHEN;

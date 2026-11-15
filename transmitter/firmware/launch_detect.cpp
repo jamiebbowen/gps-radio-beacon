@@ -533,9 +533,6 @@ uint32_t launch_detect_get_time_since_launch(uint32_t system_time_seconds) {
     return 0;
 }
 
-/**
- * Get current total acceleration magnitude (m/s²)
- */
 /* Peak |linear accel| (m/s^2) / |gyro| (rad/s) since `who` last took it -
  * every report counts, not just the one current when the consumer looks.
  * The consumer's next window starts at the current magnitude. */
@@ -561,7 +558,7 @@ bool launch_detect_get_imu_status(void) {
 }
 
 /**
- * Get individual acceleration components
+ * Get the latest gyro components (rad/s)
  */
 void launch_detect_get_gyro_rads(float* x, float* y, float* z) {
     if (x) *x = gyro_x;

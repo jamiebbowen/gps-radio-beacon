@@ -15,9 +15,9 @@
 // Pin assignments for ItsyBitsy M4 Express
 // E22-400M33S LoRa Module (SX1268) - SPI Interface
 // Carrier PCB v3 pinout: control pins moved onto the free analog pads:
-//   RXEN D13->A5, TXEN D12->A4, DIO2 D11->A3. This frees D13 (onboard LED)
-//   and D11/D12 entirely. A3 is input-only territory: DIO2 is an output OF
-//   the module - never pinMode() it on this side.
+//   RXEN D13->A5, TXEN D12->A4, DIO2 D11->A3. That freed D13 (onboard LED)
+//   and D11/D12, now the altimeter inputs below. A3 is input-only
+//   territory: DIO2 is an output OF the module - never pinMode() it here.
 #define LORA_CS             5   // SPI Chip Select
 #define LORA_DIO1           9   // DIO1 interrupt pin (TxDone/RxDone)
 #define LORA_BUSY           7   // BUSY status pin (NOTE: No pin 6 on ItsyBitsy M4!)
@@ -33,10 +33,12 @@
 // GPS UART uses Hardware Serial1
 #define GPS_SERIAL Serial1
 
-// Commercial altimeter serial inputs (carrier J2/J5/J6: 5 V TTL through
+// Commercial altimeter serial inputs (carrier J2/J5/J6: the altimeter's TTL
+// output - 5 V, or 3.3 V CMOS on the StratoLogger CF and Eggtimer - through
 // 10k/20k dividers), 9600 8N1, receive only, all on PORT group A and read
 // by the TC3 sampling interrupt (altimeter_input.cpp). D13 is also the
-// ItsyBitsy's red LED, which loads J2's divider - bench-check its level.
+// ItsyBitsy's red LED, which loads J2's divider - bench-check its level: a
+// 3.3 V altimeter reaches only ~2.2 V on J5/J6 (VIH is ~1.82 V), less on J2.
 #define ALT_J2_PIN          13          // D13 = PA22
 #define ALT_J5_PIN          12          // D12 = PA23
 #define ALT_J6_PIN          11          // D11 = PA21

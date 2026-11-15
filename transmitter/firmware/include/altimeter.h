@@ -1,8 +1,8 @@
 /**
  * @file altimeter.h
  * @brief Decoders for the commercial altimeters on the carrier's serial
- *        inputs (J2/J5/J6: 5 V logic through 10k/20k dividers to D13/D12/
- *        D11), 9600 8N1 ASCII. Each input recognises its format from the
+ *        inputs (J2/J5/J6: 5 V or 3.3 V logic through 10k/20k dividers to
+ *        D13/D12/D11), 9600 8N1 ASCII. Each input recognises its format from the
  *        data:
  *  - PerfectFlite StratoLogger CF telemetry: one altitude (ft) per line,
  *    CR LF, ~20 Hz in flight;
