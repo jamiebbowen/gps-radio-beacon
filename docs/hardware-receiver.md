@@ -189,7 +189,7 @@ used here**), and 3 onboard buttons (**not used - jogpad replaces them**).
 | **PB3** | GPIO_OUT | D/C | eInk Data/Command |
 | **PB5** | GPIO_OUT | SRCS | SRAM chip select |
 | **PB4** | GPIO_OUT | RST | eInk reset |
-| **PA1** | GPIO_IN | BUSY | eInk busy (on breakout pad - solder a wire) |
+| **PA1** | GPIO_IN | BUSY | eInk busy (on breakout pad - solder a wire: the receiver PCB leaves it unrouted, J13 pin 9 NC). Without the wire the firmware gives each refresh a fixed 30 s and logs `EINK BUSY not wired - fixed-time refresh` once |
 | - | - | SDCS | **Not connected** (existing PA4 SD module is used) |
 | - | - | EN | **Not connected** (internal pull-up keeps regulator on) |
 | - | - | A / B / C buttons | **Not connected** (jogpad covers all input) |

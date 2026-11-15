@@ -224,6 +224,33 @@ TEST(refresh_transfers_planes_then_completes)
     Eink_Service();
 }
 
+TEST(unwired_busy_waits_a_full_refresh)
+{
+    /* The panel PCB leaves BUSY unrouted (J13 pin 9 NC): without the
+     * hand-wired PA1 link the pin's pull-down reads "idle" at once. Deep
+     * sleep then would abort the refresh mid-waveform. */
+    reset_all();
+    Eink_Init();
+    pin_busy = 0;
+    CHECK(Eink_RequestRefresh() == 1);
+    uint32_t t0 = HAL_GetTick();       /* the refresh's own clock start */
+    Eink_Service();
+    Test_SetTick(t0 + 100);
+    tx_len = 0;
+    Eink_Service();
+    CHECK(Eink_IsBusy() == 1);                     /* still refreshing */
+    CHECK(find_cmd(0x10, 0) < 0);                  /* no deep sleep yet */
+    Test_SetTick(t0 + 29000);
+    Eink_Service();
+    CHECK(Eink_IsBusy() == 1);
+    Test_SetTick(t0 + 30500);
+    Eink_Service();
+    CHECK(Eink_IsBusy() == 0);                     /* a full refresh later */
+    CHECK(find_cmd(0x10, 0) >= 0);
+    CHECK(eink_error == 0);
+    CHECK(Eink_BusyUnwired() == 1);
+}
+
 TEST(stuck_busy_times_out_and_latches_error)
 {
     reset_all();
@@ -279,6 +306,7 @@ int main(void)
     run_fill_rect_draws_and_clips();
     run_text_scale_clamped_and_clipped();
     run_refresh_transfers_planes_then_completes();
+    run_unwired_busy_waits_a_full_refresh();
     run_stuck_busy_times_out_and_latches_error();
     run_powerup_stuck_busy_latches_error_and_continues();
     run_refresh_repins_eink_bus_speed();

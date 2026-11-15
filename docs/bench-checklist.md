@@ -60,6 +60,9 @@ Connect the beacon over USB and watch the first seconds of boot:
       few seconds (each try deafens the receiver ~1.8 s - expected).
       `no ACK after 3 tries` means the beacon never heard it: check the
       beacon's USB log for `[2way] CMD answered`.
+- [ ] E-ink with the PA1 BUSY wire fitted: LOG.TXT has no `EINK BUSY not
+      wired` row after the first summary refresh, and the panel finishes
+      each refresh (no half-drawn red layer).
 - [ ] With a second beacon on the same channel, its heartbeats log as
       `HEARTBEAT FOREIGN ...` and never raise a `TX reset` ERROR row.
 - [ ] Pad wait: leave the beacon past its 60 s turn-on minute (PRE_LAUNCH:

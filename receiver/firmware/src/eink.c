@@ -53,6 +53,16 @@ static Eink_State eink_state = EINK_IDLE;
 static uint32_t refresh_start_ms = 0;
 static uint8_t eink_error = 0;
 
+/* BUSY rises within microseconds of MASTER_ACTIVATE. If it never does,
+ * the line is not wired: the panel PCB leaves it unrouted (J13 pin 9 NC)
+ * and the hand-wired PA1 link is missing, so the pull-down reads "idle".
+ * The refresh then gets a fixed full tri-color update time (~25 s) before
+ * deep sleep, instead of being aborted mid-waveform. */
+#define EINK_BUSY_RISE_MS        50u
+#define EINK_NO_BUSY_REFRESH_MS  30000u
+static uint8_t busy_seen = 0;       /* BUSY read high during this refresh */
+static uint8_t busy_unwired = 0;    /* sticky: a refresh never saw BUSY   */
+
 /* --- low-level ---------------------------------------------------------- */
 
 static void eink_set_bus_speed(void)
@@ -190,6 +200,8 @@ static void eink_deep_sleep(void)
 
 uint8_t Eink_Init(void)
 {
+  busy_seen = 0;
+  busy_unwired = 0;
   eink_set_bus_speed();
   Eink_Clear();
   eink_power_up();
@@ -268,7 +280,13 @@ uint8_t Eink_RequestRefresh(void)
 
   eink_state = EINK_REFRESHING;
   refresh_start_ms = HAL_GetTick();
+  busy_seen = 0;
   return 1;
+}
+
+uint8_t Eink_BusyUnwired(void)
+{
+  return busy_unwired;
 }
 
 uint8_t Eink_IsBusy(void)
@@ -280,14 +298,23 @@ void Eink_Service(void)
 {
   if (eink_state != EINK_REFRESHING) return;
 
-  if (!eink_busy()) {
-    /* Physical refresh done - park the panel in deep sleep. */
-    eink_deep_sleep();
-    eink_state = EINK_IDLE;
-  } else if (HAL_GetTick() - refresh_start_ms > EINK_REFRESH_TIMEOUT_MS) {
-    /* BUSY stuck (wire off the pad? panel dead?): give up this refresh and
-     * mark the error; a reboot-side Eink_Init is the recovery path. */
-    eink_error = 1;
-    eink_state = EINK_IDLE;
+  uint32_t elapsed = HAL_GetTick() - refresh_start_ms;
+  if (eink_busy()) {
+    busy_seen = 1;
+    if (elapsed > EINK_REFRESH_TIMEOUT_MS) {
+      /* BUSY stuck (wire off the pad? panel dead?): give up this refresh
+       * and mark the error; a reboot-side Eink_Init is the recovery path. */
+      eink_error = 1;
+      eink_state = EINK_IDLE;
+    }
+    return;
   }
+  if (!busy_seen) {
+    if (elapsed < EINK_BUSY_RISE_MS) return;
+    busy_unwired = 1;
+    if (elapsed < EINK_NO_BUSY_REFRESH_MS) return;
+  }
+  /* Physical refresh done - park the panel in deep sleep. */
+  eink_deep_sleep();
+  eink_state = EINK_IDLE;
 }
