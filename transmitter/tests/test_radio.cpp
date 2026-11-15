@@ -45,7 +45,7 @@ static int rxen_high_writes = 0;   /* RXEN driven high (LNA side selected)   */
 void pinMode(int pin, int mode) { (void)pin; (void)mode; }
 int digitalRead(int pin)
 {
-    if (pin == CHANNEL_JUMPER_PIN) return jumper_level;
+    if (pin == A1) return jumper_level;          /* unrouted on the carrier */
     if (pin == LORA_BUSY) return busy_level;
     return LOW;
 }
@@ -162,15 +162,18 @@ TEST(test_init_current_limit_failure_is_advisory)
     CHECK(strstr(Serial.log, "setCurrentLimit failed") != NULL);
 }
 
-TEST(test_init_backup_jumper)
+TEST(test_init_channel_is_compile_time)
 {
+    /* The carrier board has no backup-channel jumper: A1 is unrouted, and
+     * whatever a floating A1 reads must not move the beacon off
+     * LORA_CHANNEL (the receiver would be listening elsewhere). */
     reset_knobs();
-    jumper_level = LOW;                        /* shorted to GND */
+    jumper_level = LOW;                        /* A1 happens to read low */
     radio_init();
 
-    CHECK(radio_get_channel() == LORA_CHANNEL_BACKUP);
-    CHECK(radiolib_begin_freq == LORA_CHANNEL_FREQ(LORA_CHANNEL_BACKUP));
-    CHECK(strstr(Serial.log, "backup jumper") != NULL);
+    CHECK(radio_get_channel() == LORA_CHANNEL);
+    CHECK(radiolib_begin_freq == LORA_CHANNEL_FREQ(LORA_CHANNEL));
+    CHECK(strstr(Serial.log, "backup jumper") == NULL);
 }
 
 TEST(test_init_failure_and_transmit_guard)
@@ -552,7 +555,7 @@ int main(void)
 {
     run_test_init_primary_channel();
     run_test_init_current_limit_failure_is_advisory();
-    run_test_init_backup_jumper();
+    run_test_init_channel_is_compile_time();
     run_test_init_failure_and_transmit_guard();
     run_test_enable_retries_then_gives_up();
     run_test_enable_recovers_on_retry();
