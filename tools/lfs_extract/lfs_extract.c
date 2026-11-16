@@ -11,9 +11,8 @@
  * Notes:
  *   - Requires raw block-device read permission. On Linux this typically means
  *     sudo, unless the user is in the "disk" group.
- *   - The on-card geometry MUST match the firmware: 512 B sectors, 4 KiB
- *     LittleFS blocks (8 sectors per block). These are wired into lfs_sd_bd.c
- *     on the device side; any change there must be mirrored here.
+ *   - The on-card geometry is the firmware's own (LFS_SD_* in
+ *     receiver/firmware/inc/lfs_sd_bd.h), so the two cannot drift apart.
  *   - The tool also prints a short summary at the end: file count, total
  *     bytes copied, and the percent of card space in use.
  */
@@ -30,13 +29,7 @@
 #include <unistd.h>
 
 #include "lfs.h"
-
-/* Must match firmware/src/lfs_sd_bd.c */
-#define SECTOR_SIZE        512U
-#define LFS_BLOCK_SIZE     4096U
-#define SECTORS_PER_BLOCK  (LFS_BLOCK_SIZE / SECTOR_SIZE)
-#define CACHE_SIZE         512U
-#define LOOKAHEAD          128U
+#include "lfs_sd_bd.h"   /* LFS_SD_*: the geometry the firmware writes */
 
 static int dev_fd = -1;
 
@@ -48,7 +41,7 @@ static int dev_fd = -1;
 static int bd_read(const struct lfs_config *c, lfs_block_t block,
                    lfs_off_t off, void *buffer, lfs_size_t size) {
     (void)c;
-    off_t byte_off = (off_t)block * LFS_BLOCK_SIZE + off;
+    off_t byte_off = (off_t)block * LFS_SD_BLOCK_SIZE + off;
     ssize_t n = pread(dev_fd, buffer, size, byte_off);
     if (n != (ssize_t)size) {
         fprintf(stderr, "pread(%zu @ %lld) = %zd (%s)\n",
@@ -92,7 +85,7 @@ static unsigned total_files;
 
 static int copy_file(lfs_t *lfs, const char *lfs_path, const char *host_path) {
     lfs_file_t lfile;
-    uint8_t fbuf[CACHE_SIZE];
+    uint8_t fbuf[LFS_SD_CACHE_SIZE];
     struct lfs_file_config fcfg = { .buffer = fbuf, .attrs = NULL, .attr_count = 0 };
 
     int err = lfs_file_opencfg(lfs, &lfile, lfs_path, LFS_O_RDONLY, &fcfg);
@@ -196,25 +189,25 @@ int run_extract(const char *dev, const char *out)
         fprintf(stderr, "cannot determine size of %s\n", dev);
         return 1;
     }
-    uint32_t block_count = (uint32_t)(dev_bytes / LFS_BLOCK_SIZE);
+    uint32_t block_count = (uint32_t)(dev_bytes / LFS_SD_BLOCK_SIZE);
     printf("Device: %s\n", dev);
     printf("Size:   %.2f GiB (%u LFS blocks)\n",
            (double)dev_bytes / (1024.0 * 1024.0 * 1024.0), block_count);
 
-    static uint8_t read_buf[CACHE_SIZE];
-    static uint8_t prog_buf[CACHE_SIZE];
-    static uint8_t lookahead_buf[LOOKAHEAD];
+    static uint8_t read_buf[LFS_SD_CACHE_SIZE];
+    static uint8_t prog_buf[LFS_SD_CACHE_SIZE];
+    static uint8_t lookahead_buf[LFS_SD_LOOKAHEAD];
 
     struct lfs_config cfg = {
         .context = NULL,
         .read = bd_read, .prog = bd_prog, .erase = bd_erase, .sync = bd_sync,
-        .read_size = SECTOR_SIZE,
-        .prog_size = SECTOR_SIZE,
-        .block_size = LFS_BLOCK_SIZE,
+        .read_size = LFS_SD_SECTOR_SIZE,
+        .prog_size = LFS_SD_SECTOR_SIZE,
+        .block_size = LFS_SD_BLOCK_SIZE,
         .block_count = block_count,
-        .block_cycles = 500,
-        .cache_size = CACHE_SIZE,
-        .lookahead_size = LOOKAHEAD,
+        .block_cycles = LFS_SD_BLOCK_CYCLES,
+        .cache_size = LFS_SD_CACHE_SIZE,
+        .lookahead_size = LFS_SD_LOOKAHEAD,
         .read_buffer = read_buf,
         .prog_buffer = prog_buf,
         .lookahead_buffer = lookahead_buf,

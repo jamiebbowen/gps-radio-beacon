@@ -62,16 +62,19 @@ make extract DEV=/dev/sdb OUT=./flight_data
 make format-card DEV=/dev/sdb
 ```
 
-## Constraint: geometry must match the firmware
+## Geometry: shared with the firmware
 
-The on-card layout is defined in `receiver/firmware/src/lfs_sd_bd.c`:
+The on-card layout is `LFS_SD_*` in `receiver/firmware/inc/lfs_sd_bd.h`,
+and both tools build from that header, so they always match the firmware:
 
 | Parameter   | Value  |
 |-------------|--------|
 | Sector size | 512 B  |
 | Block size  | 4096 B |
-| Cache size  | 512 B  |
+| Cache size  | 4096 B |
 | Lookahead   | 128 B  |
 
-`lfs_extract.c` mirrors these constants. If you ever tune them on the
-firmware side, update this file to match (and reformat existing cards).
+Changing the block size makes every formatted card unreadable: reformat
+existing cards. `receiver/tests/test_lfs_sd_bd.c` pins the pairing end to
+end: a card the firmware writes extracts, and a card `lfs_format` writes
+mounts in the firmware.

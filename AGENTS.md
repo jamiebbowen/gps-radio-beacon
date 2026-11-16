@@ -69,6 +69,10 @@ explicit `make -C receiver/firmware flash` or `make -C transmitter/firmware uplo
   through every free block (hours on a 16 GB card, so the IWDG resets the
   receiver) and sd_card.c's write-error ladder never sees the error. The
   card's FTL retires its own bad flash.
+- **The SD card's LittleFS geometry is `LFS_SD_*` in `lfs_sd_bd.h`**, the one
+  copy: the firmware, `sd_card.c`'s file caches and `tools/lfs_extract`
+  build from it. Changing the block size makes every formatted card
+  unreadable (and the firmware never reformats a card holding LittleFS).
 - **TC3 is the altimeter-input sampler** (38.4 kHz, `altimeter_input.cpp`;
   D11/D12/D13 are the J6/J5/J2 serial inputs). Its 48 MHz source runs open
   loop in flight: keep `alt_rx_sample`'s edge re-sync (the window is pinned

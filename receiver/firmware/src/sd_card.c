@@ -113,10 +113,10 @@ static char          log_buffer[SD_CARD_LOG_BUFFER_SIZE];
 static uint32_t      log_sequence   = 0;
 
 /* Static per-file cache for the log file so LittleFS never calls malloc.
- * Size MUST equal cfg.cache_size (4096, defined in lfs_sd_bd.c). A full-block
+ * One LittleFS cache (LFS_SD_CACHE_SIZE, lfs_sd_bd.h). A full-block
  * cache means a cluster of CSV rows accumulates in RAM and is flushed with a
  * single 4 KiB program operation, rather than 8 separate 512 B ops. */
-static uint8_t log_file_cache[4096];
+static uint8_t log_file_cache[LFS_SD_CACHE_SIZE];
 static struct lfs_file_config log_file_cfg = {
     .buffer   = log_file_cache,
     .attrs    = NULL,
@@ -128,7 +128,7 @@ static struct lfs_file_config log_file_cfg = {
  * log file has its own dedicated cache above. Under LFS_NO_MALLOC every file
  * open must supply its own cache buffer, so lfs_file_opencfg is the only
  * available open API. */
-static uint8_t adhoc_file_cache[4096];
+static uint8_t adhoc_file_cache[LFS_SD_CACHE_SIZE];
 static struct lfs_file_config adhoc_file_cfg = {
     .buffer   = adhoc_file_cache,
     .attrs    = NULL,

@@ -26,7 +26,7 @@ make clean
 | `display.c` — SSD1309 driver incl. headless I2C fault ladder | `test_display.c` | 100% / 97.7% |
 | `gps.c` — sentence RX path, FIFO drop-oldest, watchdog, rx stats | `test_gps.c` | 100% / 96.7% |
 | `sd_card.c` — LittleFS logging incl. IO-error retry, failed syncs, recovery ladder | `test_sd_card.c` | 98.2% / 71.3% |
-| `lfs_sd_bd.c` — LittleFS block device over the SD sector driver: geometry, retries, write failure as `LFS_ERR_IO` | `test_lfs_sd_bd.c` | 100% / 100% |
+| `lfs_sd_bd.c` — LittleFS block device over the SD sector driver: geometry, retries, write failure as `LFS_ERR_IO`; cards round-trip through `lfs_extract` / `lfs_format` | `test_lfs_sd_bd.c` | 100% / 100% |
 | `lora.c` — SX1268 driver incl. CAD, CRC-frame capture, long-preamble TX | `test_lora.c` | 100% / 88.5% |
 | `compass.c` — heading pipeline incl. declination lattice & quat-lock table | `test_compass.c` | 100% / 84.3% |
 | `bno085.c` — SHTP transport and SH-2 record framing (hub-faithful fake) | `test_compass.c` | 100% / 88.0% |
