@@ -52,14 +52,14 @@
 /* ------------------------------------------------------------------ */
 
 #define CARD_SECTORS (8u * 2048u)          /* 8 MiB card: 2048 LittleFS blocks */
-#define CARD_BLOCKS  (CARD_SECTORS / 8u)
+#define CARD_BLOCKS  (CARD_SECTORS / LFS_SD_SECTORS_PER_BLOCK)
 
 static struct shared {
     int         run, failed;               /* CHECK counts from boot processes */
     uint8_t     reset_seen;                /* the last boot ended in a reset   */
     uint8_t     crash_valid;               /* crash RAM carried into next boot */
     CrashRecord crash;
-    uint8_t     card[CARD_SECTORS * 512u];
+    uint8_t     card[CARD_SECTORS * LFS_SD_SECTOR_SIZE];
 } *sh;
 
 /* ------------------------------------------------------------------ */
@@ -698,16 +698,19 @@ static void rf_position(float lat, float lon, int16_t rssi)
 /* ------------------------------------------------------------------ */
 
 static int rd_read(const struct lfs_config *c, lfs_block_t b, lfs_off_t off, void *buf, lfs_size_t n)
-{ (void)c; memcpy(buf, &sh->card[b * 4096u + off], n); return 0; }
+{ (void)c; memcpy(buf, &sh->card[b * LFS_SD_BLOCK_SIZE + off], n); return 0; }
 static int rd_prog(const struct lfs_config *c, lfs_block_t b, lfs_off_t off, const void *buf, lfs_size_t n)
-{ (void)c; memcpy(&sh->card[b * 4096u + off], buf, n); return 0; }
+{ (void)c; memcpy(&sh->card[b * LFS_SD_BLOCK_SIZE + off], buf, n); return 0; }
 static int rd_erase(const struct lfs_config *c, lfs_block_t b) { (void)c; (void)b; return 0; }
 static int rd_sync(const struct lfs_config *c) { (void)c; return 0; }
-static uint8_t rd_rbuf[4096], rd_pbuf[4096], rd_look[128], rd_fbuf[4096];
+static uint8_t rd_rbuf[LFS_SD_CACHE_SIZE], rd_pbuf[LFS_SD_CACHE_SIZE];
+static uint8_t rd_look[LFS_SD_LOOKAHEAD], rd_fbuf[LFS_SD_CACHE_SIZE];
 static const struct lfs_config rd_cfg = {
     .read = rd_read, .prog = rd_prog, .erase = rd_erase, .sync = rd_sync,
-    .read_size = 512, .prog_size = 512, .block_size = 4096, .block_count = CARD_BLOCKS,
-    .block_cycles = 500, .cache_size = 4096, .lookahead_size = 128,
+    .read_size = LFS_SD_SECTOR_SIZE, .prog_size = LFS_SD_SECTOR_SIZE,
+    .block_size = LFS_SD_BLOCK_SIZE, .block_count = CARD_BLOCKS,
+    .block_cycles = LFS_SD_BLOCK_CYCLES, .cache_size = LFS_SD_CACHE_SIZE,
+    .lookahead_size = LFS_SD_LOOKAHEAD,
     .read_buffer = rd_rbuf, .prog_buffer = rd_pbuf, .lookahead_buffer = rd_look,
 };
 static const struct lfs_file_config rd_fcfg = { .buffer = rd_fbuf };

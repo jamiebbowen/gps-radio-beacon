@@ -130,11 +130,15 @@ $(BUILD)/test_main: test_main.c $(SRC_DIR)/main.c $(MAIN_SRCS) \
 	    $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(LDFLAGS)
 
 # lfs_sd_bd.c: the real block device under the real LittleFS, with the
-# card faked at the sd_diskio sector API (see test_lfs_sd_bd.c)
+# card faked at the sd_diskio sector API (see test_lfs_sd_bd.c), plus the
+# host tools that format and extract cards, run against the same image.
+TOOLS_DIR := ../../tools/lfs_extract
 $(BUILD)/test_lfs_sd_bd: test_lfs_sd_bd.c $(SRC_DIR)/lfs_sd_bd.c \
+                         $(TOOLS_DIR)/lfs_extract.c $(TOOLS_DIR)/lfs_format.c \
                          $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(HEADERS) | $(BUILD)
-	$(CC) $(CFLAGS) $(COVFLAGS) $(LFS_CFLAGS) \
-	    -o $@ $< $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(LDFLAGS)
+	$(CC) $(CFLAGS) $(COVFLAGS) $(LFS_CFLAGS) -DLFS_EXTRACT_NO_MAIN -DLFS_FORMAT_NO_MAIN \
+	    -o $@ $< $(TOOLS_DIR)/lfs_extract.c $(TOOLS_DIR)/lfs_format.c \
+	    $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(LDFLAGS)
 
 .PHONY: all test coverage sanitize clean
 

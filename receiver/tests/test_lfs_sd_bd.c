@@ -13,16 +13,26 @@
  * (sector) addressing, 512-byte sectors, and an address past the end
  * rejected. The real LittleFS runs on top with the firmware's real
  * geometry (4 KiB blocks and caches, 128-byte lookahead).
+ *
+ * The host tools ride along (tools/lfs_extract, linked in): a card the
+ * firmware writes must extract, and a card `make format-card` writes must
+ * mount in the firmware - the firmware never formats a card that already
+ * holds LittleFS, so a mismatch there is an SD error on launch day.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "../firmware/src/lfs_sd_bd.c"
 #include "test_harness.h"
 
+int run_extract(const char *device, const char *outdir);   /* lfs_extract.c */
+int run_format(const char *device, int force);              /* lfs_format.c */
+
 /* ---- sd_diskio fakes: a 4 MiB card --------------------------------- */
 #define CARD_SECTORS (4u * 2048u)     /* 1024 LittleFS blocks */
-static uint8_t card[CARD_SECTORS * 512u];
+static uint8_t card[CARD_SECTORS * LFS_SD_SECTOR_SIZE];
 
 uint8_t SD_Type = 0;                  /* 0 until SD_initialize succeeds */
 static DSTATUS fake_init_status  = 0;
@@ -98,7 +108,7 @@ static void reset_card(void)
 }
 
 /* The log file's cache, as sd_card.c supplies it (cache_size bytes) */
-static uint8_t file_cache[4096];
+static uint8_t file_cache[LFS_SD_CACHE_SIZE];
 static const struct lfs_file_config file_cfg = { .buffer = file_cache };
 
 TEST(test_init_failures_leave_no_card)
@@ -125,7 +135,7 @@ TEST(test_init_sizes_the_filesystem_to_the_card)
     reset_card();
     fake_sector_count = 31116288u;                 /* a "16 GB" SDHC card */
     CHECK(lfs_sd_bd_init() == 0);
-    CHECK(lfs_sd_cfg.block_count == 31116288u / 8u);
+    CHECK(lfs_sd_cfg.block_count == 31116288u / LFS_SD_SECTORS_PER_BLOCK);
     CHECK(lfs_sd_bd_capacity_mb() == 15193u);
     /* CMD9 runs at the slow init clock, then the bus speeds up, once */
     CHECK(fast_speed_calls == 1 && csd_after_fast == 0);
@@ -134,7 +144,7 @@ TEST(test_init_sizes_the_filesystem_to_the_card)
     reset_card();
     fake_sector_count = CARD_SECTORS + 5u;
     CHECK(lfs_sd_bd_init() == 0);
-    CHECK(lfs_sd_cfg.block_count == CARD_SECTORS / 8u);
+    CHECK(lfs_sd_cfg.block_count == CARD_SECTORS / LFS_SD_SECTORS_PER_BLOCK);
 
     /* A later failed init forgets the old card */
     fake_init_status = STA_NOINIT;
@@ -289,6 +299,89 @@ TEST(test_persistent_write_failure_surfaces_promptly)
     printf("  %lu SD writes before the error (%d)\n", writes, err);
 }
 
+/* ---- the host tools against the firmware's own cards ---------------- */
+
+static char tmp_image[64], tmp_dir[64];
+static void image_save(void)
+{
+    snprintf(tmp_image, sizeof(tmp_image), "/tmp/lfs_sd_bd_card.XXXXXX");
+    int fd = mkstemp(tmp_image);
+    CHECK(fd >= 0 && write(fd, card, sizeof(card)) == (ssize_t)sizeof(card));
+    close(fd);
+}
+
+static void image_load(void)
+{
+    FILE *f = fopen(tmp_image, "rb");
+    CHECK(f && fread(card, 1, sizeof(card), f) == sizeof(card));
+    if (f) fclose(f);
+}
+
+static void lfs_write_text(lfs_t *lfs, const char *name, const char *text)
+{
+    lfs_file_t f;
+    CHECK(lfs_file_opencfg(lfs, &f, name, LFS_O_WRONLY | LFS_O_CREAT | LFS_O_TRUNC,
+                           &file_cfg) == 0);
+    CHECK(lfs_file_write(lfs, &f, text, (lfs_size_t)strlen(text)) == (lfs_ssize_t)strlen(text));
+    CHECK(lfs_file_close(lfs, &f) == 0);
+}
+
+TEST(test_a_card_the_firmware_writes_extracts)
+{
+    reset_card();
+    CHECK(lfs_sd_bd_init() == 0);
+    lfs_t lfs;
+    CHECK(lfs_format(&lfs, &lfs_sd_cfg) == 0);
+    CHECK(lfs_mount(&lfs, &lfs_sd_cfg) == 0);
+    static char log[3 * LFS_SD_BLOCK_SIZE];       /* spans blocks: CTZ list */
+    size_t n = 0;
+    for (int i = 0; n + 64 < sizeof(log); i++)
+        n += (size_t)snprintf(log + n, sizeof(log) - n, "%d.000,EVENT,row %d\n", i, i);
+    lfs_write_text(&lfs, "L0001.TXT", log);
+    lfs_write_text(&lfs, "BEACON.TXT", "39.8990000,-104.8850000,1700.0\n");
+    CHECK(lfs_unmount(&lfs) == 0);
+
+    image_save();
+    snprintf(tmp_dir, sizeof(tmp_dir), "/tmp/lfs_sd_bd_out.XXXXXX");
+    CHECK(mkdtemp(tmp_dir) != NULL);
+    CHECK(run_extract(tmp_image, tmp_dir) == 0);
+
+    char path[96];
+    static char got[sizeof(log)];
+    snprintf(path, sizeof(path), "%s/L0001.TXT", tmp_dir);
+    FILE *f = fopen(path, "rb");
+    size_t r = f ? fread(got, 1, sizeof(got), f) : 0;
+    if (f) fclose(f);
+    CHECK(r == n && memcmp(got, log, n) == 0);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/BEACON.TXT", tmp_dir);
+    f = fopen(path, "rb");
+    r = f ? fread(got, 1, sizeof(got), f) : 0;
+    if (f) fclose(f);
+    CHECK(r == 31 && memcmp(got, "39.8990000,-104.8850000,1700.0\n", 31) == 0);
+    unlink(path);
+    rmdir(tmp_dir);
+    unlink(tmp_image);
+}
+
+TEST(test_a_card_the_format_tool_writes_mounts)
+{
+    reset_card();                                 /* a blank card in a reader */
+    memset(card, 0, sizeof(card));
+    image_save();
+    CHECK(run_format(tmp_image, 1) == 0);
+    image_load();
+    unlink(tmp_image);
+
+    CHECK(lfs_sd_bd_init() == 0);                 /* the firmware's own mount */
+    lfs_t lfs;
+    CHECK(lfs_mount(&lfs, &lfs_sd_cfg) == 0);
+    lfs_write_text(&lfs, "L0001.TXT", "0.000,EVENT,first row\n");
+    struct lfs_info info;
+    CHECK(lfs_stat(&lfs, "L0001.TXT", &info) == 0 && info.size == 22);
+    CHECK(lfs_unmount(&lfs) == 0);
+}
+
 int main(void)
 {
     run_test_init_failures_leave_no_card();
@@ -298,5 +391,7 @@ int main(void)
     run_test_transient_errors_are_retried_a_bounded_number_of_times();
     run_test_real_geometry_round_trip();
     run_test_persistent_write_failure_surfaces_promptly();
+    run_test_a_card_the_firmware_writes_extracts();
+    run_test_a_card_the_format_tool_writes_mounts();
     return TEST_SUMMARY();
 }
