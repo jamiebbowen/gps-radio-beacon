@@ -34,7 +34,7 @@ SRC_DIR  := ../firmware/src
 # Defined BEFORE any rule: prerequisite lists expand immediately, so a
 # later definition would leave every explicit rule below with no header
 # dependencies at all.
-HEADERS := $(wildcard ../firmware/inc/*.h ../firmware/inc/display_modes/*.h test_harness.h stubs/*.h) Makefile
+HEADERS := $(wildcard ../firmware/inc/*.h ../firmware/inc/display_modes/*.h test_harness.h fake_sd_card.h stubs/*.h) Makefile
 
 # Modules with a matching test_<module>.c and $(SRC_DIR)/<module>.c
 MODULES  := rf_parser gps_parser math_utils rf_receiver button display gps sd_card lora compass i2c_bus jogpad eink sd_diskio preflight_eval log_policy beacon_track rx_channel eink_summary lfs_sd_bd
@@ -113,7 +113,7 @@ $(BUILD)/test_sd_card: test_sd_card.c $(SRC_DIR)/sd_card.c \
 	    -o $@ $< $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(LDFLAGS)
 
 # main.c itself: boot and main loop over the real sd_card.c/lfs_sd_bd.c/
-# LittleFS on a RAM card and the real logic modules it composes; the
+# LittleFS on the shared card fake and the real logic modules it composes; the
 # hardware-facing modules are faked at their API inside test_main.c.
 # -pthread: the firmware runs on its own thread (see test_main.c).
 # GIT_HASH_STR as the firmware Makefile defines it, so the BOOT row's

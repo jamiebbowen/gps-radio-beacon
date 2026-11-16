@@ -8,10 +8,9 @@
  * the firmware compile alone, while the modules it calls are host-tested.
  *
  * The real main.c runs here, renamed receiver_main(), over:
- *  - the real sd_card.c + lfs_sd_bd.c + LittleFS on a RAM card faked at the
- *    sd_diskio sector API, with the time a transfer takes at the 656 kHz
- *    data clock; assertions read the log back off the card, the way
- *    `make extract` does (block b at byte b * 4096);
+ *  - the real sd_card.c + lfs_sd_bd.c + LittleFS on the shared card fake
+ *    (fake_sd_card.h), timed at the 656 kHz data clock; assertions read the
+ *    log back off the card, the way `make extract` does;
  *  - the real logic modules it composes (beacon_track, rx_channel,
  *    log_policy, preflight_eval, eink_summary, math_utils, rf_parser);
  *  - fakes at the API of the hardware-facing modules (rf_receiver, gps,
@@ -246,64 +245,20 @@ void NVIC_SystemReset(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* sd_diskio fakes: the card, with transfer time at the data clock     */
+/* The card: the shared sd_diskio fake, in shared memory, timed        */
 /* ------------------------------------------------------------------ */
 
-uint8_t SD_Type = 0;
-uint8_t sd_diag_cmd_resp = 0, sd_diag_data_token = 0, sd_diag_wait_fail = 0;
-static struct {
-    uint8_t  absent;                       /* no card answers CMD0          */
-    uint8_t  read_only;                    /* every write gets an error token */
-    uint8_t  div;                          /* SPI prescaler in effect       */
-    uint32_t stepdowns, writes, write_errors;
-} sd;
+#define FAKE_SD_SECTORS CARD_SECTORS
+#define FAKE_SD_STORAGE (sh->card)
+#include "fake_sd_card.h"
 
+#define SD_INIT_MS              200u       /* CMD0..ACMD41 at the 41 kHz init clock */
 #define SD_READ_MS_PER_SECTOR   7u         /* ~530 bytes at 656 kHz */
 #define SD_WRITE_MS_PER_SECTOR  8u         /* plus the card's busy time */
-
-DSTATUS SD_initialize(BYTE pdrv)
+static void card_time(int op, UINT sectors)
 {
-    (void)pdrv;
-    sim_advance(200);
-    SD_Type = sd.absent ? 0 : 12;
-    return sd.absent ? STA_NOINIT : 0;
-}
-DRESULT SD_ioctl(BYTE pdrv, BYTE cmd, void *buff)
-{
-    if (pdrv) return RES_PARERR;
-    if (!SD_Type) return RES_NOTRDY;
-    if (cmd != GET_SECTOR_COUNT) return RES_PARERR;
-    *(DWORD *)buff = CARD_SECTORS;
-    return RES_OK;
-}
-void    SD_SetFastSpeed(void) { sd.div = 16; }
-uint8_t SD_FastSpeedEnabled(void) { return sd.div; }
-uint8_t SD_StepSpeedDown(void) { sd.stepdowns++; if (sd.div < 128) sd.div *= 2; return sd.div; }
-uint8_t SD_StepSpeedUpTry(void) { if (sd.div > 16) sd.div /= 2; return sd.div; }
-DRESULT SD_read(BYTE pdrv, BYTE *buff, DWORD sector, UINT count)
-{
-    if (pdrv || !count) return RES_PARERR;
-    if (!SD_Type) return RES_NOTRDY;
-    sim_advance(SD_READ_MS_PER_SECTOR * count);
-    if (sector + count > CARD_SECTORS) return RES_ERROR;
-    memcpy(buff, &sh->card[sector * 512u], count * 512u);
-    return RES_OK;
-}
-DRESULT SD_write(BYTE pdrv, const BYTE *buff, DWORD sector, UINT count)
-{
-    if (pdrv || !count) return RES_PARERR;
-    if (!SD_Type) return RES_NOTRDY;
-    sim_advance(SD_WRITE_MS_PER_SECTOR * count);
-    sd.writes++;
-    sd_diag_cmd_resp = 0x00;
-    if (sd.read_only || sector + count > CARD_SECTORS) {
-        sd.write_errors++;
-        sd_diag_data_token = 0x0D;          /* data response: write error */
-        return RES_ERROR;
-    }
-    sd_diag_data_token = 0x05;
-    memcpy(&sh->card[sector * 512u], buff, count * 512u);
-    return RES_OK;
+    sim_advance(op == FAKE_SD_INIT ? SD_INIT_MS
+              : (op == FAKE_SD_WRITE ? SD_WRITE_MS_PER_SECTOR : SD_READ_MS_PER_SECTOR) * sectors);
 }
 
 /* ------------------------------------------------------------------ */
@@ -803,7 +758,8 @@ static void board_defaults(void)
     on_pass = NULL;
     memset(&adc, 0, sizeof(adc));
     for (int i = 0; i < 8; i++) adc.raw[i] = 3100;     /* 3255 mV pack */
-    memset(&sd, 0, sizeof(sd));
+    fake_sd_reset();
+    fake_sd.on_op = card_time;
     memset(&ink, 0, sizeof(ink));
     memset(&btn, 0, sizeof(btn));
     memset(&gps, 0, sizeof(gps));
@@ -858,7 +814,7 @@ static void boot(void (*script)(void))
 
 static void card_blank(void)
 {
-    memset(sh->card, 0, sizeof(sh->card));
+    fake_sd_wipe(0x00);
     sh->crash_valid = 0;
     sh->reset_seen = 0;
 }
@@ -1079,20 +1035,20 @@ TEST(test_degraded_boots)
 
 static void script_no_card(void)
 {
-    sd.absent = 1;
+    fake_sd.absent = 1;
     sim_start();
     CHECK(shown("SD Card Error|Stat:1 CMD0:0x00|FS:91 DET:0|"));
     CHECK(Test_RCC.CSR & RCC_CSR_RMVF);    /* cleared even with nothing logged */
     rf.bound = 3;
     rf_position(39.899f, -104.885f, -80);
     run_ms(5000);
-    CHECK(sd.writes == 0);
+    CHECK(fake_sd.writes == 0);
     CHECK(rf.pings == 0);                  /* the binding row (and its PING) needs a card */
 }
 
 static void script_card_refuses_writes(void)
 {
-    sd.read_only = 1;                      /* formatted card gone read-only */
+    fake_sd.read_only = 1;                      /* formatted card gone read-only */
     sim_start();
     CHECK(shown("SD Self-Test FAIL|S:"));
     CHECK(shown("CMD:00 DT:0D T:12|"));
@@ -1104,14 +1060,14 @@ static void script_card_refuses_writes(void)
 
 static void script_selftest_fails_once(void)
 {
-    sd.read_only = 1;
+    fake_sd.read_only = 1;
     sim_start();
     CHECK(shown("SD Self-Test FAIL"));
-    sd.read_only = 0;                      /* the card works again */
-    uint32_t writes = sd.writes;
+    fake_sd.read_only = 0;                      /* the card works again */
+    uint32_t writes = fake_sd.writes;
     rf_position(39.899f, -104.885f, -80);
     run_ms(15000);
-    CHECK(sd.writes == writes);            /* no NAV row, no BEACON.TXT */
+    CHECK(fake_sd.writes == writes);            /* no NAV row, no BEACON.TXT */
 }
 
 static void script_card_fails_mid_session(void)
@@ -1127,7 +1083,7 @@ static void script_card_fails_mid_session(void)
 
     /* The card stops taking writes: the loop keeps running, the errors
      * reach sd_card.c's ladder and the bus steps down */
-    sd.read_only = 1;
+    fake_sd.read_only = 1;
     uint32_t loops0 = loops;
     for (int i = 0; i < 60; i++) {
         rf_position(39.899f, -104.885f, -80);
@@ -1135,13 +1091,13 @@ static void script_card_fails_mid_session(void)
     }
     SD_Card_Info info;
     SD_Card_GetInfo(&info);
-    CHECK(info.write_errors > 0 && sd.stepdowns > 0);
+    CHECK(info.write_errors > 0 && fake_sd.stepdowns > 0);
     CHECK(loops - loops0 > 3000);
     CHECK(iwdg_max_gap < iwdg_worst_timeout_ms());
-    CHECK(sd.write_errors < 400);          /* bounded retries, no relocation storm */
+    CHECK(fake_sd.write_errors < 400);          /* bounded retries, no relocation storm */
 
     /* It recovers: logging resumes in the same session file */
-    sd.read_only = 0;
+    fake_sd.read_only = 0;
     for (int i = 0; i < 40; i++) {
         rf_position(39.899f, -104.885f, -80);
         run_ms(1000);
@@ -1564,14 +1520,14 @@ static void script_radio_rows(void)
 
 static void script_radio_rows_without_card(void)
 {
-    sd.absent = 1;
+    fake_sd.absent = 1;
     sim_start();
     rf.cmd = (RF_CmdResult_t){ RF_CMD_EV_SENT, 0x01, 7, 1, 0, 0, 0 };
     rf.cmd_new = 1;
     rf.noise = 1;
     run_ms(100);
     CHECK(rf.cmd_new == 0);                /* still consumed */
-    CHECK(sd.writes == 0);
+    CHECK(fake_sd.writes == 0);
 }
 
 TEST(test_radio_breadcrumbs)
@@ -1838,7 +1794,7 @@ static void script_eink_and_preflight(void)
 
 static void script_eink_first_page(void)
 {
-    sd.absent = 1;                         /* no card screens: a short boot */
+    fake_sd.absent = 1;                         /* no card screens: a short boot */
     sim_start();
     CHECK(fake_tick_ms < 9000u);
     run_ms(9900u - fake_tick_ms);
