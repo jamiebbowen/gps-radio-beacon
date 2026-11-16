@@ -2,15 +2,17 @@
  * @file test_sd_card.c
  * @brief Host-side unit tests for the SD-card logging module.
  *
- * Runs the REAL LittleFS (linked from lib/littlefs) on top of a RAM block
- * device that replaces lfs_sd_bd.c. This exercises the actual on-card
- * format: mount-retry-then-format, lazy log-file creation with sequence
- * numbering, every log API's CSV output, beacon/compass-cal persistence
- * (including corruption rejection), format, and the self-test.
+ * Runs the REAL LittleFS (linked from lib/littlefs) over the real block
+ * device (lfs_sd_bd.c) on the shared sd_diskio card fake (fake_sd_card.h):
+ * the firmware's geometry and failure codes, end to end. This exercises
+ * the actual on-card format: mount-retry-then-format, lazy log-file
+ * creation with sequence numbering, every log API's CSV output,
+ * beacon/compass-cal persistence (including corruption rejection), format,
+ * and the self-test.
  *
- * Fault knobs on the RAM device simulate a dead card (init errors 91/92/99),
- * a card that cannot be written (format error 13), and a card that silently
- * drops writes (mount-after-format error 1).
+ * Fault knobs on the card simulate a dead card (init errors 91/92), a card
+ * that cannot be written (format error 13), a card that cannot be read
+ * (error 14), and a bus that went marginal at its clock (the step-down).
  *
  * Build & run:  make -C receiver/tests          (see tests/Makefile)
  * Coverage:     make -C receiver/tests coverage
@@ -53,115 +55,14 @@ static SD_Card_Status sd_flush(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* RAM block device (replaces lfs_sd_bd.c)                             */
+/* The card: the shared sd_diskio fake under the real lfs_sd_bd.c      */
 /* ------------------------------------------------------------------ */
 
-#define BD_BLOCK_SIZE  4096u
-#define BD_BLOCK_COUNT 1024u         /* 4 MiB card */
-
-static uint8_t bd_storage[BD_BLOCK_COUNT * BD_BLOCK_SIZE];
-
-static int bd_init_result     = 0;   /* lfs_sd_bd_init return knob      */
-static int bd_prog_fail       = 0;   /* all writes fail                 */
-static int bd_read_fail       = 0;   /* all reads fail (card not answering) */
-static int bd_prog_fail_until_stepdown = 0; /* writes fail until the bus steps down */
-static int bd_prog_calls      = 0;   /* progs attempted since start     */
-static int bd_prog_fail_from  = 0;   /* 0=off; N=prog #N onwards fails  */
-static int bd_sync_count      = 0;   /* syncs seen since reset          */
-static int bd_corrupt_at_sync = 0;   /* 0=off; N=corrupt on the Nth sync */
-
-static int ram_read(const struct lfs_config *c, lfs_block_t block,
-                    lfs_off_t off, void *buffer, lfs_size_t size)
-{
-    if (bd_read_fail) return LFS_ERR_IO;
-    (void)c;
-    memcpy(buffer, &bd_storage[block * BD_BLOCK_SIZE + off], size);
-    return 0;
-}
-
-static int ram_prog(const struct lfs_config *c, lfs_block_t block,
-                    lfs_off_t off, const void *buffer, lfs_size_t size)
-{
-    (void)c;
-    bd_prog_calls++;
-    if (bd_prog_fail || bd_prog_fail_until_stepdown) return LFS_ERR_IO;
-    if (bd_prog_fail_from && bd_prog_calls >= bd_prog_fail_from) return LFS_ERR_IO;
-    memcpy(&bd_storage[block * BD_BLOCK_SIZE + off], buffer, size);
-    return 0;
-}
-
-static int ram_erase(const struct lfs_config *c, lfs_block_t block)
-{
-    (void)c; (void)block;
-    return 0;
-}
-
-static int ram_sync(const struct lfs_config *c)
-{
-    (void)c;
-    bd_sync_count++;
-    if (bd_corrupt_at_sync && bd_sync_count == bd_corrupt_at_sync) {
-        /* Simulate a card whose final commit never reaches the medium:
-         * the sync "succeeds" but the superblock is lost. Format then
-         * reports success while the following mount finds nothing. */
-        memset(bd_storage, 0xFF, 2 * BD_BLOCK_SIZE);
-    }
-    return 0;
-}
-
-static uint8_t ram_read_buf[512];
-static uint8_t ram_prog_buf[512];
-static uint8_t ram_lookahead_buf[32];
-
-struct lfs_config lfs_sd_cfg = {
-    .read             = ram_read,
-    .prog             = ram_prog,
-    .erase            = ram_erase,
-    .sync             = ram_sync,
-    .read_size        = 512,
-    .prog_size        = 512,
-    .block_size       = BD_BLOCK_SIZE,
-    .block_count      = BD_BLOCK_COUNT,
-    .block_cycles     = 500,
-    .cache_size       = 512,
-    .lookahead_size   = 32,
-    .read_buffer      = ram_read_buf,
-    .prog_buffer      = ram_prog_buf,
-    .lookahead_buffer = ram_lookahead_buf,
-};
-
-int lfs_sd_bd_init(void)        { return bd_init_result; }
-int lfs_sd_bd_is_ready(void)    { return bd_init_result == 0; }
-uint32_t lfs_sd_bd_capacity_mb(void) { return 1; }
-
-/* Runtime speed-down reflex: count how often firmware asks the diskio layer
- * to step the bus down. Real hardware: sd_diskio.c walks the ladder. */
-int stepdown_calls = 0;
-uint8_t SD_StepSpeedDown(void)      /* matches diskio: returns new divider */
-{
-    static const uint8_t seq[] = { 4, 8, 16, 16 };
-    int i = stepdown_calls < 4 ? stepdown_calls : 3;
-    stepdown_calls++;
-    bd_prog_fail_until_stepdown = 0;   /* slower clock cures the glitch */
-    return seq[i];
-}
-
-int stepup_calls = 0;
-uint8_t SD_FastSpeedEnabled(void) { return (uint8_t)(16 >> stepup_calls); }
-uint8_t SD_StepSpeedUpTry(void)
-{
-    stepup_calls++;
-    return (uint8_t)(16 >> stepup_calls);   /* model: try always works */
-}
-
-/* sd_card.c's per-file caches are sized 4096; our cfg.cache_size is 512,
- * which is fine (buffer only needs to be >= cache_size). */
+#include "fake_sd_card.h"
 
 /* ------------------------------------------------------------------ */
 /* HAL / display fakes                                                 */
 /* ------------------------------------------------------------------ */
-
-uint8_t SD_Type = 0x04;              /* pretend SDHC */
 
 void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *init)
 {
@@ -190,10 +91,11 @@ static void wipe_card(void)
     /* Close/unmount first: on target you cannot wipe a mounted card, and
      * wiping under a live mount leaves stale open-file state behind. */
     sd_deinit();
-    memset(bd_storage, 0xFF, sizeof(bd_storage));  /* blank flash */
+    fake_sd_reset();                               /* a healthy card...  */
+    fake_sd_wipe(0xFF);                            /* ...erased          */
 }
 
-/** Read a whole file off the RAM card into buf; returns length or -1. */
+/** Read a whole file off the card into buf; returns length or -1. */
 static int read_file(const char *path, char *buf, int max)
 {
     lfs_file_t f;
@@ -214,19 +116,17 @@ TEST(test_init_bd_failure_codes)
 {
     /* Each block-device failure maps to a distinct display code so the
      * "Err: N" screen pinpoints the failed init step */
-    bd_init_result = -1;
+    fake_sd_reset();
+    fake_sd.absent = 1;                    /* CMD0/ACMD41 never answered */
     CHECK(SD_Card_Init() == SD_CARD_ERROR);
     CHECK(sd_info.write_errors == 91);
 
-    bd_init_result = -2;
+    fake_sd_reset();
+    fake_sd.csd_result = RES_ERROR;        /* CMD9 failed */
     CHECK(SD_Card_Init() == SD_CARD_ERROR);
     CHECK(sd_info.write_errors == 92);
 
-    bd_init_result = -5;
-    CHECK(SD_Card_Init() == SD_CARD_ERROR);
-    CHECK(sd_info.write_errors == 99);
-
-    bd_init_result = 0;
+    fake_sd_reset();
     CHECK(SD_Card_GetInfo(NULL) == SD_CARD_ERROR);
 }
 
@@ -238,7 +138,7 @@ TEST(test_init_blank_card_formats_and_mounts)
     SD_Card_Info info;
     CHECK(SD_Card_GetInfo(&info) == SD_CARD_OK);
     CHECK(info.is_mounted == 1);
-    CHECK(info.total_size_mb == 1);           /* fake bd reports 1 MiB */
+    CHECK(info.total_size_mb == FAKE_SD_SECTORS / 2048u);   /* 4 MiB card */
     CHECK(info.free_space_mb > 0);            /* 1024 blocks, few used */
     CHECK(SD_Card_IsPresent() == true);
 }
@@ -247,10 +147,10 @@ TEST(test_init_format_failure_paths)
 {
     /* Card refuses writes: format fails -> error 13 */
     wipe_card();
-    bd_prog_fail = 1;
+    fake_sd.read_only = 1;
     CHECK(SD_Card_Init() == SD_CARD_ERROR);
     CHECK(sd_info.write_errors == 13);
-    bd_prog_fail = 0;
+    fake_sd.read_only = 0;
 
     /* NOTE: the sibling branch (format OK but the immediate re-mount
      * fails, error code 1) is not reachable through a behavioral fake:
@@ -270,16 +170,16 @@ TEST(test_init_never_formats_a_card_holding_littlefs)
     CHECK(SD_Card_Init() == SD_CARD_OK);                /* blank: formats */
     /* The superblock magic the check looks for, pinned to a real format:
      * "littlefs" after the revision count and the superblock tag */
-    CHECK(memcmp(&bd_storage[8], "littlefs", 8) == 0 ||
-          memcmp(&bd_storage[BD_BLOCK_SIZE + 8], "littlefs", 8) == 0);
+    CHECK(memcmp(&fake_sd_storage[8], "littlefs", 8) == 0 ||
+          memcmp(&fake_sd_storage[LFS_SD_BLOCK_SIZE + 8], "littlefs", 8) == 0);
     CHECK(SD_Card_SaveLastBeacon(39.5f, -105.2f, 1655.0f) == SD_CARD_OK);
     sd_deinit();
 
     /* Unreadable: the mount and the superblock check both fail */
-    bd_read_fail = 1;
+    fake_sd.read_fails = UINT32_MAX;
     CHECK(SD_Card_Init() == SD_CARD_ERROR);
     CHECK(sd_info.write_errors == 14);
-    bd_read_fail = 0;
+    fake_sd.read_fails = 0;
     CHECK(SD_Card_Init() == SD_CARD_OK);
     float lat = 0, lon = 0, alt = 0;
     CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_OK);
@@ -288,13 +188,13 @@ TEST(test_init_never_formats_a_card_holding_littlefs)
 
     /* Readable, superblock there, metadata pair corrupt (both revision
      * counts flipped): still not formatted */
-    uint8_t rev0 = bd_storage[0], rev1 = bd_storage[BD_BLOCK_SIZE];
-    bd_storage[0] ^= 0xFF;
-    bd_storage[BD_BLOCK_SIZE] ^= 0xFF;
+    uint8_t rev0 = fake_sd_storage[0], rev1 = fake_sd_storage[LFS_SD_BLOCK_SIZE];
+    fake_sd_storage[0] ^= 0xFF;
+    fake_sd_storage[LFS_SD_BLOCK_SIZE] ^= 0xFF;
     CHECK(SD_Card_Init() == SD_CARD_ERROR);
     CHECK(sd_info.write_errors == 14);
-    bd_storage[0] = rev0;
-    bd_storage[BD_BLOCK_SIZE] = rev1;
+    fake_sd_storage[0] = rev0;
+    fake_sd_storage[LFS_SD_BLOCK_SIZE] = rev1;
     CHECK(SD_Card_Init() == SD_CARD_OK);
     lat = 0;
     CHECK(SD_Card_LoadLastBeacon(&lat, &lon, &alt) == SD_CARD_OK);
@@ -540,6 +440,9 @@ TEST(test_last_channel_persistence)
     CHECK(SD_Card_Init() == SD_CARD_OK);
     uint8_t ch = 0xEE;
     CHECK(SD_Card_LoadLastChannel(&ch) == SD_CARD_ERROR);     /* none yet */
+    fake_sd.read_only = 1;                 /* a card refusing writes says so */
+    CHECK(SD_Card_SaveLastChannel(5) == SD_CARD_ERROR);
+    fake_sd.read_only = 0;
     CHECK(SD_Card_SaveLastChannel(LORA_CHANNEL_COUNT) == SD_CARD_ERROR);
     CHECK(SD_Card_SaveLastChannel(5) == SD_CARD_OK);
     CHECK(SD_Card_LoadLastChannel(&ch) == SD_CARD_OK && ch == 5);
@@ -650,11 +553,11 @@ TEST(test_self_test_pass_and_write_failure)
 
     /* Write failure is reported with the failing step + lfs errno
      * (open with O_CREAT already needs a metadata write, so step 1) */
-    bd_prog_fail = 1;
+    fake_sd.read_only = 1;
     CHECK(SD_Card_SelfTest() == SD_CARD_ERROR);
     SD_Card_GetSelfTestError(&step, &fres);
     CHECK(step >= 1 && fres != 0);
-    bd_prog_fail = 0;
+    fake_sd.read_only = 0;
 }
 
 TEST(test_rotation_launchflag_and_write_failure)
@@ -689,7 +592,7 @@ TEST(test_rotation_launchflag_and_write_failure)
 
     /* NOTE: the littlefs-failure branches (mount-after-format, opencfg /
      * header-write / mid-session write errors) are correct defensive error
-     * handling but can't be driven faithfully by the RAM block device:
+     * handling but can't be driven faithfully through the card fake:
      * a failed prog leaves littlefs' program cache dirty, and the next
      * operation trips LFS_ASSERT(pcache->block == LFS_BLOCK_NULL), and the
      * self-test readback-mismatch branch can't be driven either (metadata
@@ -713,7 +616,7 @@ TEST(test_write_recovers_lost_mount)
 
     /* Simulate a recovered contact bounce: mount + handle gone, block
      * device healthy again, littlefs state clean. (A prog-failure
-     * mid-write is NOT simulated here - the RAM device leaves littlefs'
+     * mid-write is NOT simulated here - a failed prog leaves littlefs'
      * cache dirty, see the note in test_rotation_launchflag_and_write_failure.)
      * Statics are visible because this file #includes sd_card.c. */
     CHECK(lfs_file_close(&lfs, &log_file) == 0);
@@ -883,9 +786,9 @@ TEST(test_new_log_file_fault_sweep)
     for (int n = 1; n <= 16 && !created; n++) {
         wipe_card();
         CHECK(SD_Card_Init() == SD_CARD_OK);
-        bd_prog_fail_from = bd_prog_calls + n;
+        fake_sd.write_fail_from = fake_sd.writes + (uint32_t)n;
         SD_Card_Status st = SD_Card_EnsureLogFile();
-        bd_prog_fail_from = 0;
+        fake_sd.write_fail_from = 0;
         if (st == SD_CARD_OK) {
             created = 1;
         } else {
@@ -928,18 +831,23 @@ TEST(test_io_error_retry_keeps_the_row)
      * row's length: stale bytes and a NUL) - the row itself was lost while
      * the call still returned OK. */
     wipe_card();
+    fake_sd.min_good_div = 4;              /* a board whose bus holds /4 */
     Test_SetTick(100000);
     CHECK(SD_Card_Init() == SD_CARD_OK);
+    CHECK(fake_sd.div == 4);
     CHECK(SD_Card_EnsureLogFile() == SD_CARD_OK);
     CHECK(SD_Card_LogEvent("baseline row") == SD_CARD_OK);
     sd_io_err_streak = 0;
-    stepdown_calls = 0;
+    fake_sd.stepdowns = 0;
 
-    /* Long rows until the cache flushes fail twice in a row (recovery held
-     * off by its backoff), then a third failure with recovery allowed. */
-    bd_prog_fail_until_stepdown = 1;
+    /* The bus goes marginal at /4 (it now needs /8), reads and writes
+     * alike. Long rows until the card is needed (the small log file moves
+     * out of the metadata inline area) fail twice in a row - recovery held
+     * off by its backoff - then a third, long enough to need the card too,
+     * fails with recovery allowed. */
+    fake_sd.min_good_div = 8;
     char row[200];
-    for (int i = 0; i < 20 && sd_io_err_streak < 2; i++) {
+    for (int i = 0; i < 80 && sd_io_err_streak < 2; i++) {
         last_recovery_ms = HAL_GetTick();
         snprintf(row, sizeof(row), "ROW%02d-%0140d", i, 0);
         (void)SD_Card_LogEvent(row);
@@ -947,9 +855,10 @@ TEST(test_io_error_retry_keeps_the_row)
     CHECK(sd_io_err_streak == 2);
     Test_SetTick(200000);
     last_recovery_ms = 0;
-    CHECK(SD_Card_LogEvent("CRITICAL-ROW-THAT-MUST-SURVIVE") == SD_CARD_OK);
-    CHECK(stepdown_calls == 1);
-    CHECK(bd_prog_fail_until_stepdown == 0);
+    snprintf(row, sizeof(row), "CRITICAL-ROW-THAT-MUST-SURVIVE-%0140d", 0);
+    CHECK(SD_Card_LogEvent(row) == SD_CARD_OK);
+    CHECK(fake_sd.stepdowns == 1);
+    CHECK(fake_sd.div == 8);               /* one rung slower: works again */
     CHECK(sd_flush() == SD_CARD_OK);
 
     static char big[16384];
@@ -972,10 +881,10 @@ TEST(test_failed_sync_counts_and_recovers)
     uint32_t errs = sd_info.write_errors;
     last_recovery_ms = 0;
 
-    bd_prog_fail = 1;
+    fake_sd.read_only = 1;
     Test_SetTick(100000 + SD_SYNC_TIME_CAP_MS + 1);   /* force a commit */
     SD_Card_ServiceSync(1);
-    bd_prog_fail = 0;
+    fake_sd.read_only = 0;
     CHECK(sd_info.write_errors == errs + 1);          /* counted */
     CHECK(sd_dirty == 1);                             /* still pending */
 
@@ -993,40 +902,54 @@ TEST(test_io_error_streak_steps_bus_down)
     /* sd_card.c #include'd: drive the streak helper directly. Three write
      * errors in a row must ask the diskio ladder to step down once; a good
      * write resets the streak (so isolated transients don't throttle). */
-    stepdown_calls = 0;
+    fake_sd.stepdowns = 0;
     sd_io_err_streak = 0;
     sd_note_write_err();
     sd_note_write_err();
-    CHECK(stepdown_calls == 0);            /* no throttle on 2 transients */
+    CHECK(fake_sd.stepdowns == 0);            /* no throttle on 2 transients */
     sd_io_err_streak = 0;                  /* good write in between */
     sd_note_write_err();
     sd_note_write_err();
     sd_note_write_err();
-    CHECK(stepdown_calls == 1);            /* 3 consecutive -> one step */
+    CHECK(fake_sd.stepdowns == 1);            /* 3 consecutive -> one step */
 }
 
 TEST(test_io_stepup_requires_streak_and_cooldown)
 {
     /* Asymmetric: step-up waits (a) 60 consecutive OK writes and (b) a
      * 2-minute cooldown since the last step-down. An incident shouldn't
-     * see an instant re-fast. */
-    stepup_calls = 0;
+     * see an instant re-fast. The bus here holds /4; an incident slowed
+     * it to /8. */
+    wipe_card();
+    fake_sd.min_good_div = 4;
+    Test_SetTick(100000);
+    CHECK(SD_Card_Init() == SD_CARD_OK && fake_sd.div == 4);
+    CHECK(SD_Card_EnsureLogFile() == SD_CARD_OK);
+    CHECK(SD_StepSpeedDown() == 8);
+    fake_sd.stepup_tries = 0;
     sd_io_ok_streak = 0;
-    Test_SetTick(500);                     /* t = 500 ms */
+    sd_last_stepdown_ms = 100000;
 
-    /* Cooldown not met: a 2-minute gap since the last step-down. */
-    sd_last_stepdown_ms = 400;             /* stepped down 100 ms ago */
+    /* Cooldown not met: 62 clean writes 100 ms after the step-down */
+    Test_SetTick(100100);
     for (int i = 0; i < 62; i++) sd_note_write_ok();
-    CHECK(stepup_calls == 0);
+    CHECK(fake_sd.stepup_tries == 0 && fake_sd.div == 8);
 
-    /* Cooldown met: jump the clock far ahead before the step-down. */
-    sd_last_stepdown_ms = 400;
-    Test_SetTick(400 + SD_IO_STEPUP_COOLDOWN_MS + 1000);
+    /* Cooldown met: the next clean write tries one rung up and keeps it */
+    Test_SetTick(100000 + SD_IO_STEPUP_COOLDOWN_MS + 1000);
     sd_note_write_ok();
-    CHECK(stepup_calls == 1);
-    /* Another 60 OKs back-to-back -> only one attempt per streak */
+    CHECK(fake_sd.stepup_tries == 1 && fake_sd.div == 4);
+    /* Another 120 back-to-back: the try opened a new quiet window */
     for (int i = 0; i < 120; i++) sd_note_write_ok();
-    CHECK(stepup_calls <= 2);
+    CHECK(fake_sd.stepup_tries == 1);
+
+    CHECK(sd_flush() == SD_CARD_OK);
+    static char big[4096];
+    int n = read_file(sd_info.current_log_file, big, sizeof(big));
+    char row[64];
+    snprintf(row, sizeof(row), ",EVENT,SD bus stepped up to /4 after %u clean writes\n",
+             (unsigned)SD_IO_OK_STEPUP_STREAK);
+    CHECK(n > 0 && count_in(big, n, row) == 1);
 }
 
 TEST(test_timestamp_format)

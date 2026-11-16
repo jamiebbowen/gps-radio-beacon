@@ -99,7 +99,8 @@ $(BUILD)/test_compass: test_compass.c $(SRC_DIR)/compass.c $(SRC_DIR)/bno085.c \
                        $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) $(COVFLAGS) -o $@ $< $(SRC_DIR)/bno085.c $(LDFLAGS)
 
-# sd_card.c runs on the REAL LittleFS over a RAM block device in the test
+# sd_card.c runs on the REAL LittleFS over the real lfs_sd_bd.c, on the
+# shared card fake (fake_sd_card.h)
 #
 # Note on LFS_NO_ERROR: several suites intentionally mount blank/corrupted
 # images (that IS the test - the firmware's format-recovery path). LittleFS
@@ -107,10 +108,10 @@ $(BUILD)/test_compass: test_compass.c $(SRC_DIR)/compass.c $(SRC_DIR)/bno085.c \
 # on stderr; silencing it keeps real failures visible in the output.
 LFS_DIR  := ../firmware/lib/littlefs
 LFS_CFLAGS := -I$(LFS_DIR) -DLFS_NO_MALLOC -DLFS_NO_DEBUG -DLFS_NO_WARN -DLFS_NO_ERROR
-$(BUILD)/test_sd_card: test_sd_card.c $(SRC_DIR)/sd_card.c \
+$(BUILD)/test_sd_card: test_sd_card.c $(SRC_DIR)/sd_card.c $(SRC_DIR)/lfs_sd_bd.c \
                        $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(HEADERS) | $(BUILD)
 	$(CC) $(CFLAGS) $(COVFLAGS) $(LFS_CFLAGS) \
-	    -o $@ $< $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(LDFLAGS)
+	    -o $@ $< $(SRC_DIR)/lfs_sd_bd.c $(LFS_DIR)/lfs.c $(LFS_DIR)/lfs_util.c $(LDFLAGS)
 
 # main.c itself: boot and main loop over the real sd_card.c/lfs_sd_bd.c/
 # LittleFS on the shared card fake and the real logic modules it composes; the
