@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 
 #include "lfs.h"
+#include "lfs_sd_bd.h"   /* the firmware's card geometry, as the extractor's */
 
 int run_extract(const char *device, const char *outdir);
 static int failures = 0;
@@ -30,7 +31,7 @@ static int failures = 0;
 
 /* ---- in-memory block device ------------------------------------------- */
 
-#define BLK_SIZE   4096
+#define BLK_SIZE   LFS_SD_BLOCK_SIZE   /* what run_extract mounts with */
 #define BLK_COUNT   128          /* 512 KiB image */
 static uint8_t ram[BLK_SIZE * BLK_COUNT];
 
