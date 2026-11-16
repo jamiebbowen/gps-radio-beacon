@@ -6,17 +6,8 @@
  * Why this file exists:
  *   LittleFS wants read/prog/erase/sync callbacks with (block, off, size)
  *   addressing. The existing sd_diskio.c exposes sector-based SD_read/SD_write.
- *   This file adapts the two.
- *
- * Geometry choice (tune here, not in sd_card.c):
- *   - SD sector    = 512 B (hard-coded by SD spec)
- *   - LFS_BLOCK    = 4096 B = 8 sectors. This is the unit of wear-leveling.
- *                    4 KiB is a sweet spot: small enough that the metadata
- *                    overhead of the log-structured layout isn't absurd, big
- *                    enough that allocation bitmap stays compact on multi-GB
- *                    cards.
- *   - LFS_CACHE    = 4096 B (one full block). Must divide block_size evenly.
- *   - LOOKAHEAD    = 128 B bitmap → tracks 1024 blocks = 4 MiB per pass.
+ *   This file adapts the two. The geometry is LFS_SD_* in lfs_sd_bd.h,
+ *   shared with sd_card.c and the host tools.
  *
  * The SD card's internal FTL remaps and erases flash transparently, so the
  * erase callback is a no-op. LittleFS still uses erase count for wear
@@ -29,18 +20,6 @@
 #include "sd_diskio.h"
 #include "ff_gen_drv.h"   /* DSTATUS, DRESULT, GET_SECTOR_COUNT */
 #include <string.h>
-
-/* LittleFS geometry. Changing these on a formatted card will make it
- * unreadable — format again if you tune them. */
-#define LFS_SD_SECTOR_SIZE   512U
-#define LFS_SD_BLOCK_SIZE    4096U
-#define LFS_SD_SECTORS_PER_BLOCK  (LFS_SD_BLOCK_SIZE / LFS_SD_SECTOR_SIZE)  /* 8 */
-/* cache_size of one full block minimises per-append program operations.
- * Each open file carries one cache of this size; with 2 built-in caches
- * (read + prog) plus 2 file caches (log + adhoc), total LittleFS RAM for
- * caches is 4 * 4 KiB = 16 KiB. Comfortably fits STM32F401CC's 64 KiB RAM. */
-#define LFS_SD_CACHE_SIZE    4096U
-#define LFS_SD_LOOKAHEAD     128U
 
 /* Static buffers so LittleFS doesn't need malloc. cache_size * 2 is the read
  * cache + prog cache; each open file adds one more cache of the same size
@@ -143,7 +122,7 @@ struct lfs_config lfs_sd_cfg = {
     .prog_size       = LFS_SD_SECTOR_SIZE,
     .block_size      = LFS_SD_BLOCK_SIZE,
     .block_count     = 0,                /* filled by lfs_sd_bd_init() */
-    .block_cycles    = 500,              /* typical SD-card-oriented value */
+    .block_cycles    = LFS_SD_BLOCK_CYCLES,
     .cache_size      = LFS_SD_CACHE_SIZE,
     .lookahead_size  = LFS_SD_LOOKAHEAD,
     .read_buffer     = lfs_read_buf,
