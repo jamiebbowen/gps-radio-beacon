@@ -101,7 +101,6 @@ uint8_t Compass_SetQuatLockConv(uint8_t conv);
 /** Rotation-vector samples received since init (bring-up diagnostics). */
 uint32_t Compass_GetRvSampleCount(void);
 
-const char* Compass_GetErrorMessage(void);
 
 /* System status functions */
 uint8_t Compass_GetSystemStatus(uint8_t *system_status, uint8_t *self_test_result, uint8_t *system_error);

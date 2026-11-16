@@ -25,9 +25,6 @@ extern uint8_t has_valid_local_gps;
 /* Global Compass data */
 extern Compass_Data compass_data;
 
-/* Global RF data */
-extern uint32_t last_ping_time;
-
 /* Global navigation data */
 extern float distance_to_tx;
 extern float direction_to_tx;

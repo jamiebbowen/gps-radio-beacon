@@ -133,16 +133,12 @@ static uint32_t seg_start_cmp = 0;
 uint8_t has_valid_local_gps = 0;
 uint8_t has_last_good_local_gps = 0;  /* Flag for last known good local GPS */
 uint8_t rf_initialized = 0;
-uint32_t last_good_gps_time = 0;  /* Time when we last had good GPS data */
 
 /* Navigation data */
 float distance_to_tx = -1.0f;
 float direction_to_tx = -1.0f;
 float relative_direction = -1.0f;
 float last_known_good_distance = -1.0f; /* Store last known good distance */
-
-/* RF receiver status */
-uint32_t last_ping_time = 0;
 
 /* USER CODE END PV */
 
@@ -1155,7 +1151,6 @@ int main(void)
         has_valid_local_gps = 1;
         memcpy(&last_good_local_gps, &gps_data, sizeof(GPS_Data));
         has_last_good_local_gps = 1;
-        last_good_gps_time = HAL_GetTick();
 
         /* Site-local declination: folded in automatically the first time
          * the operator's own GPS fixes. Replaces the manual DECLIN.TXT
