@@ -86,6 +86,9 @@ explicit `make -C receiver/firmware flash` or `make -C transmitter/firmware uplo
   written to the code's assumptions (the BNO085 SHTP read, the LoRa CRC
   path, the SD block device's write error); when you write a fake, model
   the datasheet or a known-good driver.
+- One SD card for the RX tests: `receiver/tests/fake_sd_card.h`, faked at the
+  sd_diskio sector API under the real `lfs_sd_bd.c`. Add a fault knob there
+  rather than giving a test a block device of its own.
 - TX host tests build with `-fno-exceptions`, matching the SAMD core.
 - Every firmware source has host coverage: the coverage gate fails a source
   missing from `make coverage`'s report. A new module needs a test and a

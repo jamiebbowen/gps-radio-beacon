@@ -53,11 +53,20 @@ report, so a new module needs a test and a `COV_PAIRS` entry (only
 its `nmea_fields.c` helpers get the same fuzz treatment in
 `test_fuzz_nmea.c`.)
 
-The remaining ~2% of `sd_card.c` is the self-test's readback-mismatch
-branch: the test file is small enough to live inline in littlefs metadata,
-so corrupting it on the RAM block device fails the metadata CRC instead of
-reaching the comparison. The write-error retry, failed-sync and recovery
-ladder paths are driven by prog-fault knobs on the RAM block device.
+The remaining ~2% of `sd_card.c` is defensive littlefs-failure handling a
+behavioral card cannot reach: a format that succeeds followed by a failed
+re-mount, a failed header write after a successful create (the header is
+buffered inline), and the self-test's readback-mismatch branch (the test
+file is small enough to live inline in littlefs metadata, so corrupting it
+fails the metadata CRC instead of reaching the comparison).
+
+Every test that needs an SD card - `test_sd_card.c`, `test_lfs_sd_bd.c`,
+`test_main.c` - runs the real `lfs_sd_bd.c` on one card model,
+`fake_sd_card.h`, faked at the sd_diskio sector API with `sd_diskio.c`'s
+contract and its SPI speed ladder. The write-error retry, failed-sync,
+step-down/step-up and recovery ladder paths are driven by its fault knobs:
+an absent card, a failed CMD9, reads or writes that fail (the next N, from
+the Nth on, or all of them), and a bus that only works at a slower divider.
 
 `rf_parser.c` decodes every packet format sent by the transmitter:
 
@@ -107,8 +116,8 @@ prescaler reassertion that keeps the negotiated speed alive across
 shared-SPI1 display traffic.
 
 `test_main.c` runs the real `main.c` (renamed `receiver_main()`) over the
-real `sd_card.c` + `lfs_sd_bd.c` + LittleFS on a RAM card faked at the
-sd_diskio sector API, with transfer times at the 656 kHz data clock, and
+real `sd_card.c` + `lfs_sd_bd.c` + LittleFS on the shared card fake, with
+transfer times at the 656 kHz data clock, and
 over the real logic modules it composes. The hardware-facing modules
 (radio, GPS, compass, displays, buttons) are faked at their API, keeping
 their contracts (one-shot getters consume, the GPS fix latch expires).
