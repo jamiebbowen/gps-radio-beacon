@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
@@ -132,7 +133,6 @@ static uint32_t seg_start_cmp = 0;
 uint8_t has_valid_local_gps = 0;
 uint8_t has_last_good_local_gps = 0;  /* Flag for last known good local GPS */
 uint8_t rf_initialized = 0;
-uint32_t last_good_gps_time = 0;  /* Time when we last had good GPS data */
 
 /* Navigation data */
 float distance_to_tx = -1.0f;
@@ -140,8 +140,6 @@ float direction_to_tx = -1.0f;
 float relative_direction = -1.0f;
 float last_known_good_distance = -1.0f; /* Store last known good distance */
 
-/* RF receiver status */
-uint32_t last_ping_time = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -151,37 +149,36 @@ void Error_Handler(void);
 static void LogPendingCrashRecord(void);
 
 /* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
 
-/* Forward declarations of global variables used in display functions */
-/* No need for extern declarations since these are already defined in this file */
+/* SD breadcrumb rows. Each used to be a hand-sized local buffer, an
+ * snprintf, an optional SD_Card_EnsureLogFile() and an SD_Card_Log*() call
+ * - two dozen copies, one of which cut its row short. */
+#define ROW_EVENT   0x00u   /* an EVENT row, on the lazy log file: dropped
+                             * until a packet, the scan lock or an ensured
+                             * row has created it                         */
+#define ROW_ERROR   0x01u   /* an ERROR row instead                       */
+#define ROW_ENSURE  0x02u   /* open the log file first: the row must not
+                             * fall off the lazy-create edge              */
 
-/**
- * @brief Display GPS data screen
- * @param gps_data Pointer to GPS data structure
- * @retval None
- */
-/* Display mode functions moved to display_modes.c */
+static SD_Card_Status sd_text(uint8_t flags, const char *text)
+{
+  if (flags & ROW_ENSURE) (void)SD_Card_EnsureLogFile();
+  return (flags & ROW_ERROR) ? SD_Card_LogError(text) : SD_Card_LogEvent(text);
+}
 
-/**
- * @brief Display compass data screen with enhanced diagnostics
- * @param compass_data Pointer to compass data structure
- * @param compass_heading Pointer to compass heading variable
- * @retval None
- */
-/* Display mode functions moved to display_modes.c */
-
-/**
- * @brief Display RF data screen
- * @param remote_gps_data Pointer to remote GPS data structure
- * @param has_valid_remote_gps Pointer to remote GPS validity flag
- * @param last_rf_packet_time Pointer to last RF packet time
- * @param rf_packet_count Pointer to RF packet counter
- * @retval None
- */
-/* Display mode functions moved to display_modes.c */
-
-/* USER CODE END 0 */
+/* The longest row formatted here is the FAULT register dump (105 chars);
+ * sd_card.c frames each row in a 256 B buffer. */
+static SD_Card_Status sd_row(uint8_t flags, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+static SD_Card_Status sd_row(uint8_t flags, const char *fmt, ...)
+{
+  char text[128];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(text, sizeof(text), fmt, ap);
+  va_end(ap);
+  return sd_text(flags, text);
+}
 
 /**
   * @brief  The application entry point.
@@ -441,10 +438,7 @@ int main(void)
 
     /* Record the RF starting point (boot scan begins at this channel) */
     if (rf_initialized) {
-      char rf_msg[48];
       uint8_t boot_ch = RF_Receiver_GetChannel();
-      snprintf(rf_msg, sizeof(rf_msg), "RF scan start CH%u %.2fMHz",
-               (unsigned)boot_ch, LORA_CHANNEL_FREQ_MHZ(boot_ch));
 
       /* The log file is otherwise created lazily on first beacon contact,
        * and SD_Card_LogEvent silently drops anything earlier - the
@@ -453,24 +447,16 @@ int main(void)
        * diagnostic case the sweep exists for, so open the file now when
        * we're about to write the sweep. A lock that already happened
        * creates the file itself via the scan-lock path. */
-      if (RF_Receiver_IsScanning()) {
-        (void)SD_Card_EnsureLogFile();
-      }
-
-      SD_Card_LogEvent(rf_msg);
+      sd_row(RF_Receiver_IsScanning() ? ROW_ENSURE : ROW_EVENT,
+             "RF scan start CH%u %.2fMHz",
+             (unsigned)boot_ch, LORA_CHANNEL_FREQ_MHZ(boot_ch));
 
       /* Boot identity: which firmware + radio config produced this log
        * (otherwise cards from parallel bench sessions are archaeology). */
 #ifdef GIT_HASH_STR
-      {
-        char boot_msg[56];
-        snprintf(boot_msg, sizeof(boot_msg),
-                 "BOOT fw=%s SF%d BW%.1fk CR4/%d",
-                 GIT_HASH_STR, (int)LORA_SPREADING_FACTOR,
-                 (double)LORA_BANDWIDTH_KHZ, (int)LORA_CODING_RATE);
-        SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(boot_msg);
-      }
+      sd_row(ROW_ENSURE, "BOOT fw=%s SF%d BW%.1fk CR4/%d",
+             GIT_HASH_STR, (int)LORA_SPREADING_FACTOR,
+             (double)LORA_BANDWIDTH_KHZ, (int)LORA_CODING_RATE);
 #endif
 
       /* Per-channel ambient noise sweep (SD-logged). Substitutes for a
@@ -483,17 +469,14 @@ int main(void)
         int16_t nf_ch[LORA_CHANNEL_COUNT];
         for (uint8_t i = 0; i < LORA_CHANNEL_COUNT; i++) nf_ch[i] = 1;  /* "n/a" */
         if (RF_Receiver_NoiseSweep(nf_ch) > 0) {
-          char nf_msg[56];
           for (uint8_t ch = 0; ch < LORA_CHANNEL_COUNT; ch++) {
             if (nf_ch[ch] == 1) continue;
             /* at= is when THIS channel was measured (the sweep takes ~1 s
              * in total; batch-logging with fresh stamps would fake it). */
-            snprintf(nf_msg, sizeof(nf_msg),
-                     "NF sweep CH%u %.2fMHz nf=%ddBm at=%lu.%03lu",
-                     (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)nf_ch[ch],
-                     (unsigned long)(RF_Receiver_GetSweepTick(ch) / 1000),
-                     (unsigned long)(RF_Receiver_GetSweepTick(ch) % 1000));
-            SD_Card_LogEvent(nf_msg);
+            sd_row(ROW_EVENT, "NF sweep CH%u %.2fMHz nf=%ddBm at=%lu.%03lu",
+                   (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)nf_ch[ch],
+                   (unsigned long)(RF_Receiver_GetSweepTick(ch) / 1000),
+                   (unsigned long)(RF_Receiver_GetSweepTick(ch) % 1000));
           }
         }
         /* Sweeping hopped the radio; restart the boot scan cleanly. */
@@ -549,17 +532,14 @@ int main(void)
       (csr & RCC_CSR_PORRSTF)  ? "POR"   :
       (csr & RCC_CSR_BORRSTF)  ? "BOR"   :
       (csr & RCC_CSR_PINRSTF)  ? "PIN"   : "UNK";
-    SD_Card_EnsureLogFile();
-    char rst_msg[64];
     Sys_MeasureVdd();   /* boot rail check: pairs with src=BOR events */
     /* A watchdog-forced reboot must never pass for a normal boot: it means
      * the firmware hung for 32 s, so it is logged as an ERROR row. (This
      * used to be a second, separate IWDG row.) */
     uint8_t wd_reset = (csr & (RCC_CSR_IWDGRSTF | RCC_CSR_WWDGRSTF)) ? 1 : 0;
-    snprintf(rst_msg, sizeof(rst_msg), "RESET src=%s vdd=%umV%s", src,
-             (unsigned)sys_vdd_mv, wd_reset ? " (firmware hang)" : "");
-    if (wd_reset) SD_Card_LogError(rst_msg);
-    else          SD_Card_LogEvent(rst_msg);
+    sd_row(ROW_ENSURE | (wd_reset ? ROW_ERROR : ROW_EVENT),
+           "RESET src=%s vdd=%umV%s", src,
+           (unsigned)sys_vdd_mv, wd_reset ? " (firmware hang)" : "");
     /* Note: idle-level diagnostics live in the main loop (500 ms delay)
      * so the weak internal pull-up has settled past ADC-credible. */
   }
@@ -646,9 +626,7 @@ int main(void)
       if (SD_Card_LoadDeclination(&decl) == SD_CARD_OK) {
         (void)Compass_SetDeclination(decl);
         declin_file_overrode = 1;   /* beats the GPS-derived table update */
-        char dmsg[48];
-        snprintf(dmsg, sizeof(dmsg), "DECLIN override %.1fdegE", (double)decl);
-        SD_Card_LogEvent(dmsg);
+        sd_row(ROW_EVENT, "DECLIN override %.1fdegE", (double)decl);
       }
     }
     /* BNO085 calibrates dynamically in-sensor: there are no host offsets
@@ -732,7 +710,7 @@ int main(void)
       if (held_now != b2_last_held) {
         b2_last_held = held_now;
         if (sd_card_ok) {
-          SD_Card_LogEvent(held_now ? "B2 press (electrical)"
+          sd_text(ROW_EVENT, held_now ? "B2 press (electrical)"
                                     : "B2 released");
         }
       }
@@ -746,7 +724,7 @@ int main(void)
       if (!b2_level_logged && HAL_GetTick() > 500) {
         b2_level_logged = 1;
         if (sd_card_ok) {
-          SD_Card_LogEvent(Button2_IsHeld()
+          sd_text(ROW_EVENT, Button2_IsHeld()
                            ? "B2 held at boot (stuck key or wiring?)"
                            : "B2 idle at boot");
         }
@@ -803,8 +781,7 @@ int main(void)
             RxChannel_StartScan(sd_card_ok);
           }
           if (sd_card_ok) {
-            SD_Card_EnsureLogFile();
-            SD_Card_LogError("RF radio recovered by runtime re-init");
+            sd_text(ROW_ERROR | ROW_ENSURE, "RF radio recovered by runtime re-init");
           }
           force_display_update = 1;
         }
@@ -820,17 +797,13 @@ int main(void)
       static uint32_t suppressions_logged = 0;
       if (!latched_logged && RF_Receiver_FlightContactLatched()) {
         latched_logged = 1;
-        SD_Card_EnsureLogFile();
-        SD_Card_LogEvent("FLIGHT CONTACT launched - auto-rescan OFF");
+        sd_text(ROW_ENSURE, "FLIGHT CONTACT launched - auto-rescan OFF");
       }
       uint32_t sup = RF_Receiver_GetRescanSuppressions();
       if (sup != suppressions_logged) {
         suppressions_logged = sup;
-        char s_msg[64];
-        snprintf(s_msg, sizeof(s_msg),
-                 "AUTO-RESCAN suppressed x%lu (flight contact)",
-                 (unsigned long)sup);
-        SD_Card_LogEvent(s_msg);
+        sd_row(ROW_EVENT, "AUTO-RESCAN suppressed x%lu (flight contact)",
+               (unsigned long)sup);
       }
     }
 
@@ -841,11 +814,8 @@ int main(void)
       static uint32_t wedges_logged = 0;
       uint32_t wedges = RF_Receiver_GetWedgesRecovered();
       if (wedges != wedges_logged) {
-        char w_msg[40];
-        snprintf(w_msg, sizeof(w_msg), "RF wedge recovered (#%lu)",
-                 (unsigned long)wedges);
-        SD_Card_EnsureLogFile();
-        SD_Card_LogError(w_msg);
+        sd_row(ROW_ERROR | ROW_ENSURE, "RF wedge recovered (#%lu)",
+               (unsigned long)wedges);
         wedges_logged = wedges;
       }
     }
@@ -860,12 +830,9 @@ int main(void)
       static uint32_t foreign_logged = 0;
       uint8_t bnd = RF_Receiver_GetBoundRocketId();
       if (bnd != bound_logged && bnd != 0xFF) {
-        char b_msg[48];
-        snprintf(b_msg, sizeof(b_msg), "RF bound rocket_id=%u CH%u %.2fMHz",
-                 (unsigned)bnd, (unsigned)RF_Receiver_GetChannel(),
-                 LORA_CHANNEL_FREQ_MHZ(RF_Receiver_GetChannel()));
-        SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(b_msg);
+        sd_row(ROW_ENSURE, "RF bound rocket_id=%u CH%u %.2fMHz",
+               (unsigned)bnd, (unsigned)RF_Receiver_GetChannel(),
+               LORA_CHANNEL_FREQ_MHZ(RF_Receiver_GetChannel()));
         bound_logged = bnd;
         /* Probe the brand-new bidirectional link at bond time: queue a
          * PING (long preamble, up to 3 tries; see ServiceCommands below).
@@ -877,13 +844,9 @@ int main(void)
           (foreign_logged == 0 || foreign - foreign_logged >= 4)) {
         int16_t f_rssi; int8_t f_snr;
         RF_Receiver_GetSignalQuality(&f_rssi, &f_snr);
-        char f_msg[72];   /* worst case 65: 10-digit count, 6-char rssi */
-        snprintf(f_msg, sizeof(f_msg),
-                 "RF foreign pkts=%lu dropped CH%u rssi=%ddBm snr=%d",
-                 (unsigned long)foreign, (unsigned)RF_Receiver_GetChannel(),
-                 (int)f_rssi, (int)f_snr);
-        SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(f_msg);
+        sd_row(ROW_ENSURE, "RF foreign pkts=%lu dropped CH%u rssi=%ddBm snr=%d",
+               (unsigned long)foreign, (unsigned)RF_Receiver_GetChannel(),
+               (int)f_rssi, (int)f_snr);
         foreign_logged = foreign;
       }
     }
@@ -906,8 +869,7 @@ int main(void)
         if (!hbi.foreign && hb.alt_inputs != logged_alt_hb) {
           char a_msg[64];
           RF_Parser_FormatPadAltimeters(hb.rocket_id, hb.alt_inputs, a_msg, sizeof(a_msg));
-          SD_Card_EnsureLogFile();
-          SD_Card_LogEvent(a_msg);
+          sd_text(ROW_ENSURE, a_msg);
           logged_alt_hb = hb.alt_inputs;
         }
         /* Beacon-side resets are otherwise indistinguishable from a LOST
@@ -919,26 +881,18 @@ int main(void)
          * rocket: another beacon's heartbeats can't fake a reset. */
         if (hbi.reset_event == RF_HB_UPTIME_REGRESSED) {
           /* A watchdog/soft restart mid-flight: uptime regresses. */
-          char r_msg[64];
-          snprintf(r_msg, sizeof(r_msg),
-                   "TX reset: uptime %us -> %us (cause=%s)",
-                   (unsigned)hbi.prev_uptime, (unsigned)hb.uptime_s,
-                   HB_RESET_NAME(hb.reset_info));
-          SD_Card_EnsureLogFile();
-          SD_Card_LogError(r_msg);
+          sd_row(ROW_ERROR | ROW_ENSURE, "TX reset: uptime %us -> %us (cause=%s)",
+                 (unsigned)hbi.prev_uptime, (unsigned)hb.uptime_s,
+                 HB_RESET_NAME(hb.reset_info));
         } else if (hbi.reset_event == RF_HB_CAUSE_CHANGED) {
           /* The cause register changed between heartbeats of a still-running
            * TX: means a mid-flight physical reset, and this message should
            * say that (the uptime didn't move, so calling it a 'reset' with
            * equal values misled the field reading). */
-          char r_msg[80];
-          snprintf(r_msg, sizeof(r_msg),
-                   "TX boot cause changed: %s(0x%02X) -> %s(0x%02X) at up=%us",
-                   HB_RESET_NAME(hbi.prev_reset_info), (unsigned)hbi.prev_reset_info,
-                   HB_RESET_NAME(hb.reset_info), (unsigned)hb.reset_info,
-                   (unsigned)hb.uptime_s);
-          SD_Card_EnsureLogFile();
-          SD_Card_LogError(r_msg);
+          sd_row(ROW_ERROR | ROW_ENSURE, "TX boot cause changed: %s(0x%02X) -> %s(0x%02X) at up=%us",
+                 HB_RESET_NAME(hbi.prev_reset_info), (unsigned)hbi.prev_reset_info,
+                 HB_RESET_NAME(hb.reset_info), (unsigned)hb.reset_info,
+                 (unsigned)hb.uptime_s);
         }
         int16_t hb_rssi;
         int8_t  hb_snr;
@@ -957,8 +911,7 @@ int main(void)
         hbrow.reset_name  = HB_RESET_NAME(hb.reset_info);
         char hb_msg[128];   /* fits field-127 up/rssi + unknown rc name     */
         LogPolicy_FormatHeartbeat(&hbrow, hb_msg, sizeof(hb_msg));
-        SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(hb_msg);
+        sd_text(ROW_ENSURE, hb_msg);
       }
     }
 
@@ -968,13 +921,9 @@ int main(void)
     if (rf_initialized && sd_card_ok) {
       LaunchT0Packet_t t0;
       if (RF_Receiver_GetLaunchT0(&t0)) {
-        char t0_msg[64];
-        snprintf(t0_msg, sizeof(t0_msg),
-                 "LAUNCH T0 id=%u up=%us gps_fix_age=%.1fs",
-                 (unsigned)t0.rocket_id, (unsigned)t0.uptime_s,
-                 t0.age_ds / 10.0);
-        SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(t0_msg);
+        sd_row(ROW_ENSURE, "LAUNCH T0 id=%u up=%us gps_fix_age=%.1fs",
+               (unsigned)t0.rocket_id, (unsigned)t0.uptime_s,
+               t0.age_ds / 10.0);
       }
       ImuTracePacket_t imu;
       uint8_t imu_fmt = 0;
@@ -989,58 +938,43 @@ int main(void)
        * separate row so the log shows exactly what the link delivered. */
       FlightEventPacket_t evt;
       while (RF_Receiver_GetFlightEvent(&evt)) {
-        char evt_msg[64];
-        snprintf(evt_msg, sizeof(evt_msg), "%s id=%u up=%us val=%d",
-                 FLIGHT_EVENT_NAME(evt.code), (unsigned)evt.rocket_id,
-                 (unsigned)evt.uptime_s, (int)evt.value);
-        SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(evt_msg);
+        sd_row(ROW_ENSURE, "%s id=%u up=%us val=%d",
+               FLIGHT_EVENT_NAME(evt.code), (unsigned)evt.rocket_id,
+               (unsigned)evt.uptime_s, (int)evt.value);
       }
       /* Running maxima recap: each row is the flight envelope up to that
        * second - the answer still on the card if the beacon dies mid-air. */
       MaximaPacket_t mx;
       if (RF_Receiver_GetMaxima(&mx)) {
-        char mx_msg[80];
-        snprintf(mx_msg, sizeof(mx_msg),
-                 "MAXIMA id=%u alt=%dm@%lus v=%.1fm/s a=%.1fg r=%udps",
-                 (unsigned)mx.rocket_id, (int)mx.max_alt_m,
-                 (unsigned long)mx.t_maxalt_s, mx.max_speed_cms / 100.0,
-                 mx.max_accel_cg / 100.0,
-                 (unsigned)mx.max_gyro_dps16 * MAXIMA_GYRO_DPS_SCALE);
-        SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(mx_msg);
+        sd_row(ROW_ENSURE, "MAXIMA id=%u alt=%dm@%lus v=%.1fm/s a=%.1fg r=%udps",
+               (unsigned)mx.rocket_id, (int)mx.max_alt_m,
+               (unsigned long)mx.t_maxalt_s, mx.max_speed_cms / 100.0,
+               mx.max_accel_cg / 100.0,
+               (unsigned)mx.max_gyro_dps16 * MAXIMA_GYRO_DPS_SCALE);
       }
       /* Commercial altimeters on the recap: one row per packet, all inputs */
       MaximaAltPacket_t alt_pkt;
       if (RF_Receiver_GetAltimeter(&alt_pkt)) {
         char alt_msg[128];
         RF_Parser_FormatAltimeter(&alt_pkt, alt_msg, sizeof(alt_msg));
-        SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(alt_msg);
+        sd_text(ROW_ENSURE, alt_msg);
       }
       /* Beacon boot identity: which TX firmware flew (MSB = dirty tree). */
       HelloPacket_t hello;
       if (RF_Receiver_GetHello(&hello)) {
-        char hb_msg[64];
-        snprintf(hb_msg, sizeof(hb_msg), "TXBOOT id=%u fw=%07lx%s",
-                 (unsigned)hello.rocket_id,
-                 (unsigned long)(hello.fw_hash & 0x0FFFFFFFUL),
-                 (hello.fw_hash & 0x80000000UL) ? "-dirty" : "");
-        SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(hb_msg);
+        sd_row(ROW_ENSURE, "TXBOOT id=%u fw=%07lx%s",
+               (unsigned)hello.rocket_id,
+               (unsigned long)(hello.fw_hash & 0x0FFFFFFFUL),
+               (hello.fw_hash & 0x80000000UL) ? "-dirty" : "");
       }
 
       /* Radio-deaf windows after wedge streaks: lets a blackout read as
        * "receiver deaf 3.2 s" vs "beacon silent". */
       uint32_t wcount, wlast, wtotal;
       if (RF_Receiver_TakeWedgeReport(&wcount, &wlast, &wtotal)) {
-        char w_msg[80];
-        snprintf(w_msg, sizeof(w_msg),
-                 "WEDGE #%lu recovered deaf=%lums total=%lums",
-                 (unsigned long)wcount, (unsigned long)wlast,
-                 (unsigned long)wtotal);
-        SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(w_msg);
+        sd_row(ROW_ENSURE, "WEDGE #%lu recovered deaf=%lums total=%lums",
+               (unsigned long)wcount, (unsigned long)wlast,
+               (unsigned long)wtotal);
       }
 
       /* CRC-failed frames: heard-but-garbage. Log the head bytes so a
@@ -1060,8 +994,7 @@ int main(void)
             pos += snprintf(c_msg + pos, sizeof(c_msg) - (size_t)pos,
                             "%02x", (unsigned)dump[i]);
           }
-          SD_Card_EnsureLogFile();
-          SD_Card_LogEvent(c_msg);
+          sd_text(ROW_ENSURE, c_msg);
         }
       }
     }
@@ -1098,8 +1031,7 @@ int main(void)
                      (unsigned)cr.cmd);
             break;
         }
-        SD_Card_EnsureLogFile();
-        SD_Card_LogEvent(c_msg);
+        sd_text(ROW_ENSURE, c_msg);
       }
     }
 
@@ -1116,22 +1048,20 @@ int main(void)
         if (sd_card_ok) {
           int16_t nf = 0;
           uint8_t nf_valid = RF_Receiver_GetNoiseFloor(&nf);
-          char nf_msg[48];
           uint8_t ch = RF_Receiver_GetChannel();
           if (nf_valid) {
-            snprintf(nf_msg, sizeof(nf_msg), "RF NOISE %s CH%u %.2fMHz nf=%ddBm",
-                     noise_alert ? "HIGH" : "clear",
-                     (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)nf);
+            sd_row(ROW_EVENT, "RF NOISE %s CH%u %.2fMHz nf=%ddBm",
+                   noise_alert ? "HIGH" : "clear",
+                   (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch), (int)nf);
           } else {
             /* No floor to report: the window was just reset by a channel
              * change (which is also what cleared the alert). Logging the
              * uninitialized 0 as "nf=0dBm" made channel hops look like a
              * noise event with an impossible floor. */
-            snprintf(nf_msg, sizeof(nf_msg), "RF NOISE %s CH%u %.2fMHz",
-                     noise_alert ? "HIGH" : "clear",
-                     (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch));
+            sd_row(ROW_EVENT, "RF NOISE %s CH%u %.2fMHz",
+                   noise_alert ? "HIGH" : "clear",
+                   (unsigned)ch, LORA_CHANNEL_FREQ_MHZ(ch));
           }
-          SD_Card_LogEvent(nf_msg);
         }
         force_display_update = 1;  /* Surface the warning immediately */
       }
@@ -1195,7 +1125,7 @@ int main(void)
         rs.nfl_dbm = nfl;
         char st_msg[200];
         LogPolicy_FormatRfStats(&rs, st_msg, sizeof(st_msg));
-        SD_Card_LogEvent(st_msg);
+        sd_text(ROW_EVENT, st_msg);
       }
     }
 
@@ -1221,7 +1151,6 @@ int main(void)
         has_valid_local_gps = 1;
         memcpy(&last_good_local_gps, &gps_data, sizeof(GPS_Data));
         has_last_good_local_gps = 1;
-        last_good_gps_time = HAL_GetTick();
 
         /* Site-local declination: folded in automatically the first time
          * the operator's own GPS fixes. Replaces the manual DECLIN.TXT
@@ -1242,7 +1171,7 @@ int main(void)
                                              gps_data.longitude)) {
               BeaconTrack_Forget(&beacon);
               if (sd_card_ok)
-                SD_Card_LogEvent("Last-beacon self-loc far from beacon - discarded");
+                sd_text(ROW_EVENT, "Last-beacon self-loc far from beacon - discarded");
             }
           }
         }
@@ -1253,10 +1182,8 @@ int main(void)
           static uint8_t decl_logged = 0;
           if (!decl_logged) {
             decl_logged = 1;
-            char dmsg[64];
-            snprintf(dmsg, sizeof(dmsg), "DECLIN from location %.4f,%.4f",
-                     (double)gps_data.latitude, (double)gps_data.longitude);
-            SD_Card_LogEvent(dmsg);
+            sd_row(ROW_EVENT, "DECLIN from location %.4f,%.4f",
+                   (double)gps_data.latitude, (double)gps_data.longitude);
           }
         }
         
@@ -1276,7 +1203,7 @@ int main(void)
     {
       static uint8_t prev_valid_local = 0;
       if (prev_valid_local && !has_valid_local_gps && sd_card_ok) {
-        SD_Card_LogEvent("Local GPS fix lost");
+        sd_text(ROW_EVENT, "Local GPS fix lost");
       }
       prev_valid_local = has_valid_local_gps;
     }
@@ -1307,12 +1234,9 @@ int main(void)
     if (has_valid_local_gps && gps_data.satellites > 0 && !local_fix_logged) {
       local_fix_logged = 1;
       if (sd_card_ok) {
-        char gps_msg[56];
-        snprintf(gps_msg, sizeof(gps_msg),
-                 "Local GPS first fix: sats=%u utc=%02u:%02u:%02u",
-                 (unsigned)gps_data.satellites, (unsigned)gps_data.hour,
-                 (unsigned)gps_data.minute, (unsigned)gps_data.second);
-        SD_Card_LogEvent(gps_msg);
+        sd_row(ROW_EVENT, "Local GPS first fix: sats=%u utc=%02u:%02u:%02u",
+               (unsigned)gps_data.satellites, (unsigned)gps_data.hour,
+               (unsigned)gps_data.minute, (unsigned)gps_data.second);
       }
     } else if (!has_valid_local_gps && !local_slow_logged &&
                HAL_GetTick() > 120000) {
@@ -1328,13 +1252,10 @@ int main(void)
         uint32_t u_bytes, u_sents, u_drops, u_rearm;
         uint16_t u_errs;
         GPS_GetRxStats(&u_bytes, &u_sents, &u_drops, &u_errs, &u_rearm);
-        char gps_msg[128];
-        snprintf(gps_msg, sizeof(gps_msg),
-                 "Local GPS no fix at 120s: rx=%lu snt=%lu drp=%lu csum=%lu er=%u ra=%lu sats=%d",
-                 (unsigned long)u_bytes, (unsigned long)u_sents,
-                 (unsigned long)u_drops, (unsigned long)GPS_Parser_GetChecksumErrors(),
-                 (unsigned)u_errs, (unsigned long)u_rearm, (int)gps_data.satellites);
-        SD_Card_LogEvent(gps_msg);
+        sd_row(ROW_EVENT, "Local GPS no fix at 120s: rx=%lu snt=%lu drp=%lu csum=%lu er=%u ra=%lu sats=%d",
+               (unsigned long)u_bytes, (unsigned long)u_sents,
+               (unsigned long)u_drops, (unsigned long)GPS_Parser_GetChecksumErrors(),
+               (unsigned)u_errs, (unsigned long)u_rearm, (int)gps_data.satellites);
       }
     }
     
@@ -1348,9 +1269,7 @@ int main(void)
       if (conv != 0 && !quat_lock_saved && !quatlock_loaded_at_boot && sd_card_ok) {
         quat_lock_saved = 1;
         SD_Card_SaveQuatLock(conv);
-        char q_msg[32];
-        snprintf(q_msg, sizeof(q_msg), "QUATLOCK conv=%u saved", (unsigned)conv);
-        SD_Card_LogEvent(q_msg);
+        sd_row(ROW_EVENT, "QUATLOCK conv=%u saved", (unsigned)conv);
       }
     }
 
@@ -1367,11 +1286,8 @@ int main(void)
         prev_mag_cal = mc;
         prev_hv = hv;
         prev_hs = hs;
-        char c_msg[48];
-        snprintf(c_msg, sizeof(c_msg),
-                 "COMPASS mag_cal=%d heading_%svalid%s",
-                 (int)mc, hv ? "" : "IN", hs ? " stale" : "");
-        SD_Card_LogEvent(c_msg);
+        sd_row(ROW_EVENT, "COMPASS mag_cal=%d heading_%svalid%s",
+               (int)mc, hv ? "" : "IN", hs ? " stale" : "");
       }
 
       /* I2C fault breadcrumbs: compass.c self-heals with a bounded re-init
@@ -1381,10 +1297,8 @@ int main(void)
       uint8_t i2c_err = Compass_GetErrorCode();
       if (i2c_err != prev_i2c_err) {
         prev_i2c_err = i2c_err;
-        char e_msg[48];
-        snprintf(e_msg, sizeof(e_msg), "COMPASS err 0x%02X %s", (unsigned)i2c_err,
-                 (i2c_err == 0) ? "cleared" : Compass_GetErrorMessage());
-        SD_Card_LogEvent(e_msg);
+        sd_row(ROW_EVENT, "COMPASS err 0x%02X %s", (unsigned)i2c_err,
+               (i2c_err == 0) ? "cleared" : Compass_GetErrorMessage());
       }
     }
 
@@ -1394,9 +1308,7 @@ int main(void)
       static int8_t prev_page = -1;
       if ((int8_t)current_display_mode != prev_page) {
         prev_page = (int8_t)current_display_mode;
-        char p_msg[20];
-        snprintf(p_msg, sizeof(p_msg), "PAGE %d", (int)current_display_mode);
-        SD_Card_LogEvent(p_msg);
+        sd_row(ROW_EVENT, "PAGE %d", (int)current_display_mode);
       }
     }
 
@@ -1429,7 +1341,7 @@ int main(void)
               static LogPolicy_LinkEdge_t link_edge;
               char wk[48];
               if (LogPolicy_LinkEdge(&link_edge, pkt_rssi, pkt_snr, wk, sizeof(wk))) {
-                SD_Card_LogEvent(wk);
+                sd_text(ROW_EVENT, wk);
               }
 
               /* Log navigation snapshot. Compute distance/bearing from THIS
@@ -1470,11 +1382,8 @@ int main(void)
                                           sizeof(heard_callsign), NULL) &&
                 heard_callsign[0] != '\0' &&
                 strcmp(heard_callsign, last_logged_callsign) != 0) {
-              char cs_msg[48];
-              snprintf(cs_msg, sizeof(cs_msg), "CALLSIGN %s rx-ch CH%u",
-                       heard_callsign, (unsigned)RF_Receiver_GetChannel());
-              SD_Card_EnsureLogFile();
-              if (SD_Card_LogEvent(cs_msg) == SD_CARD_OK) {
+              if (sd_row(ROW_ENSURE, "CALLSIGN %s rx-ch CH%u", heard_callsign,
+                         (unsigned)RF_Receiver_GetChannel()) == SD_CARD_OK) {
                 strncpy(last_logged_callsign, heard_callsign,
                         sizeof(last_logged_callsign) - 1);
                 last_logged_callsign[sizeof(last_logged_callsign) - 1] = '\0';
@@ -1486,8 +1395,7 @@ int main(void)
             static uint8_t tst_logged = 0;
             if (!tst_logged && RF_Receiver_TestingBuildSuspect()) {
               tst_logged = 1;
-              SD_Card_EnsureLogFile();
-              SD_Card_LogError("TX testing-build cadence (callsign ~30s) - flashing bench firmware?");
+              sd_text(ROW_ERROR | ROW_ENSURE, "TX testing-build cadence (callsign ~30s) - flashing bench firmware?");
             }
           }
         }
@@ -1552,7 +1460,7 @@ int main(void)
   char contact_msg[48];
   if (LogPolicy_Contact(&contact, heard_tick, current_time,
                         contact_msg, sizeof(contact_msg))) {
-    SD_Card_LogEvent(contact_msg);
+    sd_text(ROW_EVENT, contact_msg);
   }
 
   /* Check if RF data is stale (no updates for more than 180 seconds) */
@@ -1693,8 +1601,7 @@ int main(void)
     /* BUSY never rose: the hand-wired PA1 link is missing; refreshes run
      * on a fixed time instead of the panel's own done signal */
     eink_unwired_logged = 1;
-    SD_Card_EnsureLogFile();
-    SD_Card_LogError("EINK BUSY not wired - fixed-time refresh");
+    sd_text(ROW_ERROR | ROW_ENSURE, "EINK BUSY not wired - fixed-time refresh");
   }
   Eink_MaybeRefreshSummary(current_time);
   SEG_TOC(disp);
@@ -2025,23 +1932,17 @@ __attribute__((used)) static void HardFault_Capture(uint32_t *frame)
 static void LogPendingCrashRecord(void)
 {
   if (g_crash.magic != CRASH_MAGIC) return;
-  char msg[128];
-  snprintf(msg, sizeof(msg),
-           "%s#%lu pc=%08lX lr=%08lX cfsr=%08lX bfar=%08lX",
-           g_crash.source == CRASH_SRC_ERROR_HANDLER ? "ERRH" : "FAULT",
-           (unsigned long)g_crash.seq, (unsigned long)g_crash.pc,
-           (unsigned long)g_crash.lr, (unsigned long)g_crash.cfsr,
-           (unsigned long)g_crash.bfar);
-  SD_Card_EnsureLogFile();
-  SD_Card_LogEvent(msg);
+  sd_row(ROW_ENSURE, "%s#%lu pc=%08lX lr=%08lX cfsr=%08lX bfar=%08lX",
+         g_crash.source == CRASH_SRC_ERROR_HANDLER ? "ERRH" : "FAULT",
+         (unsigned long)g_crash.seq, (unsigned long)g_crash.pc,
+         (unsigned long)g_crash.lr, (unsigned long)g_crash.cfsr,
+         (unsigned long)g_crash.bfar);
   /* Register dump on a second row - keeping rows under 100 chars each */
-  snprintf(msg, sizeof(msg),
-           "FAULT r0=%08lX r1=%08lX r2=%08lX r3=%08lX r12=%08lX msp=%08lX psp=%08lX psr=%08lX",
-           (unsigned long)g_crash.r0, (unsigned long)g_crash.r1,
-           (unsigned long)g_crash.r2, (unsigned long)g_crash.r3,
-           (unsigned long)g_crash.r12, (unsigned long)g_crash.msp,
-           (unsigned long)g_crash.psp, (unsigned long)g_crash.psr);
-  SD_Card_LogEvent(msg);
+  sd_row(ROW_EVENT, "FAULT r0=%08lX r1=%08lX r2=%08lX r3=%08lX r12=%08lX msp=%08lX psp=%08lX psr=%08lX",
+         (unsigned long)g_crash.r0, (unsigned long)g_crash.r1,
+         (unsigned long)g_crash.r2, (unsigned long)g_crash.r3,
+         (unsigned long)g_crash.r12, (unsigned long)g_crash.msp,
+         (unsigned long)g_crash.psp, (unsigned long)g_crash.psr);
   g_crash.magic = 0;      /* consumed */
 }
 
