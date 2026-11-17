@@ -78,6 +78,7 @@ tools-test:
 	python3 tools/test_flight_log_dump.py
 	python3 tools/test_packet_format_sync.py
 	python3 tools/test_check_coverage.py
+	python3 tools/test_mutate.py
 	@if find flight_data -name 'L*.TXT' 2>/dev/null | grep -q .; then \
 		$(MAKE) -s tools-test-logs; \
 	else \

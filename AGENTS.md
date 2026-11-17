@@ -26,6 +26,7 @@ field, not on a bench. Keep changes small, test-first, and verified.
 | SD extraction tool tests | `make -C tools/lfs_extract test` |
 | Packet-format drift guard only | `python3 tools/test_packet_format_sync.py` |
 | Coverage, every module, lines + branches | `make -C transmitter/tests coverage`, `make -C receiver/tests coverage` |
+| Mutation score of one module (on demand, not CI) | `python3 tools/mutate.py rx sd_card.c` (`tx flight_events.cpp`, `--list`, `--jobs N`) |
 | Receiver firmware, warnings as errors | `make -C receiver/firmware compile WERROR=1` |
 | Transmitter firmware, all warnings | `arduino-cli compile --fqbn adafruit:samd:adafruit_itsybitsy_m4 --warnings all --build-path /tmp/tx-build transmitter/firmware` |
 | Reachability (dead-function) scan | `python3 tools/reachability.py --tx-map /tmp/tx-build/firmware.ino.map` (after both builds) |

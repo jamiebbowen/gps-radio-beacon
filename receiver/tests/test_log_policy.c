@@ -121,6 +121,9 @@ TEST(test_heartbeat_row_format)
     h.gps_state = 9;
     LogPolicy_FormatHeartbeat(&h, m, sizeof(m));
     CHECK(strstr(m, "gps=? ") != NULL);
+    h.gps_state = 4;                       /* the first past the table */
+    LogPolicy_FormatHeartbeat(&h, m, sizeof(m));
+    CHECK(strstr(m, "gps=? ") != NULL);
 }
 
 int main(void)
