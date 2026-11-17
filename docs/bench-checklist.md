@@ -46,7 +46,9 @@ Connect the beacon over USB and watch the first seconds of boot:
 - [ ] LED is **off** when no packets are arriving (it used to be solid on —
       solid on now means something is wrong).
 - [ ] With the beacon transmitting, LED gives a **short blink on every
-      packet** (~100 ms). Blink cadence should match the beacon's send rate.
+      packet** (~100 ms). Blink cadence should match the beacon's send rate,
+      position packets included (their pass also saves BEACON.TXT, which
+      used to swallow the blink).
 
 ## 3. RF link (beacon on, a few metres away)
 

@@ -1555,15 +1555,21 @@ static void script_beacon_session(void)
 
     /* Two packets, 1 km then 2 km north: each NAV row measures its own
      * packet, not the navigation state left by the one before */
+    /* The RF pulse, one per packet: the first one's pass also commits
+     * BEACON.TXT (~140 ms of card I/O, longer than the 100 ms pulse) and
+     * still blinks; the second's pass is quick */
+    uint32_t pulses = led_pulses;
+    uint32_t t_pkt = fake_tick_ms;
     rf_position(HOME_LAT + 0.009f, HOME_LON, -80);
     snprintf(rf.callsign, sizeof(rf.callsign), "KD0ABC-3 CH0");
+    run_ms(20);
+    CHECK(fake_tick_ms - t_pkt > 100u);    /* the save outlasted the pulse */
+    CHECK(led_pulses == pulses + 1);
     run_ms(300);
-    /* The RF pulse, on a packet whose pass is quick (no BEACON.TXT save;
-     * see the first packet's above, which commits the file) */
-    uint32_t pulses = led_pulses;
+    CHECK(!led_on);
     rf_position(HOME_LAT + 0.018f, HOME_LON, -80);
     run_ms(20);
-    CHECK(led_on && led_pulses == pulses + 1);
+    CHECK(led_on && led_pulses == pulses + 2);
     run_ms(200);
     CHECK(!led_on);
     log = session_log();

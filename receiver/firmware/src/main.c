@@ -692,12 +692,25 @@ int main(void)
     /* LED = RF activity indicator: pulse for 100 ms after each packet from
      * our beacon, heartbeats included (PC13 is active LOW). Previously the
      * LED was held solid on, which conveyed nothing and contradicted the
-     * "pulse" comments. */
+     * "pulse" comments. The pulse starts when this check first sees a new
+     * heard tick, not at the tick itself: the pass that handles a position
+     * packet can spend longer than 100 ms committing BEACON.TXT, and
+     * timing from the tick swallowed exactly those blinks. */
     {
+      static uint32_t led_heard_seen = 0, led_start_ms = 0;
+      static uint8_t  led_pulse = 0;
       uint32_t heard_ms = RF_Receiver_GetBeaconHeardTick();
-      uint8_t led_on = (heard_ms > 0) && (HAL_GetTick() - heard_ms < 100);
+      uint32_t now_ms = HAL_GetTick();
+      if (heard_ms != led_heard_seen) {
+        led_heard_seen = heard_ms;
+        if (heard_ms > 0) {
+          led_pulse = 1;
+          led_start_ms = now_ms;
+        }
+      }
+      if (led_pulse && now_ms - led_start_ms >= 100) led_pulse = 0;
       HAL_GPIO_WritePin(LED_GPIO_PORT, LED_PIN,
-                        led_on ? GPIO_PIN_RESET : GPIO_PIN_SET);
+                        led_pulse ? GPIO_PIN_RESET : GPIO_PIN_SET);
     }
     
     /* Update button state. Transition log settles the "is B2 electrically
